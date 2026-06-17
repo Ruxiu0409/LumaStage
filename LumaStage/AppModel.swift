@@ -252,7 +252,7 @@ class AppModel {
             lastExplanation = LightingExplanation(
                 term: "Cue",
                 plainText: "A cue is a lighting state. When you switch cues, LumaStage animates brightness and color changes over time.",
-                actionSummary: "Selected \(selectedCue?.localizedDisplayName ?? id) for preview and iPad editing."
+                actionSummary: "Selected \(selectedCue?.localizedDisplayName ?? id) for preview and editing."
             )
             conversationState = .applying
             persistCurrentProjectState()

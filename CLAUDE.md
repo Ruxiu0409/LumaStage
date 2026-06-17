@@ -4,38 +4,34 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-LumaStage is an AI stage-lighting design app shipped as **two targets from one source folder**:
+LumaStage is a **visionOS** AI stage-lighting design app (single target). It opens an immersive 1:1 night-outdoor stage digital twin (`ImmersiveView`, RealityKit) with a floating AI conversation box: a voice/typed prompt → on-device Apple Foundation Models → a cue-based lighting look applied with animated transitions.
 
-- **`LumaStage`** — visionOS app. Opens an immersive 1:1 night-outdoor stage digital twin (`ImmersiveView`, RealityKit), with a floating AI conversation box. Voice/typed prompt → on-device Apple Foundation Models → cue-based lighting look applied with animated transitions.
-- **`LumaStage iPad`** — iOS/iPad app. Companion that adds a 3D stage builder (`StageBuilderView`) and lightweight per-cue lighting micro-controls.
+> A former `LumaStage iPad` companion target (3D stage builder + per-cue micro-controls) was removed, so the cue-switching and dimmer/color controls — which lived only on iPad — are no longer surfaced in any view. `AppModel` still exposes those mutation methods (and `StageBuilderModels` still holds the builder's Foundation-only helpers), covered by the smoke tests, as reusable logic. New views use `#if os(visionOS)` / `#if canImport(...)` where platform-specific.
 
-Both targets compile the same files in `LumaStage/`, split by `#if os(iOS)` / `#if os(visionOS)` / `#if canImport(...)`. **Any new file must compile (or be guarded) for both platforms.**
-
-The product spec and MVP scope live in `docs/` (Traditional Chinese): `system-spec.md`, `ipad-stage-builder-spec.md`, `demo-runbook.md`, `foundation-models-setup.md`. Code identifiers and user-facing strings are English; voice input supports mixed Chinese/English.
+The product spec and MVP scope live in `docs/` (Traditional Chinese): `system-spec.md`, `demo-runbook.md`, `foundation-models-setup.md`. Code identifiers and user-facing strings are English; voice input supports mixed Chinese/English.
 
 ## Commands
 
-### Build / run the apps (requires Xcode 27)
+### Build / run the app (requires Xcode 27)
 
-The app uses on-device Apple Foundation Models and deploys to **visionOS 27 / iOS 27**, so it needs **Xcode 27** (FoundationModels macro plugin + OS 27 SDK). `xcodebuild` is not available with Command Line Tools alone; point a build at an Xcode 27 install via `xcode-select` or a one-off `DEVELOPER_DIR`:
+The app uses on-device Apple Foundation Models and deploys to **visionOS 27**, so it needs **Xcode 27** (FoundationModels macro plugin + OS 27 SDK). `xcodebuild` is not available with Command Line Tools alone; point a build at an Xcode 27 install via `xcode-select` or a one-off `DEVELOPER_DIR`:
 
 ```bash
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer   # an Xcode 27 install
 ```
 
-Schemes/targets: `LumaStage` (visionOS, deploy 27.0) and `LumaStage iPad` (iOS, deploy 27.0). Both link the local SwiftPM package `Packages/RealityKitContent`.
+Single scheme/target: `LumaStage` (visionOS, deploy 27.0). It links the local SwiftPM package `Packages/RealityKitContent`.
 
 ```bash
 # Pick a concrete destination from: xcodebuild -showdestinations -scheme LumaStage
-xcodebuild -scheme "LumaStage"      -destination 'platform=visionOS Simulator,name=Apple Vision Pro,OS=27.0' build
-xcodebuild -scheme "LumaStage iPad" -destination 'platform=iOS Simulator,name=iPad Pro 11-inch (M5),OS=27.0' build
+xcodebuild -scheme "LumaStage" -destination 'platform=visionOS Simulator,name=Apple Vision Pro,OS=27.0' build
 ```
 
-Day to day, building/running in the Xcode GUI is the normal path. The visionOS scene is a small plain window (`ContentView`) plus a full `ImmersiveSpace`; the iPad app launches into `IPadRootView`. On-device generation only runs where Apple Intelligence is enabled; otherwise the AI box shows an unavailable state and generation is blocked.
+Day to day, building/running in the Xcode GUI is the normal path. The scene is a small plain window (`ContentView`) plus a full `ImmersiveSpace` (`ImmersiveView`). On-device generation only runs where Apple Intelligence is enabled; otherwise the AI box shows an unavailable state and generation is blocked.
 
 ### Tests (no Xcode needed)
 
-Tests are a **custom `@main` smoke-test harness**, not XCTest, and **not part of the Xcode project**. There is no committed runner — compile it with the Foundation-only core sources and run the binary **from the repo root** (it reads `LumaStage/Info-iPad.plist` via a relative path):
+Tests are a **custom `@main` smoke-test harness**, not XCTest, and **not part of the Xcode project**. There is no committed runner — compile it with the Foundation-only core sources and run the binary **from the repo root**:
 
 ```bash
 swiftc \
@@ -66,7 +62,7 @@ The defining convention: **all pure logic — data models, validation, geometry,
 - **`LightingModels.swift`** — `LightingLook` / `LightingCue` / `FixtureGroup` / `FixtureColor` / `FixtureFineControl`, the `CuePatch` enum, `StageState`, `LumaStageProject`, and `ValidationError`.
 - **`LightingAIService.swift`** — Foundation-only generation contract (`LightingLookGenerating`, `LightingModelAvailability`, `LightingGenerationResult`) and the testable AI→domain assembler `LightingLookDraft.makeValidatedLook()`. No FoundationModels import.
 - **`FoundationModelsLightingService.swift`** — on-device implementation: an `@Generable GeneratedLightingLook` filled by `LanguageModelSession`, mapped into `LightingLookDraft`. Guarded by `#if canImport(FoundationModels)`.
-- **`StageBuilderModels.swift`** (largest file) — `StageLayout` / `StageObject` / truss geometry / presets, **plus** the pure helpers the iPad views render from and the tests assert on: `StageBuilderPanelLayout`, `IPadRootLayout`, `StageBuilderZoom`, `StageBuilderToolbarLayout`, `StageBuilderViewportGround`, `StageBuilderRenderOrder`, `StageBuilderInspectorPolicy`, `StageBuilderSelectionPolicy`, `StageBuilderDropPlanner`, and `ImmersiveStageGeometryPlan`.
+- **`StageBuilderModels.swift`** (largest file) — the shared stage geometry the visionOS renderer consumes: `StageLayout` / `StageObject` / truss geometry / presets / `ImmersiveStageGeometryPlan`. It also still holds the pure-logic layout/policy helpers from the removed iPad stage builder (`StageBuilderPanelLayout`, `IPadRootLayout`, `StageBuilderZoom`, `StageBuilderToolbarLayout`, `StageBuilderViewportGround`, `StageBuilderRenderOrder`, `StageBuilderInspectorPolicy`, `StageBuilderSelectionPolicy`, `StageBuilderDropPlanner`) — no view consumes them now, but the smoke tests still pin them, so they remain as tested, reusable logic.
 - **`LightingFixtureCatalog.swift`** — fixture vocabulary metadata.
 
 When adding behavior to a view, **extract the decidable part into one of these model files and add a smoke test for it** rather than burying it in the view.
@@ -78,7 +74,7 @@ When adding behavior to a view, **extract the decidable part into one of these m
 ```
 voice/typed prompt → AppModel.generate → FoundationModelsLightingService → LightingLook
   → StageState.replaceLightingLook (validates) → AppModel (Observable) → views re-render
-iPad control → AppModel.set… → StageState.patchSelectedCue (validates) → views/RealityKit update
+cue edit (AppModel.set…/selectCue) → StageState.patchSelectedCue (validates) → AppModel → ImmersiveView update
 ```
 
 ### Lighting look invariants (enforced in `LightingLook.validate()`)
@@ -92,7 +88,7 @@ The `@Generable GeneratedLightingLook` schema constrains the model, and `Lightin
 
 ### Editing model: cue patches, not look replacement
 
-iPad edits go through `CuePatch` + `StageState.patchSelectedCue` and **only ever mutate the currently selected cue** — never the whole look, never the other cue. `StageState` keeps a `baselineLook`; `resetSelectedCue()` restores **only** the selected cue from that baseline. Full-look replacement happens solely via AI generation (`replaceLightingLook`).
+Cue edits go through `CuePatch` + `StageState.patchSelectedCue` and **only ever mutate the currently selected cue** — never the whole look, never the other cue. `StageState` keeps a `baselineLook`; `resetSelectedCue()` restores **only** the selected cue from that baseline. Full-look replacement happens solely via AI generation (`replaceLightingLook`).
 
 ### AI service shape
 
@@ -100,10 +96,10 @@ iPad edits go through `CuePatch` + `StageState.patchSelectedCue` and **only ever
 
 ### Shared stage geometry
 
-`ImmersiveStageGeometryPlan.make(from: StageLayout)` is the **single geometry source consumed by both** the iPad `StageBuilderView` and the visionOS `ImmersiveView`. A smoke test (`visionStageUsesIPadStageLayoutGeometry`) pins this equivalence — changing how truss/decks are generated must keep both renderers consistent. `ImmersiveView` then applies the selected cue with animated `entity.move(to:duration:timingFunction:)` transitions and embeds the AI box as a SwiftUI `Attachment`.
+`ImmersiveStageGeometryPlan.make(from: StageLayout)` builds the visionOS stage geometry that `ImmersiveView` renders; a smoke test (`visionStageUsesIPadStageLayoutGeometry`) still pins it against the `StageLayout` model. `ImmersiveView` applies the selected cue with animated `entity.move(to:duration:timingFunction:)` transitions and embeds the AI box as a SwiftUI `Attachment`. Projects with no saved layout fall back to `StageLayout.defaultStudentOutdoor()`.
 
 ## Conventions
 
-- Design tokens (colors, radii, glass panel modifiers) live in `LumaStageDesign.swift` / `LumaPanel`; the UI targets native iOS 26 "liquid glass" styling. Reuse these rather than hardcoding colors.
-- visionOS-only code (`RealityKit`, immersive views) and iOS-only code (`StageBuilderView`, `IPadRootView`, UIKit) are mutually guarded; `SpeechTranscriber` is guarded by `canImport(Speech)/canImport(AVFoundation)`.
+- Design tokens (colors, radii, glass panel modifiers) live in `LumaStageDesign.swift` / `LumaPanel`; the UI targets native "liquid glass" styling. Reuse these rather than hardcoding colors.
+- visionOS/RealityKit views use `#if os(visionOS)`; `SpeechTranscriber` is guarded by `canImport(Speech)/canImport(AVFoundation)`, and `LightingFixtureIntroView` (SceneKit fixture previews) by `canImport(SceneKit) && canImport(UIKit)`.
 - New projects start from `ProjectCreationTemplate`; the project list starts empty by default (`LumaStageProject.defaultProjects()` returns `[]`).

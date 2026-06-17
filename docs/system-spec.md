@@ -1,5 +1,7 @@
 # LumaStage Apple Vision Pro / iPad MVP 系統規格書
 
+> 註：iPad 子系統（第 7 章）已從產品中移除，LumaStage 現為 **visionOS 單一 app**；AI 生成層改用 Apple 裝置端 Foundation Models。原 iPad 微調控制（cue 切換、front light dimmer、background wash color、reset）目前未在任何 visionOS 介面提供。以下章節保留作為歷史規格紀錄。
+
 ## 1. 文件目的
 
 本文件定義 `LumaStage` 本週 MVP 的 Apple Vision Pro 與 iPad 系統規格，供工程實作、Demo 準備與功能驗收使用。

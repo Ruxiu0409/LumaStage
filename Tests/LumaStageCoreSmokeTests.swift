@@ -5,7 +5,6 @@ struct LumaStageCoreSmokeTests {
     static func main() async throws {
         try validatesDemoLookDefaults()
         defaultProjectListStartsEmpty()
-        try ipadTargetUsesNativeFullscreenPresentation()
         try newProjectFactoryCreatesValidProject()
         try newProjectFactoryCreatesDefaultStageLayout()
         projectCreationTemplatesOfferBlankAndScenarioChoices()
@@ -57,13 +56,6 @@ struct LumaStageCoreSmokeTests {
         let projects = LumaStageProject.defaultProjects()
 
         expect(projects.isEmpty, "Project home should start empty by default")
-    }
-
-    private static func ipadTargetUsesNativeFullscreenPresentation() throws {
-        let plist = try loadPlist(path: "LumaStage/Info-iPad.plist")
-
-        expect(plist["UIRequiresFullScreen"] as? Bool == true, "iPad target should require full screen to avoid compatibility letterboxing")
-        expect(plist["UILaunchScreen"] as? [String: Any] != nil, "iPad target should provide a launch screen configuration for native-size launch")
     }
 
     private static func newProjectFactoryCreatesValidProject() throws {
@@ -581,11 +573,4 @@ struct LumaStageCoreSmokeTests {
         return value
     }
 
-    private static func loadPlist(path: String) throws -> [String: Any] {
-        let data = try Data(contentsOf: URL(fileURLWithPath: path))
-        guard let plist = try PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any] else {
-            fatalError("Could not load plist at \(path)")
-        }
-        return plist
-    }
 }

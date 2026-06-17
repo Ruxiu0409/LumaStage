@@ -1,5 +1,7 @@
 # LumaStage MVP Demo Runbook
 
+> 註：iPad companion app 已移除，LumaStage 現為 **visionOS 單一 app**。原本只存在於 iPad 的 cue 切換與 dimmer／wash color 微調面板也一併移除；目前 visionOS 流程為「語音／文字 → 裝置端 Apple Foundation Models 生成 → 沉浸式舞台預覽」。下方仍提到 iPad 微調面板的步驟為歷史紀錄。
+
 ## 追求目標
 
 本週 Demo 的追求目標是展示一套可運作的端到端系統，而不是概念稿或靜態 mockup。

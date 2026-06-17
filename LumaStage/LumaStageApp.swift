@@ -13,12 +13,6 @@ struct LumaStageApp: App {
     @State private var appModel = AppModel()
 
     var body: some Scene {
-#if os(iOS)
-        WindowGroup {
-            IPadRootView()
-                .environment(appModel)
-        }
-#else
         WindowGroup {
             ContentView()
                 .environment(appModel)
@@ -38,6 +32,5 @@ struct LumaStageApp: App {
                 }
         }
         .immersionStyle(selection: .constant(.full), in: .full)
-#endif
     }
 }
