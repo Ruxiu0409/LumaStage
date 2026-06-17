@@ -16,6 +16,14 @@ enum FixtureRole: String, Codable, CaseIterable {
     case spot
     case frontLight
     case backgroundWash
+
+    /// Roles the visionOS renderer currently realizes as real spotlights (and can therefore
+    /// project a gobo through). The other roles aren't rendered yet, so a gobo on them would be
+    /// a silent no-op — `LightingLookDraft` clears gobos on non-rendering roles so persisted
+    /// state never claims a projection that won't appear.
+    var rendersProjectedGobo: Bool {
+        self == .frontLight || self == .backgroundWash
+    }
 }
 
 enum StageZone: String, Codable, CaseIterable {
@@ -24,6 +32,26 @@ enum StageZone: String, Codable, CaseIterable {
     case stageLeft
     case stageRight
     case fullStage
+}
+
+/// Optional projected light pattern (digital gobo) cast through a fixture's beam — the software
+/// equivalent of a metal gobo in a real moving head. A `nil` gobo means a plain, unbroken beam.
+/// Mirrored by `GeneratedLightingLook.GeneratedGobo` in the on-device `@Generable` schema and
+/// rendered via `SpotLightComponent.ProjectiveTexture` in `ImmersiveView`.
+enum GoboPattern: String, Codable, CaseIterable {
+    case breakup
+    case stripes
+    case stars
+    case grid
+
+    var displayName: String {
+        switch self {
+        case .breakup: return "Foliage Breakup"
+        case .stripes: return "Slats"
+        case .stars: return "Starfield"
+        case .grid: return "Window"
+        }
+    }
 }
 
 enum ColorMode: String, Codable, CaseIterable {
@@ -180,6 +208,7 @@ struct FixtureGroup: Codable, Equatable, Identifiable {
     var intensity: Double
     var color: FixtureColor
     var fineControl: FixtureFineControl? = nil
+    var gobo: GoboPattern? = nil
 
     var effectiveFineControl: FixtureFineControl {
         fineControl ?? .default(role: role, zone: zone)

@@ -40,6 +40,7 @@ struct LumaStageCoreSmokeTests {
         try rejectsInvalidPatchValues()
         try lightingLookDraftBuildsValidatedLook()
         lightingLookDraftRejectsInvalidValues()
+        try goboFlowsThroughDraftAndSurvivesCodec()
         await unavailableLightingServiceReportsUnavailable()
         print("LumaStageCoreSmokeTests passed")
     }
@@ -539,6 +540,58 @@ struct LumaStageCoreSmokeTests {
         expectThrows(ValidationError.invalidIntensity(1.8)) {
             _ = try sampleDraft(frontIntensity: 1.8).makeValidatedLook()
         }
+    }
+
+    private static func goboFlowsThroughDraftAndSurvivesCodec() throws {
+        // A gobo set on a draft fixture must land on the assembled look's fixture.
+        let draft = LightingLookDraft(
+            lookName: "Gobo Look",
+            mood: "patterned, atmospheric",
+            openingFixtures: [
+                LightingLookDraft.Fixture(id: "front_wash", name: "Front Wash", role: .frontLight, zone: .stageFront, enabled: true, intensity: 0.6, colorHex: "#FFD1A3", gobo: .breakup),
+                LightingLookDraft.Fixture(id: "background_wash", name: "Background Wash", role: .backgroundWash, zone: .stageBack, enabled: true, intensity: 0.75, colorHex: "#4FA8FF", gobo: .stars),
+                LightingLookDraft.Fixture(id: "side_wash", name: "Side Wash", role: .wash, zone: .stageLeft, enabled: true, intensity: 0.5, colorHex: "#88AAFF", gobo: .stripes)
+            ],
+            highlightFixtures: [
+                LightingLookDraft.Fixture(id: "front_wash", name: "Front Wash", role: .frontLight, zone: .stageFront, enabled: true, intensity: 0.75, colorHex: "#FFE0B8"),
+                LightingLookDraft.Fixture(id: "background_wash", name: "Background Wash", role: .backgroundWash, zone: .stageBack, enabled: true, intensity: 0.9, colorHex: "#2F6BFF")
+            ],
+            explanationTerm: "Gobo",
+            explanationPlainText: "A gobo projects a shaped pattern through a fixture's beam.",
+            explanationActionSummary: "Added a foliage breakup and a starfield projection."
+        )
+
+        let look = try draft.makeValidatedLook()
+        try look.validate()
+        let opening = try look.requireCue(id: "cue_opening")
+        let openingFront = try opening.requireFixture(role: .frontLight)
+        let openingBackground = try opening.requireFixture(role: .backgroundWash)
+        let openingSideWash = try opening.requireFixture(role: .wash)
+        let highlightFront = try look.requireCue(id: "cue_highlight").requireFixture(role: .frontLight)
+        expect(openingFront.gobo == .breakup, "Draft gobo should land on the front light fixture")
+        expect(openingBackground.gobo == .stars, "Draft gobo should land on the background wash fixture")
+        expect(highlightFront.gobo == nil, "A fixture without a gobo should stay nil through the draft")
+        expect(openingSideWash.gobo == nil, "A gobo on a non-rendering role (wash) should be cleared during assembly")
+
+        // Gobo display names are reusable logic with no current consumer; pin them so they stay stable.
+        expect(GoboPattern.breakup.displayName == "Foliage Breakup", "breakup display name should be stable")
+        expect(GoboPattern.stripes.displayName == "Slats", "stripes display name should be stable")
+        expect(GoboPattern.stars.displayName == "Starfield", "stars display name should be stable")
+        expect(GoboPattern.grid.displayName == "Window", "grid display name should be stable")
+
+        // Codable: a fixture round-trips its gobo.
+        let fixture = FixtureGroup(id: "f", name: "F", role: .spot, zone: .stageLeft, enabled: true, intensity: 0.5, color: FixtureColor(mode: .rgb, value: "#FFFFFF"), gobo: .grid)
+        let encoded = try JSONEncoder().encode(fixture)
+        let decoded = try JSONDecoder().decode(FixtureGroup.self, from: encoded)
+        expect(decoded.gobo == .grid, "FixtureGroup gobo should survive a Codable round-trip")
+
+        // Backward compatibility: JSON written before gobo existed must decode with gobo == nil.
+        let legacyJSON = Data("""
+        {"id":"legacy","name":"Legacy","role":"frontLight","zone":"stageFront","enabled":true,"intensity":0.5,"color":{"mode":"rgb","value":"#FFFFFF"}}
+        """.utf8)
+        let legacy = try JSONDecoder().decode(FixtureGroup.self, from: legacyJSON)
+        expect(legacy.gobo == nil, "Legacy fixtures without a gobo field should decode to nil")
+        expect(legacy.fineControl == nil, "Legacy fixtures without a fineControl field should still decode")
     }
 
     private static func unavailableLightingServiceReportsUnavailable() async {

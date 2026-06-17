@@ -1,6 +1,8 @@
 # LumaStage Apple Vision Pro / iPad MVP 系統規格書
 
 > 註：iPad 子系統（第 7 章）已從產品中移除，LumaStage 現為 **visionOS 單一 app**；AI 生成層改用 Apple 裝置端 Foundation Models。原 iPad 微調控制（cue 切換、front light dimmer、background wash color、reset）目前未在任何 visionOS 介面提供。以下章節保留作為歷史規格紀錄。
+>
+> 註：燈具現以真實 RealityKit `SpotLight` 渲染，並支援可選的投影圖案（gobo：breakup／stripes／stars／grid）。gobo **僅由裝置端 Foundation Models 在生成時選擇**（沒有手動控制介面），目前只在會被渲染的 frontLight／backgroundWash 角色上呈現；`resetSelectedCue` 會還原 AI 基準的 gobo，而非清除它。
 
 ## 1. 文件目的
 

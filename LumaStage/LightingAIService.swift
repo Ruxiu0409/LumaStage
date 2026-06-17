@@ -88,6 +88,7 @@ struct LightingLookDraft: Equatable {
         var enabled: Bool
         var intensity: Double
         var colorHex: String
+        var gobo: GoboPattern? = nil
     }
 
     var lookName: String
@@ -146,7 +147,9 @@ struct LightingLookDraft: Equatable {
             color: FixtureColor(
                 mode: .rgb,
                 value: FixtureColor.normalizedHex(fixture.colorHex) ?? fixture.colorHex
-            )
+            ),
+            // Drop gobos on roles the renderer can't project, so stored state matches what shows.
+            gobo: fixture.role.rendersProjectedGobo ? fixture.gobo : nil
         )
     }
 }

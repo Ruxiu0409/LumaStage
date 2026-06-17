@@ -372,6 +372,7 @@ struct ImmersiveView: View {
                     color: frontLight.color.value,
                     intensity: frontLight.intensity,
                     beamAngleDegrees: frontLight.effectiveFineControl.beamAngleDegrees,
+                    gobo: frontLight.gobo,
                     duration: cue.transition.duration
                 )
             }
@@ -386,6 +387,7 @@ struct ImmersiveView: View {
                     color: backgroundWash.color.value,
                     intensity: backgroundWash.intensity,
                     beamAngleDegrees: backgroundWash.effectiveFineControl.beamAngleDegrees,
+                    gobo: backgroundWash.gobo,
                     duration: cue.transition.duration
                 )
             }
@@ -403,6 +405,7 @@ struct ImmersiveView: View {
         color: String,
         intensity: Double,
         beamAngleDegrees: Double,
+        gobo: GoboPattern?,
         duration: Double
     ) {
         guard let spot = root.findEntity(named: name) as? SpotLight else {
@@ -418,6 +421,109 @@ struct ImmersiveView: View {
             spot.light.intensity = lumens
             spot.light.innerAngleInDegrees = Float(cone.inner)
             spot.light.outerAngleInDegrees = Float(cone.outer)
+        }
+
+        // Digital gobo: project a pattern through the cone, or remove it for a plain beam.
+        // Set/removed outside the withAnimation above on purpose — ProjectiveTexture conforms only
+        // to Component (not _ImplicitlyAnimatableBuiltinComponent), so it can't cross-fade and
+        // hard-cuts regardless of placement, unlike the color/intensity/cone above.
+        if let gobo, let texture = goboTexture(for: gobo) {
+            spot.components.set(SpotLightComponent.ProjectiveTexture(texture: texture))
+        } else {
+            spot.components.remove(SpotLightComponent.ProjectiveTexture.self)
+        }
+    }
+
+    // MARK: - Digital gobos (projective textures)
+
+    private static var goboTextureCache: [GoboPattern: TextureResource] = [:]
+
+    /// Lazily builds and caches a `TextureResource` for each gobo pattern from a procedurally
+    /// drawn image, so cue changes only generate each pattern once.
+    private static func goboTexture(for pattern: GoboPattern) -> TextureResource? {
+        if let cached = goboTextureCache[pattern] {
+            return cached
+        }
+        // .color is the conventional semantic for projected imagery (and keeps the door open for
+        // colored gobos). It sRGB-decodes the mask, which slightly darkens midtones of the
+        // breakup/stars patterns — a visual-tuning item to A/B against .raw on device.
+        guard let cgImage = makeGoboImage(for: pattern),
+              let texture = try? TextureResource(
+                image: cgImage,
+                withName: "gobo_\(pattern.rawValue)",
+                options: TextureResource.CreateOptions(semantic: .color)
+              ) else {
+            return nil
+        }
+        goboTextureCache[pattern] = texture
+        return texture
+    }
+
+    /// Procedurally draws a 256×256 grayscale gobo: bright = light passes, dark = blocked.
+    /// Patterns are deterministic so the projected look is stable across runs.
+    private static func makeGoboImage(for pattern: GoboPattern) -> CGImage? {
+        let size = CGSize(width: 256, height: 256)
+        let bounds = CGRect(origin: .zero, size: size)
+        let image = UIGraphicsImageRenderer(size: size).image { context in
+            let ctx = context.cgContext
+            switch pattern {
+            case .breakup:
+                UIColor.black.setFill()
+                ctx.fill(bounds)
+                var rng = GoboRandom(seed: 0x1234_5678)
+                for _ in 0..<44 {
+                    let radius = 12 + rng.next() * 28
+                    let x = rng.next() * size.width
+                    let y = rng.next() * size.height
+                    UIColor(white: 1, alpha: 0.35 + rng.next() * 0.6).setFill()
+                    ctx.fillEllipse(in: CGRect(x: x - radius, y: y - radius, width: radius * 2, height: radius * 2))
+                }
+            case .stripes:
+                UIColor.black.setFill()
+                ctx.fill(bounds)
+                UIColor.white.setFill()
+                let bars = 7
+                let barWidth = size.width / CGFloat(bars * 2 - 1)
+                for index in 0..<bars {
+                    ctx.fill(CGRect(x: CGFloat(index) * barWidth * 2, y: 0, width: barWidth, height: size.height))
+                }
+            case .stars:
+                UIColor.black.setFill()
+                ctx.fill(bounds)
+                var rng = GoboRandom(seed: 0x0FEE_1DAD)
+                for _ in 0..<96 {
+                    let radius = 1 + rng.next() * 2.4
+                    let x = rng.next() * size.width
+                    let y = rng.next() * size.height
+                    UIColor(white: 1, alpha: 0.5 + rng.next() * 0.5).setFill()
+                    ctx.fillEllipse(in: CGRect(x: x, y: y, width: radius * 2, height: radius * 2))
+                }
+            case .grid:
+                UIColor.white.setFill()
+                ctx.fill(bounds)
+                UIColor.black.setFill()
+                let frame: CGFloat = 14
+                ctx.fill(CGRect(x: 0, y: 0, width: size.width, height: frame))
+                ctx.fill(CGRect(x: 0, y: size.height - frame, width: size.width, height: frame))
+                ctx.fill(CGRect(x: 0, y: 0, width: frame, height: size.height))
+                ctx.fill(CGRect(x: size.width - frame, y: 0, width: frame, height: size.height))
+                let mullion: CGFloat = 10
+                for fraction in [CGFloat(1.0 / 3.0), CGFloat(2.0 / 3.0)] {
+                    ctx.fill(CGRect(x: size.width * fraction - mullion / 2, y: 0, width: mullion, height: size.height))
+                    ctx.fill(CGRect(x: 0, y: size.height * fraction - mullion / 2, width: size.width, height: mullion))
+                }
+            }
+        }
+        return image.cgImage
+    }
+
+    /// Tiny deterministic LCG so procedurally scattered gobos (breakup, stars) are reproducible.
+    private struct GoboRandom {
+        private var state: UInt64
+        init(seed: UInt64) { state = seed }
+        mutating func next() -> CGFloat {
+            state = state &* 6364136223846793005 &+ 1442695040888963407
+            return CGFloat(state >> 40) / CGFloat(1 << 24)
         }
     }
 

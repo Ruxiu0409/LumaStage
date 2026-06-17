@@ -66,6 +66,7 @@ struct FoundationModelsLightingService: LightingLookGenerating {
     Produce content for exactly two cues: an Opening (softer, establishing) and a Highlight (brighter, more focused).
     For each cue, return two or more fixture groups. Use only the fixture roles wash, spot, frontLight, and backgroundWash.
     Intensity is 0.0 to 1.0. Colors are RGB hex like #FFD1A3.
+    A fixture may optionally project a gobo pattern (breakup, stripes, stars, or grid); default to none and only choose a pattern when the request clearly calls for one (e.g. "dappled forest floor", "starry backdrop", "window light").
     The explanation must teach one industry lighting term in language a beginner can understand,
     and relate to what this look actually changed.
     Voice prompts may mix Chinese and English; interpret lighting vocabulary in either language.
@@ -177,6 +178,9 @@ struct GeneratedLightingLook {
 
         @Guide(description: "RGB hex color string like #FFD1A3")
         var colorHex: String
+
+        @Guide(description: "Optional projected light pattern (gobo) for this fixture: none for a plain beam, breakup (dappled foliage), stripes (slats), stars (starfield), or grid (window). Use none unless the request clearly asks for a pattern.")
+        var gobo: GeneratedGobo
     }
 
     @Generable
@@ -185,6 +189,15 @@ struct GeneratedLightingLook {
         case spot
         case frontLight
         case backgroundWash
+    }
+
+    @Generable
+    enum GeneratedGobo {
+        case none
+        case breakup
+        case stripes
+        case stars
+        case grid
     }
 
     @Generable
@@ -221,8 +234,22 @@ private extension GeneratedLightingLook.GeneratedFixture {
             zone: zone.stageZone,
             enabled: enabled,
             intensity: intensity,
-            colorHex: colorHex
+            colorHex: colorHex,
+            gobo: gobo.goboPattern
         )
+    }
+}
+
+private extension GeneratedLightingLook.GeneratedGobo {
+    /// Maps the model's gobo choice into the domain pattern; `.none` means a plain beam (`nil`).
+    var goboPattern: GoboPattern? {
+        switch self {
+        case .none: return nil
+        case .breakup: return .breakup
+        case .stripes: return .stripes
+        case .stars: return .stars
+        case .grid: return .grid
+        }
     }
 }
 
