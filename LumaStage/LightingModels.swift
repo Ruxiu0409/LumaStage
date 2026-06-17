@@ -677,6 +677,45 @@ struct StageState: Equatable {
     }
 }
 
+/// Pure mapping from the domain lighting model (0...1 cue intensity, fixture beam-angle
+/// degrees) to RealityKit `SpotLightComponent` units. Kept Foundation-only so the smoke
+/// tests can pin it without a simulator; `ImmersiveView` is the only consumer.
+///
+/// RealityKit spotlights are photometric: `intensity` is in lumens, not the cue model's
+/// 0...1 scale — so the renderer must map through here rather than passing intensity raw.
+enum SpotLightRenderMath {
+    /// Peak luminous output (lumens) a fully-on fixture of each role emits. Tuned for the
+    /// 0.46-scaled stage twin; safe to retune from runtime previews without touching tests
+    /// that only assert the mapping's shape (clamp/endpoints/monotonicity), not the constants.
+    static func maxLumens(role: FixtureRole) -> Double {
+        switch role {
+        case .frontLight: return 6000
+        case .spot: return 7000
+        case .wash: return 4500
+        case .backgroundWash: return 4000
+        }
+    }
+
+    /// Maps a 0...1 cue intensity to spotlight lumens for the given role. Clamps intensity
+    /// to 0...1; 0 -> 0, 1 -> `maxLumens(role:)`; linear and monotonic in between.
+    static func lumens(forIntensity intensity: Double, role: FixtureRole) -> Double {
+        let clamped = min(max(intensity, 0), 1)
+        return clamped * maxLumens(role: role)
+    }
+
+    /// Maps a fixture beam spread (full-cone degrees, validated to 5...120) to a spotlight's
+    /// inner/outer cone angles. The full 5...120 range is mapped into a conservative 10°...60°
+    /// outer cone that reads well and stays within RealityKit's accepted spotlight range
+    /// regardless of whether the SDK treats the angle as full or half; the inner (full-intensity)
+    /// cone is 70% of the outer to leave a soft penumbra edge.
+    static func coneAngles(beamAngleDegrees: Double) -> (inner: Double, outer: Double) {
+        let beam = min(max(beamAngleDegrees, 5), 120)
+        let outer = 10 + (beam - 5) / 115 * 50
+        let inner = outer * 0.7
+        return (inner: inner, outer: outer)
+    }
+}
+
 enum ValidationError: Error, Equatable, LocalizedError {
     case unsupportedSchemaVersion(String)
     case unsupportedAmbientPreset(String)

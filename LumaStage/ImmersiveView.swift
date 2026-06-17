@@ -265,68 +265,86 @@ struct ImmersiveView: View {
         let stageTopY = stageBase.position.y + stageSize.height / 2
         let upstageZ = layout.objects.flatMap(\.trussEndpoints).map(\.z).min() ?? (stageBase.position.z - stageSize.depth / 2)
         let maxTrussY = layout.objects.flatMap(\.trussEndpoints).map(\.y).max() ?? (stageTopY + 2)
-
-        let backgroundWash = box(
-            name: "background_wash_zone",
-            width: sceneLength(stageSize.width * 0.9),
-            height: sceneLength(max(1.0, maxTrussY - stageTopY)),
-            depth: 0.025,
-            hex: "#4FA8FF",
-            intensity: 0.45,
-            alpha: 0.48,
-            position: scenePoint(Vector3Meters(x: stageBase.position.x, y: stageTopY + (maxTrussY - stageTopY) / 2, z: upstageZ - 0.18))
-        )
-        root.addChild(backgroundWash)
-
-        let frontLight = box(
-            name: "front_light_zone",
-            width: sceneLength(stageSize.width * 0.82),
-            height: 0.026,
-            depth: sceneLength(stageSize.depth * 0.48),
-            hex: "#FFD1A3",
-            intensity: 0.38,
-            alpha: 0.36,
-            position: scenePoint(Vector3Meters(x: stageBase.position.x, y: stageTopY + 0.03, z: stageBase.position.z + stageSize.depth * 0.08))
-        )
-        root.addChild(frontLight)
-
-        let beamY = stageTopY + max(0.7, (maxTrussY - stageTopY) * 0.45)
         let fixtureY = maxTrussY - 0.18
+
+        // Visible moving-head fixtures on the upstage truss double as the real background-wash
+        // emitters, casting light back onto the backdrop drape.
+        let washTarget = Vector3Meters(
+            x: stageBase.position.x,
+            y: stageTopY + (maxTrussY - stageTopY) * 0.45,
+            z: upstageZ - 0.28
+        )
         for (index, xOffset) in [-0.75, 0.75].enumerated() {
+            let fixture = Vector3Meters(x: stageBase.position.x + stageSize.width * xOffset / 2, y: fixtureY, z: upstageZ + 0.08)
             addMovingHeadFixture(
-                name: "front_fixture_\(index)",
+                name: "moving_head_\(index)",
                 to: root,
-                position: Vector3Meters(x: stageBase.position.x + stageSize.width * xOffset / 2, y: fixtureY, z: upstageZ + 0.08),
+                position: fixture,
                 color: "#2B2F38",
-                lensColor: "#FFD1A3"
+                lensColor: "#9FB6FF"
+            )
+            addStageSpotLight(
+                name: "spot_backgroundWash_\(index)",
+                to: root,
+                from: Vector3Meters(x: fixture.x, y: fixture.y - 0.12, z: fixture.z + 0.05),
+                aim: washTarget,
+                beamAngleDegrees: 60
             )
         }
 
-        let leftBeam = box(
-            name: "front_beam_left",
-            width: sceneLength(stageSize.width * 0.2),
-            height: 0.022,
-            depth: sceneLength(stageSize.depth * 0.86),
-            hex: "#FFD1A3",
-            intensity: 0.28,
-            alpha: 0.30,
-            position: scenePoint(Vector3Meters(x: stageBase.position.x - stageSize.width * 0.2, y: beamY, z: stageBase.position.z - stageSize.depth * 0.12))
+        // Front-of-house key light: elevated and downstage of the deck, aimed at the performer
+        // area. No visible fixture — FOH positions sit out past the audience in a real venue.
+        let frontTarget = Vector3Meters(
+            x: stageBase.position.x,
+            y: stageTopY + 0.05,
+            z: stageBase.position.z + stageSize.depth * 0.12
         )
-        leftBeam.orientation = simd_quatf(angle: -0.30, axis: SIMD3<Float>(0, 1, 0))
-        root.addChild(leftBeam)
+        for (index, xOffset) in [-0.55, 0.55].enumerated() {
+            let source = Vector3Meters(
+                x: stageBase.position.x + stageSize.width * xOffset / 2,
+                y: stageTopY + 1.9,
+                z: stageBase.position.z + stageSize.depth * 0.95 + 0.7
+            )
+            addStageSpotLight(
+                name: "spot_frontLight_\(index)",
+                to: root,
+                from: source,
+                aim: frontTarget,
+                beamAngleDegrees: 40
+            )
+        }
+    }
 
-        let rightBeam = box(
-            name: "front_beam_right",
-            width: sceneLength(stageSize.width * 0.2),
-            height: 0.022,
-            depth: sceneLength(stageSize.depth * 0.86),
-            hex: "#FFD1A3",
-            intensity: 0.28,
-            alpha: 0.30,
-            position: scenePoint(Vector3Meters(x: stageBase.position.x + stageSize.width * 0.2, y: beamY, z: stageBase.position.z - stageSize.depth * 0.12))
-        )
-        rightBeam.orientation = simd_quatf(angle: 0.30, axis: SIMD3<Float>(0, 1, 0))
-        root.addChild(rightBeam)
+    @discardableResult
+    private static func addStageSpotLight(
+        name: String,
+        to root: Entity,
+        from sourceModel: Vector3Meters,
+        aim aimModel: Vector3Meters,
+        beamAngleDegrees: Double
+    ) -> SpotLight {
+        let spot = SpotLight()
+        spot.name = name
+
+        // Starts dark; `apply(_:to:)` drives color/intensity from the selected cue.
+        spot.light.color = .white
+        spot.light.intensity = 0
+        let cone = SpotLightRenderMath.coneAngles(beamAngleDegrees: beamAngleDegrees)
+        spot.light.innerAngleInDegrees = Float(cone.inner)
+        spot.light.outerAngleInDegrees = Float(cone.outer)
+        spot.light.attenuationRadius = 18
+        spot.shadow = SpotLightComponent.Shadow()
+
+        let position = scenePoint(sourceModel)
+        spot.position = position
+        let direction = scenePoint(aimModel) - position
+        if simd_length(direction) > 0.0001 {
+            // A spotlight emits along its local -Z; aim that axis at the stage target.
+            spot.orientation = orientation(from: SIMD3<Float>(0, 0, -1), to: simd_normalize(direction))
+        }
+
+        root.addChild(spot)
+        return spot
     }
 
     private static func addMovingHeadFixture(name: String, to root: Entity, position: Vector3Meters, color: String, lensColor: String) {
@@ -346,97 +364,61 @@ struct ImmersiveView: View {
 
     private static func apply(_ cue: LightingCue, to root: Entity) {
         if let frontLight = try? cue.requireFixture(role: .frontLight) {
-            updateModel(
-                named: "front_light_zone",
-                in: root,
-                color: frontLight.color.value,
-                intensity: frontLight.intensity,
-                duration: cue.transition.duration,
-                fineControl: frontLight.effectiveFineControl
-            )
+            for index in 0..<2 {
+                updateSpotLight(
+                    named: "spot_frontLight_\(index)",
+                    in: root,
+                    role: .frontLight,
+                    color: frontLight.color.value,
+                    intensity: frontLight.intensity,
+                    beamAngleDegrees: frontLight.effectiveFineControl.beamAngleDegrees,
+                    duration: cue.transition.duration
+                )
+            }
         }
 
         if let backgroundWash = try? cue.requireFixture(role: .backgroundWash) {
-            updateModel(
-                named: "background_wash_zone",
-                in: root,
-                color: backgroundWash.color.value,
-                intensity: backgroundWash.intensity,
-                duration: cue.transition.duration,
-                fineControl: backgroundWash.effectiveFineControl
-            )
+            for index in 0..<2 {
+                updateSpotLight(
+                    named: "spot_backgroundWash_\(index)",
+                    in: root,
+                    role: .backgroundWash,
+                    color: backgroundWash.color.value,
+                    intensity: backgroundWash.intensity,
+                    beamAngleDegrees: backgroundWash.effectiveFineControl.beamAngleDegrees,
+                    duration: cue.transition.duration
+                )
+            }
         }
     }
 
-    private static func updateModel(
+    // Drives a real RealityKit spotlight from a cue's fixture values. The mutation runs inside a
+    // SwiftUI animation transaction so `SpotLightComponent` (an `_ImplicitlyAnimatableBuiltinComponent`
+    // on visionOS 27) cross-fades color/intensity/cone over the cue's transition duration instead of
+    // hard-cutting.
+    private static func updateSpotLight(
         named name: String,
         in root: Entity,
+        role: FixtureRole,
         color: String,
         intensity: Double,
-        duration: Double,
-        fineControl: FixtureFineControl? = nil
+        beamAngleDegrees: Double,
+        duration: Double
     ) {
-        guard let entity = root.findEntity(named: name) as? ModelEntity else {
+        guard let spot = root.findEntity(named: name) as? SpotLight else {
             return
         }
 
-        entity.model?.materials = [material(hex: color, intensity: intensity)]
+        let rgb = RGBComponents(hex: color) ?? .white
+        let lumens = Float(SpotLightRenderMath.lumens(forIntensity: intensity, role: role))
+        let cone = SpotLightRenderMath.coneAngles(beamAngleDegrees: beamAngleDegrees)
 
-        var transform = entity.transform
-        let clampedIntensity = Float(max(0.1, min(intensity, 1.0)))
-        transform.scale = SIMD3<Float>(1, 1, clampedIntensity)
-        entity.move(
-            to: transform,
-            relativeTo: entity.parent,
-            duration: duration,
-            timingFunction: .easeInOut
-        )
-
-        if name == "front_light_zone" {
-            updateBeam(named: "front_beam_left", in: root, color: color, intensity: intensity, duration: duration, fineControl: fineControl, lateralOffset: -0.28)
-            updateBeam(named: "front_beam_right", in: root, color: color, intensity: intensity, duration: duration, fineControl: fineControl, lateralOffset: 0.28)
+        withAnimation(.easeInOut(duration: duration)) {
+            spot.light.color = UIColor(red: rgb.red, green: rgb.green, blue: rgb.blue, alpha: 1)
+            spot.light.intensity = lumens
+            spot.light.innerAngleInDegrees = Float(cone.inner)
+            spot.light.outerAngleInDegrees = Float(cone.outer)
         }
-    }
-
-    private static func updateBeam(
-        named name: String,
-        in root: Entity,
-        color: String,
-        intensity: Double,
-        duration: Double,
-        fineControl: FixtureFineControl?,
-        lateralOffset: Double
-    ) {
-        guard let entity = root.findEntity(named: name) as? ModelEntity else {
-            return
-        }
-
-        entity.model?.materials = [material(hex: color, intensity: intensity * 0.72, alpha: 0.34 + intensity * 0.28)]
-        var transform = entity.transform
-        let beamAngle = Float(fineControl?.beamAngleDegrees ?? 42)
-        transform.scale = SIMD3<Float>(
-            0.45 + Float(intensity) * 0.42 + beamAngle / 180,
-            1,
-            0.62 + Float(intensity) * 0.35
-        )
-        if let fineControl {
-            let source = FixturePosition(
-                x: fineControl.position.x + lateralOffset,
-                y: fineControl.position.y,
-                z: fineControl.position.z
-            )
-            transform.translation = scenePoint(Vector3Meters(x: source.x, y: source.y, z: source.z))
-            transform.rotation =
-                simd_quatf(angle: Float(fineControl.panDegrees) * .pi / 180, axis: SIMD3<Float>(0, 1, 0)) *
-                simd_quatf(angle: Float(fineControl.tiltDegrees) * .pi / 180, axis: SIMD3<Float>(1, 0, 0)) *
-                simd_quatf(angle: Float(fineControl.rollDegrees) * .pi / 180, axis: SIMD3<Float>(0, 0, 1))
-        }
-        entity.move(
-            to: transform,
-            relativeTo: entity.parent,
-            duration: duration,
-            timingFunction: .easeInOut
-        )
     }
 
     private static func scenePoint(_ point: Vector3Meters) -> SIMD3<Float> {

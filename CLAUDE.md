@@ -96,7 +96,7 @@ Cue edits go through `CuePatch` + `StageState.patchSelectedCue` and **only ever 
 
 ### Shared stage geometry
 
-`ImmersiveStageGeometryPlan.make(from: StageLayout)` builds the visionOS stage geometry that `ImmersiveView` renders; a smoke test (`visionStageUsesIPadStageLayoutGeometry`) still pins it against the `StageLayout` model. `ImmersiveView` applies the selected cue with animated `entity.move(to:duration:timingFunction:)` transitions and embeds the AI box as a SwiftUI `Attachment`. Projects with no saved layout fall back to `StageLayout.defaultStudentOutdoor()`.
+`ImmersiveStageGeometryPlan.make(from: StageLayout)` builds the visionOS stage geometry that `ImmersiveView` renders; a smoke test (`visionStageUsesIPadStageLayoutGeometry`) still pins it against the `StageLayout` model. The lit fixtures are **real RealityKit `SpotLight` entities** (visionOS 27), not translucent boxes: `addStageSpotLight` aims each spotlight's `-Z` at a stage target, and `apply(_:to:)` → `updateSpotLight` drives color/intensity/cone per cue by role, mapping the cue's 0...1 intensity and beam angle to photometric lumens / cone degrees via the Foundation-only `SpotLightRenderMath` (pinned by `spotLightRenderMathMapsIntensityAndBeamAngle`). The per-cue relight cross-fades over `cue.transition.duration` by mutating the light inside a SwiftUI `withAnimation` transaction (`SpotLightComponent` is an `_ImplicitlyAnimatableBuiltinComponent`). The AI box embeds as a SwiftUI `Attachment`. Projects with no saved layout fall back to `StageLayout.defaultStudentOutdoor()`.
 
 ## Conventions
 

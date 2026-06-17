@@ -5,6 +5,7 @@ struct LumaStageCoreSmokeTests {
     static func main() async throws {
         try validatesDemoLookDefaults()
         defaultProjectListStartsEmpty()
+        spotLightRenderMathMapsIntensityAndBeamAngle()
         try newProjectFactoryCreatesValidProject()
         try newProjectFactoryCreatesDefaultStageLayout()
         projectCreationTemplatesOfferBlankAndScenarioChoices()
@@ -56,6 +57,36 @@ struct LumaStageCoreSmokeTests {
         let projects = LumaStageProject.defaultProjects()
 
         expect(projects.isEmpty, "Project home should start empty by default")
+    }
+
+    private static func spotLightRenderMathMapsIntensityAndBeamAngle() {
+        // Lumens: clamps to 0...1, hits the role endpoints, and rises monotonically.
+        expect(SpotLightRenderMath.lumens(forIntensity: 0, role: .frontLight) == 0,
+               "Zero intensity must map to zero lumens")
+        expect(SpotLightRenderMath.lumens(forIntensity: 1, role: .frontLight) == SpotLightRenderMath.maxLumens(role: .frontLight),
+               "Full intensity must map to the role's peak lumens")
+        expect(SpotLightRenderMath.lumens(forIntensity: -0.5, role: .frontLight) == 0,
+               "Negative intensity must clamp to zero lumens")
+        expect(SpotLightRenderMath.lumens(forIntensity: 1.7, role: .frontLight) == SpotLightRenderMath.maxLumens(role: .frontLight),
+               "Above-one intensity must clamp to peak lumens")
+        expect(SpotLightRenderMath.lumens(forIntensity: 0.5, role: .frontLight) > SpotLightRenderMath.lumens(forIntensity: 0.25, role: .frontLight),
+               "Lumens must increase with intensity")
+        expect(SpotLightRenderMath.lumens(forIntensity: 1, role: .spot) > SpotLightRenderMath.lumens(forIntensity: 1, role: .backgroundWash),
+               "Peak lumens must stay role-sensitive (a spot out-throws a background wash)")
+
+        // Cone angles: bounded 10°...60° outer, inner tighter than outer, monotonic, clamped.
+        let narrow = SpotLightRenderMath.coneAngles(beamAngleDegrees: 5)
+        let wide = SpotLightRenderMath.coneAngles(beamAngleDegrees: 120)
+        expect(abs(narrow.inner - narrow.outer * 0.7) < 0.0001, "Inner cone must be 70% of the outer cone for a soft penumbra edge")
+        expect(abs(narrow.outer - 10) < 0.0001, "Minimum beam spread must map to a 10° outer cone")
+        expect(abs(wide.outer - 60) < 0.0001, "Maximum beam spread must map to a 60° outer cone")
+        expect(narrow.inner < narrow.outer, "Inner cone must sit inside the outer cone")
+        expect(wide.inner < wide.outer, "Inner cone must sit inside the outer cone (wide)")
+        expect(wide.outer > narrow.outer, "Wider beam spread must widen the cone")
+        expect(SpotLightRenderMath.coneAngles(beamAngleDegrees: 1).outer == narrow.outer,
+               "Below-range beam spread must clamp to the minimum cone")
+        expect(SpotLightRenderMath.coneAngles(beamAngleDegrees: 200).outer == wide.outer,
+               "Above-range beam spread must clamp to the maximum cone")
     }
 
     private static func newProjectFactoryCreatesValidProject() throws {
