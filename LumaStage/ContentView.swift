@@ -2,29 +2,61 @@
 //  ContentView.swift
 //  LumaStage
 //
-//  Created by 蔡承曄 on 2026/5/20.
+//  Created by Tsai Cheng-Yeh on 2026/5/20.
 //
 
 import SwiftUI
-import RealityKit
-import RealityKitContent
 
+#if os(visionOS)
 struct ContentView: View {
+    @Environment(AppModel.self) private var appModel
+    @Environment(\.openImmersiveSpace) private var openImmersiveSpace
+
+    @State private var requestedStageProjectId: String?
 
     var body: some View {
-        VStack {
-            Model3D(named: "Scene", bundle: realityKitContentBundle)
-                .padding(.bottom, 50)
-
-            Text("Hello, world!")
-
-            ToggleImmersiveSpaceButton()
+        Group {
+            if appModel.selectedProject == nil {
+                ProjectSelectionView()
+                    .frame(width: 760)
+            } else if appModel.immersiveSpaceState == .open {
+                Color.clear
+                    .frame(width: 1, height: 1)
+                    .allowsHitTesting(false)
+            } else {
+                VisionAIComposerBox()
+                    .frame(width: 820)
+            }
         }
-        .padding()
+        .task(id: appModel.selectedProjectId) {
+            await openDefaultStageIfNeeded()
+        }
+    }
+
+    @MainActor
+    private func openDefaultStageIfNeeded() async {
+        guard let selectedProjectId = appModel.selectedProjectId,
+              requestedStageProjectId != selectedProjectId,
+              appModel.immersiveSpaceState == .closed else {
+            return
+        }
+
+        requestedStageProjectId = selectedProjectId
+        appModel.immersiveSpaceState = .inTransition
+
+        switch await openImmersiveSpace(id: appModel.immersiveSpaceID) {
+        case .opened:
+            break
+        case .userCancelled, .error:
+            fallthrough
+        @unknown default:
+            appModel.immersiveSpaceState = .closed
+        }
     }
 }
 
-#Preview(windowStyle: .automatic) {
+#Preview {
     ContentView()
         .environment(AppModel())
 }
+#endif

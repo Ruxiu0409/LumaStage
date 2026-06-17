@@ -1,0 +1,702 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LumaStage Brainstorming Preview</title>
+  <style>
+    :root {
+      --ink: #1b1a17;
+      --muted: #68645d;
+      --line: #d8d1c3;
+      --paper: #f7f1e6;
+      --amber: #d77921;
+      --red: #a33e2f;
+      --green: #4b6f58;
+      --blue: #315f72;
+      --shadow: 0 20px 60px rgba(47, 36, 23, 0.12);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background:
+        linear-gradient(110deg, rgba(215, 121, 33, 0.13), transparent 34%),
+        linear-gradient(180deg, #fbf7ee 0%, var(--paper) 45%, #efe5d4 100%);
+      color: var(--ink);
+      font-family: "PingFang TC", "Noto Serif TC", "Heiti TC", serif;
+      line-height: 1.7;
+    }
+
+    a {
+      color: inherit;
+    }
+
+    .page {
+      width: min(1160px, calc(100% - 40px));
+      margin: 0 auto;
+      padding: 48px 0 72px;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.1fr) minmax(300px, 0.9fr);
+      gap: 28px;
+      align-items: end;
+      min-height: 440px;
+      padding: 42px;
+      border: 1px solid var(--line);
+      background:
+        linear-gradient(145deg, rgba(255, 250, 240, 0.96), rgba(246, 229, 201, 0.88)),
+        radial-gradient(circle at 80% 20%, rgba(211, 80, 41, 0.18), transparent 32%);
+      box-shadow: var(--shadow);
+    }
+
+    .hero h1 {
+      margin: 0;
+      max-width: 760px;
+      font-size: clamp(44px, 7vw, 86px);
+      line-height: 0.96;
+      font-weight: 800;
+      letter-spacing: 0;
+    }
+
+    .hero p {
+      max-width: 680px;
+      margin: 24px 0 0;
+      font-size: clamp(18px, 2vw, 24px);
+      color: #433d35;
+    }
+
+    .stage-card {
+      min-height: 300px;
+      padding: 22px;
+      border: 1px solid rgba(27, 26, 23, 0.18);
+      background:
+        linear-gradient(180deg, rgba(27, 26, 23, 0.88), rgba(27, 26, 23, 0.72)),
+        repeating-linear-gradient(90deg, transparent 0 28px, rgba(255, 255, 255, 0.04) 28px 30px);
+      color: #fff8e8;
+      display: grid;
+      align-content: end;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .stage-card::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background:
+        linear-gradient(62deg, transparent 4%, rgba(255, 211, 127, 0.52) 5%, transparent 16%),
+        linear-gradient(117deg, transparent 16%, rgba(89, 169, 194, 0.42) 17%, transparent 34%),
+        linear-gradient(242deg, transparent 10%, rgba(231, 82, 52, 0.36) 11%, transparent 30%);
+      opacity: 0.92;
+    }
+
+    .stage-card > * {
+      position: relative;
+      z-index: 1;
+    }
+
+    .stage-card strong {
+      display: block;
+      font-size: 28px;
+      line-height: 1.2;
+      margin-bottom: 10px;
+    }
+
+    .stage-card span {
+      color: rgba(255, 248, 232, 0.76);
+      font-size: 15px;
+    }
+
+    .toc {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin: 22px 0 34px;
+    }
+
+    .toc a {
+      padding: 8px 12px;
+      border: 1px solid var(--line);
+      background: rgba(255, 250, 240, 0.74);
+      text-decoration: none;
+      font-size: 14px;
+    }
+
+    section {
+      margin-top: 28px;
+      padding: 30px;
+      border: 1px solid var(--line);
+      background: rgba(255, 250, 240, 0.8);
+    }
+
+    .section-title {
+      display: flex;
+      gap: 14px;
+      align-items: baseline;
+      margin-bottom: 18px;
+    }
+
+    .section-title span {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      color: var(--amber);
+      font-size: 14px;
+      letter-spacing: 0;
+    }
+
+    h2 {
+      margin: 0;
+      font-size: clamp(26px, 3vw, 38px);
+      line-height: 1.15;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      margin: 0 0 8px;
+      font-size: 20px;
+      line-height: 1.35;
+    }
+
+    p {
+      margin: 0;
+    }
+
+    .lead {
+      max-width: 860px;
+      color: #39342d;
+      font-size: 19px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+      margin-top: 22px;
+    }
+
+    .three {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .tile {
+      border-left: 4px solid var(--amber);
+      padding: 18px;
+      background: rgba(255, 255, 255, 0.42);
+      min-height: 100%;
+    }
+
+    .tile.red { border-color: var(--red); }
+    .tile.green { border-color: var(--green); }
+    .tile.blue { border-color: var(--blue); }
+
+    .tile p,
+    li {
+      color: var(--muted);
+      font-size: 16px;
+    }
+
+    ul {
+      margin: 14px 0 0;
+      padding-left: 22px;
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 24px;
+    }
+
+    .step {
+      padding: 16px 14px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.48);
+      min-height: 128px;
+    }
+
+    .step b {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--ink);
+    }
+
+    .step span {
+      color: var(--muted);
+      font-size: 15px;
+    }
+
+    .decision-table {
+      width: 100%;
+      margin-top: 22px;
+      border-collapse: collapse;
+      background: rgba(255, 255, 255, 0.44);
+    }
+
+    .decision-table th,
+    .decision-table td {
+      padding: 14px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    .decision-table th {
+      color: #4a443c;
+      font-size: 14px;
+    }
+
+    .decision-table td {
+      color: var(--muted);
+      font-size: 15px;
+    }
+
+    .table-scroll {
+      margin-top: 22px;
+      overflow-x: auto;
+    }
+
+    .schema-code {
+      margin-top: 22px;
+      padding: 18px;
+      overflow-x: auto;
+      background: #1f211c;
+      color: #fff6df;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 14px;
+      line-height: 1.55;
+    }
+
+    .schema-code code {
+      font-family: inherit;
+    }
+
+    .quote {
+      margin-top: 20px;
+      padding: 18px 20px;
+      background: #1f211c;
+      color: #fff6df;
+      font-size: 20px;
+      line-height: 1.55;
+    }
+
+    .footer {
+      margin-top: 32px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    @media (max-width: 880px) {
+      .page {
+        width: min(100% - 24px, 680px);
+        padding-top: 20px;
+      }
+
+      .hero,
+      .grid,
+      .three,
+      .flow {
+        grid-template-columns: 1fr;
+      }
+
+      .hero,
+      section {
+        padding: 22px;
+      }
+
+      .stage-card {
+        min-height: 240px;
+      }
+    }
+
+    @media print {
+      body {
+        background: white;
+      }
+
+      .page {
+        width: 100%;
+        padding: 0;
+      }
+
+      .hero,
+      section {
+        box-shadow: none;
+        break-inside: avoid;
+      }
+
+      .toc {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="hero">
+      <div>
+        <h1>LumaStage 企劃預覽</h1>
+        <p>用 Apple Vision Pro 建立語音優先的 AI 舞台燈光設計、生成與沉浸式預演工具。</p>
+      </div>
+      <aside class="stage-card" aria-label="舞台燈光示意">
+        <strong>AI 設計為主，教育用來幫助溝通</strong>
+        <span>v1 不做複雜控制台，使用者透過語音和 AI 對話來生成、修改與理解舞台燈光。</span>
+      </aside>
+    </header>
+
+    <nav class="toc" aria-label="頁面導覽">
+      <a href="#core">Core Experience</a>
+      <a href="#problem">問題</a>
+      <a href="#competition">比賽主軸</a>
+      <a href="#generation">AI 生成</a>
+      <a href="#schema">Schema</a>
+      <a href="#workflow">V1 介面</a>
+      <a href="#editing">局部修改</a>
+      <a href="#learning">AI 溝通引導</a>
+      <a href="#decisions">目前決策</a>
+      <a href="#future">未來展望</a>
+    </nav>
+
+    <section id="core">
+      <div class="section-title"><span>00</span><h2>本週 MVP Core Experience</h2></div>
+      <p class="lead">本週只聚焦一條 demo：使用者進入 1:1 夜間室外舞台數位分身，透過 Vision Pro 的懸浮 AI 對話框用真的 speech-to-text 說出需求，再送到 OpenAI API 生成 cue-based 燈光，最後用 iPad 微調目前 cue 的顏色與 dimmer。</p>
+      <div class="flow" aria-label="MVP demo flow">
+        <div class="step"><b>進入舞台</b><span>看見夜間室外學生舞台與基本燈具。</span></div>
+        <div class="step"><b>說出需求</b><span>支援中英混講，例如「把 front light dimmer 降到 60%。」</span></div>
+        <div class="step"><b>OpenAI 生成</b><span>回傳 selectedCueId、cues、fixtureGroups、transition 與 explanation。</span></div>
+        <div class="step"><b>iPad 微調</b><span>調整目前 cue 的 front light dimmer 或 background wash color。</span></div>
+        <div class="step"><b>一句解釋</b><span>用業界詞加白話說明這次調整。</span></div>
+      </div>
+      <div class="grid">
+        <article class="tile green">
+          <h3>本週要做</h3>
+          <p>夜間室外舞台數位分身、standardNight 周邊環境光 baseline、Vision Pro 懸浮 AI 對話框、真實 speech-to-text、中英混講解析、OpenAI API cue-based 結構化生成、iPad 微調面板、基本燈具/顏色/dimmer。</p>
+        </article>
+        <article class="tile red">
+          <h3>本週不做</h3>
+          <p>真實場地 AR 打光、iPad 完整編輯器、燈控台輸出、rigging/承重、室內窗戶日光、完整 cue timeline 編輯器、多使用者。</p>
+        </article>
+      </div>
+      <div class="quote">Demo 句子：進入 standardNight 夜間室外舞台 -> 語音轉文字 -> AI 解析中英混講指令 -> OpenAI API 產生 cue-based 燈光配置 -> 切換 cue 時用 animation 轉場 -> 用 iPad 微調目前 cue 的 dimmer 或 wash color -> AI 用聽得懂的方式解釋專業詞。</div>
+    </section>
+
+    <section id="problem">
+      <div class="section-title"><span>01</span><h2>想解決的問題</h2></div>
+      <p class="lead">LumaStage 的核心不是單純做一個舞台模擬器，而是先建立 1:1 夜間室外舞台數位分身，用固定的 standardNight baseline 讓使用者能清楚判斷 AI 生成的舞台燈光效果。</p>
+      <div class="grid three">
+        <article class="tile red">
+          <h3>專業燈光師</h3>
+          <p>問題不只是在電腦裡的預視和實燈效果不同，而是規劃前常常無法完整判斷現場光環境。等現場開燈後，亮度、光色和氛圍可能都和原本想像不同。</p>
+        </article>
+        <article class="tile blue">
+          <h3>standardNight baseline</h3>
+          <p>v1 不先比較多種夜間環境光。先固定 standardNight，讓舞台燈的亮度、顏色、對比和可讀性有一個可信但穩定的判斷基準。</p>
+        </article>
+        <article class="tile green">
+          <h3>學生與初學者</h3>
+          <p>初學者除了缺少設備與場地，也常不知道怎麼把意圖說清楚。知道燈具名稱、顏色和電門後，才更容易和 AI 合作完成設計。</p>
+        </article>
+      </div>
+      <div class="quote">一句話：用 1:1 夜間室外舞台數位分身與 standardNight baseline，讓使用者在沒有完整設備、沒有真正進場的情況下，先看見 AI 生成的舞台燈光是否成立。</div>
+    </section>
+
+    <section id="competition">
+      <div class="section-title"><span>02</span><h2>比賽主軸</h2></div>
+      <p class="lead">目前主軸改為「AI 舞台燈光設計為主，教育作為溝通引導」。LumaStage 不是先做課程，而是讓使用者透過語音和 AI 共同生成、修改與理解舞台燈光。</p>
+      <div class="grid three">
+        <article class="tile">
+          <h3>AI 設計是主軸</h3>
+          <p>使用者說出想要的舞台氛圍、場地條件與限制，AI 轉成可預覽、可修改的燈光設計，並立即在 Vision Pro 裡呈現。</p>
+        </article>
+        <article class="tile blue">
+          <h3>教育幫助溝通</h3>
+          <p>初學者學燈具名稱、顏色和電門，不是為了上完整課程，而是為了能更準確地跟 AI 說明自己想要的效果。</p>
+        </article>
+        <article class="tile green">
+          <h3>專業價值如何保留</h3>
+          <p>同一套 AI 生成與沉浸預演能力，未來可以延伸到進場前的專業 previs，尤其是室外光環境、舞台比例和觀眾視角這類現場條件。</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="generation">
+      <div class="section-title"><span>03</span><h2>AI 舞台生成</h2></div>
+      <p class="lead">使用者不需要從零手動排每盞燈，而是提供室外舞台照片、場刊或舞台圖、設備清單、想達成的氛圍與文字 prompt，讓 OpenAI API 在固定 standardNight 環境下生成可預覽、可微調的 cue-based 舞台燈光配置。</p>
+      <div class="flow" aria-label="AI 生成流程">
+        <div class="step"><b>室外舞台</b><span>照片、場刊、舞台圖或現場筆記，幫助 AI 建立 1:1 舞台數位分身。</span></div>
+        <div class="step"><b>夜間 ambient</b><span>MVP 固定 standardNight，不先做 dark night 或 bright surroundings 切換。</span></div>
+        <div class="step"><b>目標效果</b><span>例如溫暖開場與副歌/亮點 cue 的情緒差異。</span></div>
+        <div class="step"><b>OpenAI API</b><span>回傳 selectedCueId、cues、fixtureGroups、transition 與 explanation。</span></div>
+        <div class="step"><b>沉浸預覽</b><span>在 Vision Pro 中切換 Opening / Highlight，確認 cue animation、空間感與視覺層次。</span></div>
+      </div>
+    </section>
+
+    <section id="schema">
+      <div class="section-title"><span>04</span><h2>MVP Lighting Look Schema</h2></div>
+      <p class="lead">第一版 OpenAI structured output 描述一組小型 cue-based lighting look，不是完整燈控工程。這份 schema 讓 Vision Pro 預覽、iPad 微調、cue animation 和 AI 解釋共用同一份資料：selected cue、fixture group、顏色、dimmer / intensity、transition、固定 standardNight ambient baseline，以及一句能教使用者下次怎麼說得更精準的解釋。</p>
+      <div class="grid three">
+        <article class="tile green">
+          <h3>總體用途</h3>
+          <p>OpenAI 從語音 transcript 或 prompt 產生 cue-based 燈光 look；Vision Pro 套用 selected cue；iPad 微調目前 cue。</p>
+        </article>
+        <article class="tile blue">
+          <h3>資料邊界</h3>
+          <p>v1 先記錄可見的舞台光：固定環境光、cue、transition、燈具群組、顏色、亮度與解釋。不處理 DMX、完整 timeline editor、rigging 或真實燈具物理資料。</p>
+        </article>
+        <article class="tile">
+          <h3>設計原則</h3>
+          <p>每個 cue 和 fixture group 都要有穩定 id；iPad 控制和語音局部修改預設只改 selected cue，切換 cue 時用 animation 過渡。</p>
+        </article>
+      </div>
+
+      <pre class="schema-code"><code>{
+  "schemaVersion": "1.0",
+  "intent": "generateLook",
+  "lookName": "Warm Opening Look",
+  "mood": "warm, welcoming, student event",
+  "ambient": {
+    "preset": "standardNight",
+    "level": 0.35,
+    "colorTemperature": 4200
+  },
+  "selectedCueId": "cue_opening",
+  "cues": [
+    {
+      "id": "cue_opening",
+      "name": "Opening",
+      "transition": {
+        "duration": 1.2,
+        "easing": "easeInOut"
+      },
+      "fixtureGroups": [
+        {
+          "id": "front_wash",
+          "name": "Front Wash",
+          "role": "frontLight",
+          "zone": "stageFront",
+          "enabled": true,
+          "intensity": 0.6,
+          "color": {
+            "mode": "rgb",
+            "value": "#FFD1A3"
+          }
+        },
+        {
+          "id": "background_wash",
+          "name": "Background Wash",
+          "role": "backgroundWash",
+          "zone": "stageBack",
+          "enabled": true,
+          "intensity": 0.75,
+          "color": {
+            "mode": "rgb",
+            "value": "#4FA8FF"
+          }
+        }
+      ]
+    },
+    {
+      "id": "cue_highlight",
+      "name": "Highlight",
+      "transition": {
+        "duration": 1.2,
+        "easing": "easeInOut"
+      },
+      "fixtureGroups": [
+        {
+          "id": "front_wash",
+          "name": "Front Wash",
+          "role": "frontLight",
+          "zone": "stageFront",
+          "enabled": true,
+          "intensity": 0.75,
+          "color": {
+            "mode": "rgb",
+            "value": "#FFE0B8"
+          }
+        },
+        {
+          "id": "background_wash",
+          "name": "Background Wash",
+          "role": "backgroundWash",
+          "zone": "stageBack",
+          "enabled": true,
+          "intensity": 0.9,
+          "color": {
+            "mode": "rgb",
+            "value": "#2F6BFF"
+          }
+        }
+      ]
+    }
+  ],
+  "explanation": {
+    "term": "Dimmer / intensity",
+    "plainText": "Dimmer means how bright the light is.",
+    "actionSummary": "Generated Opening and Highlight cues with a brighter cool background for contrast."
+  }
+}</code></pre>
+
+      <div class="table-scroll">
+        <table class="decision-table">
+          <thead>
+            <tr><th>欄位</th><th>說明</th><th>範例格式</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>schemaVersion</code></td><td>schema 版本，之後欄位變動時可以做相容或 migration。</td><td><code>"1.0"</code></td></tr>
+            <tr><td><code>intent</code></td><td>AI 判斷出的操作意圖，用來區分完整生成、局部修改、只解釋或重置。</td><td><code>"generateLook"</code>, <code>"localEdit"</code>, <code>"explainOnly"</code>, <code>"resetLook"</code></td></tr>
+            <tr><td><code>lookName</code></td><td>這次生成或修改後的燈光 look 名稱，可顯示在 AI 對話框或 iPad 面板。</td><td><code>"Warm Opening Look"</code></td></tr>
+            <tr><td><code>mood</code></td><td>使用者想要的氛圍摘要，幫助 UI 和解釋說明為什麼選這組燈光。</td><td><code>"warm, welcoming, student event"</code></td></tr>
+            <tr><td><code>ambient</code></td><td>夜間室外環境光 baseline。MVP 固定，讓 demo 專心展示 AI 燈光生成與燈具微調。</td><td><code>{ "preset": "standardNight", "level": 0.35, "colorTemperature": 4200 }</code></td></tr>
+            <tr><td><code>ambient.preset</code></td><td>MVP 只使用 standardNight；darkNight 和 brightSurroundings 留到未來。</td><td><code>"standardNight"</code></td></tr>
+            <tr><td><code>ambient.level</code></td><td>standardNight 的固定環境亮度 baseline，MVP 不做 iPad 控制。</td><td><code>0.35</code></td></tr>
+            <tr><td><code>ambient.colorTemperature</code></td><td>standardNight 的固定周邊環境光色溫。</td><td><code>4200</code></td></tr>
+            <tr><td><code>selectedCueId</code></td><td>目前顯示或正在編輯的 cue。iPad 微調預設套用到這個 cue。</td><td><code>"cue_opening"</code></td></tr>
+            <tr><td><code>cues</code></td><td>這個 look 的 cue 陣列。MVP 先固定兩個 cue：Opening 和 Highlight，不先做完整 timeline editor。</td><td><code>[{ "id": "cue_opening", ... }]</code></td></tr>
+            <tr><td><code>cues[].id</code></td><td>cue 的穩定 ID，用於 cue 選擇、局部修改與 animated transition。</td><td><code>"cue_opening"</code></td></tr>
+            <tr><td><code>cues[].name</code></td><td>給人看的 cue 名稱，可顯示在 iPad 或 Vision Pro 對話框。</td><td><code>"Opening"</code></td></tr>
+            <tr><td><code>cues[].transition</code></td><td>切換到這個 cue 時的 animation 設定。</td><td><code>{ "duration": 1.2, "easing": "easeInOut" }</code></td></tr>
+            <tr><td><code>cues[].transition.duration</code></td><td>cue transition 動畫秒數。MVP 可先固定使用 1.2 秒。</td><td><code>1.2</code></td></tr>
+            <tr><td><code>cues[].transition.easing</code></td><td>cue transition 的 easing。MVP 先用 easeInOut。</td><td><code>"easeInOut"</code></td></tr>
+            <tr><td><code>cues[].fixtureGroups</code></td><td>這個 cue 內的燈具狀態；Vision Pro render selected cue，iPad patch selected cue。</td><td><code>[{ "id": "front_wash", ... }]</code></td></tr>
+            <tr><td><code>cues[].fixtureGroups[].id</code></td><td>機器使用的穩定 ID，iPad 微調和語音局部修改都靠它指定目標。</td><td><code>"front_wash"</code></td></tr>
+            <tr><td><code>cues[].fixtureGroups[].name</code></td><td>給人看的燈具群組名稱，適合顯示在 UI 或解釋文字裡。</td><td><code>"Front Wash"</code></td></tr>
+            <tr><td><code>cues[].fixtureGroups[].role</code></td><td>MVP 第一批燈具詞彙，只保留能支撐 demo 的四個角色。</td><td><code>"wash"</code>, <code>"spot"</code>, <code>"frontLight"</code>, <code>"backgroundWash"</code></td></tr>
+            <tr><td><code>cues[].fixtureGroups[].zone</code></td><td>這組燈主要影響的舞台區域，讓 AI 可以做局部修改。</td><td><code>"stageFront"</code>, <code>"stageBack"</code>, <code>"stageLeft"</code>, <code>"stageRight"</code>, <code>"fullStage"</code></td></tr>
+            <tr><td><code>cues[].fixtureGroups[].enabled</code></td><td>是否在這個 cue 啟用這組燈。關掉時保留資料，不需要從 schema 刪除。</td><td><code>true</code></td></tr>
+            <tr><td><code>cues[].fixtureGroups[].intensity</code></td><td>這個 cue 內的 dimmer / intensity，0 到 1 對應 0% 到 100% 亮度。</td><td><code>0.6</code></td></tr>
+            <tr><td><code>cues[].fixtureGroups[].color</code></td><td>這個 cue 內這組燈的顏色物件。MVP 先用 RGB hex。</td><td><code>{ "mode": "rgb", "value": "#FFD1A3" }</code></td></tr>
+            <tr><td><code>cues[].fixtureGroups[].color.mode</code></td><td>顏色格式。MVP 先固定使用 RGB。</td><td><code>"rgb"</code></td></tr>
+            <tr><td><code>cues[].fixtureGroups[].color.value</code></td><td>實際顏色值。當 mode 是 RGB 時，使用六位數 hex color。</td><td><code>"#FFD1A3"</code></td></tr>
+            <tr><td><code>explanation</code></td><td>AI 回傳的簡短教育與操作說明，必須和這次實際改動的燈光資料有關。</td><td><code>{ "term": "Dimmer / intensity", ... }</code></td></tr>
+            <tr><td><code>explanation.term</code></td><td>這次要教或強化的業界詞。</td><td><code>"Dimmer / intensity"</code></td></tr>
+            <tr><td><code>explanation.plainText</code></td><td>初學者聽得懂的短解釋，適合放在懸浮 AI 對話框。</td><td><code>"Dimmer means how bright the light is."</code></td></tr>
+            <tr><td><code>explanation.actionSummary</code></td><td>AI 對這次改動的簡短總結。</td><td><code>"Set the front wash to a softer warm look."</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="quote">v1 schema 的重點：描述舞台「每個 cue 要怎麼亮」，讓 AI 生成、Vision Pro 預覽、iPad 微調和 cue animation 都操作同一份可控資料。</div>
+    </section>
+
+    <section id="workflow">
+      <div class="section-title"><span>05</span><h2>V1 介面：AVP 預覽，iPad 微調</h2></div>
+      <p class="lead">第一版介面要保持簡單：Apple Vision Pro 是沉浸式舞台與 AI 對話，iPad 是微調面板。語音要是真的 speech-to-text，並允許使用者在中文句子裡穿插 lighting terms。</p>
+      <div class="grid three">
+        <article class="tile blue">
+          <h3>Vision Pro：懸浮對話框</h3>
+          <p>最少顯示 mic 狀態、transcript、AI understood command 和 explanation。不要先做完整控制台。</p>
+        </article>
+        <article class="tile red">
+          <h3>語音是主要輸入</h3>
+          <p>使用者可以說「把主燈調暗」、「front light dimmer 降到 60%」、「background wash 改冷一點」、「讓舞台背景更暗」或「這盞燈是做什麼的」。</p>
+        </article>
+        <article class="tile green">
+          <h3>iPad：輕量微調</h3>
+          <p>本週只做少數控制：front light dimmer、background wash color、reset。這些控制只調整 selected cue；完整編輯器和環境光切換留到未來。</p>
+        </article>
+      </div>
+      <div class="quote">建議 v1 工作流：進入沉浸舞台 -> 對 AI 說話生成 cues -> 切 cue 時用 animation 轉場 -> 用 iPad 微調 selected cue -> AVP 立即預覽變化 -> 得到一句簡短解釋。</div>
+    </section>
+
+    <section id="editing">
+      <div class="section-title"><span>06</span><h2>可控的 AI 語音修改</h2></div>
+      <p class="lead">Vision Pro 裡的語音修改需要同時支援兩種意圖：小範圍修改時像設計工具一樣保留已確認內容；使用者明確要求時，也能重新生成完整舞台方向。</p>
+      <div class="grid three">
+        <article class="tile">
+          <h3>可指定目標</h3>
+          <p>例如後排燈、左側光束、某一段 cue、某個色彩組合或副歌段落。</p>
+        </article>
+        <article class="tile green">
+          <h3>可完整生成</h3>
+          <p>例如「重新生成一個開場」、「用現有設備做演唱會版本」、「把整段結尾改成更戲劇化」。</p>
+        </article>
+        <article class="tile blue">
+          <h3>技術含義</h3>
+          <p>局部修改需要 patch selected cue；完整生成應該建立新版本。cue 之間切換時，用 transition duration 和 easing 做 animation。</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="learning">
+      <div class="section-title"><span>07</span><h2>AI 溝通引導</h2></div>
+      <p class="lead">LumaStage 的教育重點不是獨立教學，而是幫使用者更會跟 AI 溝通。知道燈具名稱、顏色和電門/亮度後，使用者就能更準確地描述想要的舞台燈光。</p>
+      <div class="grid three">
+        <article class="tile blue">
+          <h3>知道燈具名稱</h3>
+          <p>當使用者知道 wash、spot、front light 和 background wash，就能更精準地要求 AI 調整主視覺、補光、氣氛或背景層次。</p>
+        </article>
+        <article class="tile green">
+          <h3>用顏色描述意圖</h3>
+          <p>AI 可以把「更溫暖」、「更冷」、「副歌更亮」轉成色彩與色溫調整，也能解釋夜間環境光為什麼會讓顏色看起來不同。</p>
+        </article>
+        <article class="tile">
+          <h3>用電門控制程度</h3>
+          <p>教學要保留 dimmer / intensity 這類業界詞，但同時用白話解釋成「燈有多亮、推到幾成」。使用者之後就能說「主燈降到 60%」。</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="decisions">
+      <div class="section-title"><span>08</span><h2>目前決策</h2></div>
+      <table class="decision-table">
+        <thead>
+          <tr><th>決策</th><th>原因</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>英文 Markdown 保留為原始筆記</td><td>方便持續整理，也讓 AI 更容易維持穩定結構。</td></tr>
+          <tr><td>比賽主軸採用 AI 舞台燈光設計為主</td><td>核心價值是透過語音與 AI 共同生成、修改與預覽燈光；教育用來幫助使用者更會跟 AI 溝通。</td></tr>
+          <tr><td>AI v1 生成可編輯舞台配置</td><td>比只看預覽更有產品感，但不過早承諾可直接上控台。</td></tr>
+          <tr><td>v1 採用 AVP 懸浮 AI 對話框 + iPad 微調</td><td>語音和 AI 負責生成，iPad 負責少數精準微調，避免第一版變成複雜燈控台。</td></tr>
+          <tr><td>語音是主要輸入方式</td><td>使用者透過說話生成、修改與理解燈光，文字輸入最多作為備援。</td></tr>
+          <tr><td>語音修改同時支援局部修改與完整生成</td><td>小修改要避免誤動已確認內容；大修改則讓使用者能在 Vision Pro 內直接生成新的完整方向。</td></tr>
+          <tr><td>加入輕量 AI 溝通引導</td><td>使用者知道燈具名稱、顏色和電門後，可以更準確地向 AI 描述想要的燈光效果。</td></tr>
+          <tr><td>v1 先聚焦 1:1 室外舞台數位分身</td><td>室外舞台在學生活動中更常見，也比室內場地更容易完整查看，因此更適合作為第一個模擬案例。</td></tr>
+          <tr><td>iPad 微調屬於 Core Experience</td><td>本週要做的是少數 demo 參數的穩定控制，不是完整 iPad 編輯器。</td></tr>
+          <tr><td>初學者先學燈具、顏色、電門</td><td>這些基礎不是獨立課程，而是讓使用者能用更精準的語言跟 AI 溝通。</td></tr>
+          <tr><td>學生場景不假設 LED 螢幕</td><td>學生活動通常不會有 LED 螢幕，因此 v1 demo 應該使用夜間室外舞台、周邊環境光和基礎燈具這類更常見的條件。</td></tr>
+          <tr><td>使用業界語言，但要講到初學者聽得懂</td><td>保留 dimmer / intensity 等專業詞，並搭配「燈有多亮、推到幾成」這類白話解釋，讓使用者能真的拿去和 AI 溝通。</td></tr>
+          <tr><td>使用 OpenAI API 做 MVP AI 生成</td><td>本週先用 OpenAI API 產生結構化燈光配置與簡短解釋，不先自建完整 AI 後端。</td></tr>
+          <tr><td>v1 語音採用真的 speech-to-text</td><td>使用者可以中英混講；系統先保留 transcript，再由 AI 解析成可確認、可套用的燈光指令。</td></tr>
+          <tr><td>STT 失敗時用 typed prompt 備援</td><td>主體仍然是語音優先；demo 當天如果麥克風或轉錄不穩，改用文字 prompt 接續同一條 AI 生成流程。</td></tr>
+          <tr><td>MVP schema 採用 Lighting Look Schema</td><td>第一版描述 cue-based 可見燈光狀態：固定 standardNight ambient、cues、fixture groups、color、intensity、transition 與 explanation，先不做完整燈控工程資料。</td></tr>
+          <tr><td>夜間環境光 MVP 只做 standardNight</td><td>本週不做 darkNight / brightSurroundings 切換，先把 AI 生成燈光與 iPad 燈具微調做穩。</td></tr>
+          <tr><td>Swift model 與 enum 直接對齊 schema</td><td>Swift 型別命名和 enum raw value 直接跟 OpenAI JSON 一致，減少生成、AppModel、iPad 控制與 RealityKit 渲染之間的轉換。</td></tr>
+          <tr><td>iPad 微調控制固定為三項</td><td>第一版只做 front light dimmer、background wash color、reset，足夠展示 AI 生成後的精準微調，不先擴成完整編輯器。</td></tr>
+          <tr><td>燈光 look 改成兩個 cue</td><td>MVP 只做 Opening 和 Highlight；iPad 微調只改 selected cue，兩個 cue 之間透過 transition animation 調整 intensity 與 color。</td></tr>
+          <tr><td>第一批燈具詞彙固定四個</td><td>先用 wash、spot、front light、background wash，足夠讓初學者和 AI 溝通主要舞台光與背景層次。</td></tr>
+          <tr><td>懸浮 AI 對話框固定四個內容</td><td>先顯示 mic state、transcript、AI understood command、explanation，讓語音流程可理解、可確認、可復原。</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="future">
+      <div class="section-title"><span>09</span><h2>本週還可微調，其他放未來</h2></div>
+      <div class="grid">
+        <article class="tile red">
+          <h3>本週還可微調</h3>
+          <ul>
+            <li>視覺風格：可信但簡化，不追求 photorealistic。</li>
+          </ul>
+        </article>
+        <article class="tile green">
+          <h3>未來展望</h3>
+          <ul>
+            <li>完整 iPad 精準編輯器、跨裝置同步與場地資料管理。</li>
+            <li>PAR、moving head、side light、ambient fill 等進階燈具詞彙。</li>
+            <li>darkNight / brightSurroundings 等夜間環境光切換。</li>
+            <li>白天/黃昏室外光、室內場地、窗戶日光、rigging / truss / 承重問題。</li>
+            <li>完整 cue timeline、音樂反應、MIDI / 控制器、多人協作。</li>
+            <li>Realtime API speech-to-speech、專業 previs、燈控台資料匯出與真實場地 AR 對齊模式。</li>
+          </ul>
+        </article>
+      </div>
+      <p class="footer">這個頁面是給人閱讀的視覺化摘要；英文原始筆記仍保留在 <a href="./brainstorming.md">docs/brainstorming.md</a>。</p>
+    </section>
+  </main>
+</body>
+</html>

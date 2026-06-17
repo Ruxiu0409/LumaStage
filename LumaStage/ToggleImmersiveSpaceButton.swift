@@ -2,12 +2,19 @@
 //  ToggleImmersiveSpaceButton.swift
 //  LumaStage
 //
-//  Created by 蔡承曄 on 2026/5/20.
+//  Created by Tsai Cheng-Yeh on 2026/5/20.
 //
 
 import SwiftUI
 
+#if os(visionOS)
 struct ToggleImmersiveSpaceButton: View {
+    enum DisplayStyle {
+        case label
+        case icon
+    }
+
+    var displayStyle: DisplayStyle = .label
 
     @Environment(AppModel.self) private var appModel
 
@@ -49,10 +56,22 @@ struct ToggleImmersiveSpaceButton: View {
                 }
             }
         } label: {
-            Text(appModel.immersiveSpaceState == .open ? "Hide Immersive Space" : "Show Immersive Space")
+            switch displayStyle {
+            case .label:
+                Label(
+                    appModel.immersiveSpaceState == .open ? "Close Stage" : "Open Stage",
+                    systemImage: appModel.immersiveSpaceState == .open ? "rectangle.slash" : "sparkles"
+                )
+            case .icon:
+                Image(systemName: appModel.immersiveSpaceState == .open ? "rectangle.slash" : "sparkles")
+                    .font(.title3.weight(.semibold))
+                    .frame(width: 44, height: 44)
+                    .foregroundStyle(appModel.immersiveSpaceState == .open ? LumaStageDesign.warmAmber : LumaStageDesign.textSecondary)
+            }
         }
         .disabled(appModel.immersiveSpaceState == .inTransition)
         .animation(.none, value: 0)
         .fontWeight(.semibold)
     }
 }
+#endif

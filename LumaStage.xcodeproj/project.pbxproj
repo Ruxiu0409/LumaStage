@@ -12,6 +12,7 @@
 
 /* Begin PBXFileReference section */
 		F7FB77362FBE069900A9C110 /* LumaStage.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LumaStage.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A11100012FCA000000000001 /* LumaStage iPad.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "LumaStage iPad.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		F7FB773A2FBE069900A9C110 /* RealityKitContent */ = {isa = PBXFileReference; lastKnownFileType = wrapper; path = RealityKitContent; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -19,9 +20,18 @@
 		F7FB77462FBE069B00A9C110 /* Exceptions for "LumaStage" folder in "LumaStage" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
+				"Info-iPad.plist",
 				Info.plist,
 			);
 			target = F7FB77352FBE069900A9C110 /* LumaStage */;
+		};
+		A11100022FCA000000000002 /* Exceptions for "LumaStage" folder in "LumaStage iPad" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				"Info-iPad.plist",
+				Info.plist,
+			);
+			target = A11100062FCA000000000006 /* LumaStage iPad */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
@@ -29,6 +39,7 @@
 		F7FB77382FBE069900A9C110 /* LumaStage */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
+				A11100022FCA000000000002 /* Exceptions for "LumaStage" folder in "LumaStage iPad" target */,
 				F7FB77462FBE069B00A9C110 /* Exceptions for "LumaStage" folder in "LumaStage" target */,
 			);
 			path = LumaStage;
@@ -42,6 +53,13 @@
 			buildActionMask = 2147483647;
 			files = (
 				F7FB773C2FBE069900A9C110 /* RealityKitContent in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A11100032FCA000000000003 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -61,6 +79,7 @@
 			isa = PBXGroup;
 			children = (
 				F7FB77362FBE069900A9C110 /* LumaStage.app */,
+				A11100012FCA000000000001 /* LumaStage iPad.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -99,6 +118,28 @@
 			productReference = F7FB77362FBE069900A9C110 /* LumaStage.app */;
 			productType = "com.apple.product-type.application";
 		};
+		A11100062FCA000000000006 /* LumaStage iPad */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A11100072FCA000000000007 /* Build configuration list for PBXNativeTarget "LumaStage iPad" */;
+			buildPhases = (
+				A11100052FCA000000000005 /* Sources */,
+				A11100032FCA000000000003 /* Frameworks */,
+				A11100042FCA000000000004 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				F7FB77382FBE069900A9C110 /* LumaStage */,
+			);
+			name = "LumaStage iPad";
+			packageProductDependencies = (
+			);
+			productName = "LumaStage iPad";
+			productReference = A11100012FCA000000000001 /* LumaStage iPad.app */;
+			productType = "com.apple.product-type.application";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -109,6 +150,9 @@
 				LastSwiftUpdateCheck = 2640;
 				LastUpgradeCheck = 2640;
 				TargetAttributes = {
+					A11100062FCA000000000006 = {
+						CreatedOnToolsVersion = 26.4;
+					};
 					F7FB77352FBE069900A9C110 = {
 						CreatedOnToolsVersion = 26.4;
 					};
@@ -123,18 +167,29 @@
 			);
 			mainGroup = F7FB772D2FBE069900A9C110;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				F7FB773D2FBE069900A9C110 /* XCLocalSwiftPackageReference "Packages/RealityKitContent" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = F7FB77372FBE069900A9C110 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
 				F7FB77352FBE069900A9C110 /* LumaStage */,
+				A11100062FCA000000000006 /* LumaStage iPad */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		F7FB77342FBE069900A9C110 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A11100042FCA000000000004 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -151,9 +206,76 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A11100052FCA000000000005 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
+		A11100082FCA000000000008 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 3WMZ8937S4;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "LumaStage/Info-iPad.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ruxiu0409.LumaStage.iPad;
+				PRODUCT_NAME = "LumaStage iPad";
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 2;
+			};
+			name = Debug;
+		};
+		A11100092FCA000000000009 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 3WMZ8937S4;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "LumaStage/Info-iPad.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ruxiu0409.LumaStage.iPad;
+				PRODUCT_NAME = "LumaStage iPad";
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 2;
+			};
+			name = Release;
+		};
 		F7FB77482FBE069B00A9C110 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -272,7 +394,7 @@
 				SDKROOT = xros;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
-				XROS_DEPLOYMENT_TARGET = 26.4;
+				XROS_DEPLOYMENT_TARGET = 27.0;
 			};
 			name = Debug;
 		};
@@ -329,13 +451,22 @@
 				SDKROOT = xros;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				VALIDATE_PRODUCT = YES;
-				XROS_DEPLOYMENT_TARGET = 26.4;
+				XROS_DEPLOYMENT_TARGET = 27.0;
 			};
 			name = Release;
 		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		A11100072FCA000000000007 /* Build configuration list for PBXNativeTarget "LumaStage iPad" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A11100082FCA000000000008 /* Debug */,
+				A11100092FCA000000000009 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		F7FB77312FBE069900A9C110 /* Build configuration list for PBXProject "LumaStage" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -356,9 +487,17 @@
 		};
 /* End XCConfigurationList section */
 
+/* Begin XCLocalSwiftPackageReference section */
+		F7FB773D2FBE069900A9C110 /* XCLocalSwiftPackageReference "Packages/RealityKitContent" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/RealityKitContent;
+		};
+/* End XCLocalSwiftPackageReference section */
+
 /* Begin XCSwiftPackageProductDependency section */
 		F7FB773B2FBE069900A9C110 /* RealityKitContent */ = {
 			isa = XCSwiftPackageProductDependency;
+			package = F7FB773D2FBE069900A9C110 /* XCLocalSwiftPackageReference "Packages/RealityKitContent" */;
 			productName = RealityKitContent;
 		};
 /* End XCSwiftPackageProductDependency section */
