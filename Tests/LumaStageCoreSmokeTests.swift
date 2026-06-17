@@ -88,6 +88,18 @@ struct LumaStageCoreSmokeTests {
                "Below-range beam spread must clamp to the minimum cone")
         expect(SpotLightRenderMath.coneAngles(beamAngleDegrees: 200).outer == wide.outer,
                "Above-range beam spread must clamp to the maximum cone")
+
+        // Shadow light size: bounded 0.04...0.40 m, widening with the beam, clamped at the ends.
+        expect(abs(SpotLightRenderMath.shadowLightSize(beamAngleDegrees: 5) - 0.04) < 0.0001,
+               "Minimum beam spread must map to the smallest (hardest) shadow light size")
+        expect(abs(SpotLightRenderMath.shadowLightSize(beamAngleDegrees: 120) - 0.40) < 0.0001,
+               "Maximum beam spread must map to the largest (softest) shadow light size")
+        expect(SpotLightRenderMath.shadowLightSize(beamAngleDegrees: 80) > SpotLightRenderMath.shadowLightSize(beamAngleDegrees: 30),
+               "Wider beam spread must soften the shadow (larger light size)")
+        expect(SpotLightRenderMath.shadowLightSize(beamAngleDegrees: 0) == SpotLightRenderMath.shadowLightSize(beamAngleDegrees: 5),
+               "Below-range beam spread must clamp to the smallest shadow light size")
+        expect(SpotLightRenderMath.shadowLightSize(beamAngleDegrees: 300) == SpotLightRenderMath.shadowLightSize(beamAngleDegrees: 120),
+               "Above-range beam spread must clamp to the largest shadow light size")
     }
 
     private static func newProjectFactoryCreatesValidProject() throws {

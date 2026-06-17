@@ -743,6 +743,15 @@ enum SpotLightRenderMath {
         let inner = outer * 0.7
         return (inner: inner, outer: outer)
     }
+
+    /// Maps a fixture's beam spread (5...120°) to a `SpotLightComponent.Shadow` light-source size
+    /// in meters: a wider beam reads with a larger apparent source and therefore a softer, wider
+    /// shadow penumbra. The 0.04...0.40 m range is tuned to stay subtle on the 0.46-scaled stage;
+    /// it pairs with shadow quality ≥ medium so the soft edge actually renders.
+    static func shadowLightSize(beamAngleDegrees: Double) -> Double {
+        let beam = min(max(beamAngleDegrees, 5), 120)
+        return 0.04 + (beam - 5) / 115 * 0.36
+    }
 }
 
 enum ValidationError: Error, Equatable, LocalizedError {

@@ -147,6 +147,7 @@ struct ImmersiveView: View {
             intensity: 1.0,
             position: scenePoint(object.position)
         )
+        markShadowCaster(body)
         root.addChild(body)
 
         let topY = object.position.y + size.height / 2
@@ -185,6 +186,7 @@ struct ImmersiveView: View {
             )
             legEntity.name = "stage_leg_\(object.id)_\(index)"
             legEntity.position = scenePoint(leg)
+            markShadowCaster(legEntity)
             root.addChild(legEntity)
         }
 
@@ -217,6 +219,7 @@ struct ImmersiveView: View {
         entity.name = "truss_member_\(index)"
         entity.position = (start + end) / 2
         entity.orientation = orientation(from: SIMD3<Float>(0, 1, 0), to: direction / length)
+        markShadowCaster(entity)
         return entity
     }
 
@@ -234,6 +237,7 @@ struct ImmersiveView: View {
         entity.orientation = simd_quatf(angle: .pi / 10, axis: SIMD3<Float>(0, 1, 0))
         entity.model?.materials = [material(hex: "#C9CBC8", intensity: 0.95, isMetallic: true)]
         addConnectorBolts(to: entity, blockSize: size)
+        markShadowCaster(entity)
         return entity
     }
 
@@ -351,11 +355,13 @@ struct ImmersiveView: View {
         let basePosition = scenePoint(position)
         let yoke = box(name: "\(name)_yoke", width: 0.16, height: 0.08, depth: 0.08, hex: "#161A20", intensity: 0.85, position: basePosition)
         yoke.model?.materials = [material(hex: color, intensity: 0.82, isMetallic: true)]
+        markShadowCaster(yoke)
         root.addChild(yoke)
 
         let head = box(name: "\(name)_head", width: 0.13, height: 0.10, depth: 0.16, hex: "#20242C", intensity: 0.9, position: basePosition + SIMD3<Float>(0, -0.075, 0.035))
         head.orientation = simd_quatf(angle: -.pi / 10, axis: SIMD3<Float>(1, 0, 0))
         head.model?.materials = [material(hex: color, intensity: 0.9, isMetallic: true)]
+        markShadowCaster(head)
         root.addChild(head)
 
         let lens = box(name: "\(name)_lens", width: 0.07, height: 0.038, depth: 0.012, hex: lensColor, intensity: 0.75, alpha: 0.92, position: basePosition + SIMD3<Float>(0, -0.09, 0.122))
@@ -422,6 +428,14 @@ struct ImmersiveView: View {
             spot.light.innerAngleInDegrees = Float(cone.inner)
             spot.light.outerAngleInDegrees = Float(cone.outer)
         }
+
+        // Soft shadow: widen the penumbra with the beam, keyed brighter for the front key light.
+        // Shadow isn't an _ImplicitlyAnimatableBuiltinComponent, so this is set outside the
+        // animation (beam width rarely changes between cues anyway).
+        var shadow = spot.shadow ?? SpotLightComponent.Shadow()
+        shadow.lightSize = Float(SpotLightRenderMath.shadowLightSize(beamAngleDegrees: beamAngleDegrees))
+        shadow.quality = role == .frontLight ? .high : .medium
+        spot.shadow = shadow
 
         // Digital gobo: project a pattern through the cone, or remove it for a plain beam.
         // Set/removed outside the withAnimation above on purpose — ProjectiveTexture conforms only
@@ -553,6 +567,14 @@ struct ImmersiveView: View {
         }
 
         return simd_quatf(angle: acos(dot), axis: simd_normalize(simd_cross(from, to)))
+    }
+
+    /// Opts a mesh into casting real shadows from the dynamic spotlights. RealityKit renders
+    /// dynamic-light shadows only for entities carrying a `DynamicLightShadowComponent`; without it
+    /// the `SpotLightComponent.Shadow` settings are inert. Lit surfaces receive shadows automatically,
+    /// so only casters (structure that should block the beam) need this.
+    private static func markShadowCaster(_ entity: Entity) {
+        entity.components.set(DynamicLightShadowComponent(castsShadow: true))
     }
 
     private static func box(
