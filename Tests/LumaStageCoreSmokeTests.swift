@@ -19,7 +19,7 @@ struct LumaStageCoreSmokeTests {
         stageBuilderToolbarHidesZoomStepper()
         stageBuilderToolbarHidesLayoutSummaryChips()
         stageBuilderViewportUsesProjectedGroundPlane()
-        ipadPanelsAdoptNativeIOS26Styling()
+        nativeGlassDesignUsesSystemRadiusHierarchy()
         stageBuilderRendersBackTrussBehindStageBase()
         visionStageUsesIPadStageLayoutGeometry()
         stageBuilderSelectionPolicyClearsWhenViewportTapMissesObject()
@@ -233,9 +233,12 @@ struct LumaStageCoreSmokeTests {
         expect(lines.contains(where: \.isMajor), "Ground plane should include stronger major reference lines")
     }
 
-    private static func ipadPanelsAdoptNativeIOS26Styling() {
-        expect(LumaStageDesign.adoptsIOS26NativePanelStyle, "iPad panels should use the native iOS 26 visual language instead of heavy custom gray panels")
-        expect(LumaStageDesign.surfaceRadius > LumaStageDesign.cornerRadius, "Top-level glass panels should use a softer system-style radius than small repeated cards")
+    private static func nativeGlassDesignUsesSystemRadiusHierarchy() {
+        // The visionOS-native glass language layers three radii: floating panels (largest),
+        // nested glass surfaces, then small repeated cards. Keep that hierarchy intact so
+        // glass-on-glass reads cleanly instead of using one flat custom radius everywhere.
+        expect(LumaStageDesign.panelRadius > LumaStageDesign.surfaceRadius, "Floating glass panels should use a larger system-style radius than nested surfaces")
+        expect(LumaStageDesign.surfaceRadius > LumaStageDesign.cornerRadius, "Nested glass surfaces should use a softer radius than small repeated cards")
     }
 
     private static func stageBuilderRendersBackTrussBehindStageBase() {

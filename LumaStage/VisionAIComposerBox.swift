@@ -5,84 +5,104 @@ struct VisionAIComposerBox: View {
     @Environment(AppModel.self) private var appModel
     @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
 
-    private let composerCornerRadius: CGFloat = 28
-
     var body: some View {
         @Bindable var appModel = appModel
 
-        VStack(alignment: .leading, spacing: 14) {
-            promptComposer(text: $appModel.typedPrompt)
+        VStack(alignment: .leading, spacing: 18) {
+            inputField(text: $appModel.typedPrompt)
+            statusRow
+            controlRow
             contextRow
         }
-        .padding(16)
-        .background(
-            LumaStageDesign.nightBlack.opacity(0.74),
-            in: RoundedRectangle(cornerRadius: 30)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 30)
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
-        }
-        .shadow(color: .black.opacity(0.34), radius: 30, y: 18)
-        .foregroundStyle(LumaStageDesign.textPrimary)
+        .padding(24)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .lumaFloatingPanel()
     }
 
-    private func promptComposer(text: Binding<String>) -> some View {
-        VStack(alignment: .leading, spacing: 22) {
-            TextField("Ask anything", text: text, axis: .vertical)
-                .textFieldStyle(.plain)
-                .font(.system(size: 25, weight: .semibold, design: .rounded))
-                .foregroundStyle(LumaStageDesign.textPrimary)
-                .lineLimit(2...4)
-                .submitLabel(.send)
-                .onSubmit(sendPrompt)
+    private func inputField(text: Binding<String>) -> some View {
+        TextField("Ask anything", text: text, axis: .vertical)
+            .textFieldStyle(.plain)
+            .font(.system(size: 26, weight: .semibold, design: .rounded))
+            .foregroundStyle(LumaStageDesign.textPrimary)
+            .lineLimit(2...4)
+            .submitLabel(.send)
+            .onSubmit(sendPrompt)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 16)
+            .lumaNativeGlass(radius: 22)
+    }
 
-            HStack(spacing: 14) {
-                iconButton(systemImage: "folder", tint: LumaStageDesign.textSecondary) {
-                    returnToProjects()
-                }
-                .help("Back to Projects")
-
-                HStack(spacing: 8) {
-                    Image(systemName: "shield.lefthalf.filled")
-                    Text(stateLabel)
-                    Image(systemName: "chevron.down")
-                        .font(.caption.weight(.semibold))
-                }
-                .font(.callout.weight(.semibold))
-                .foregroundStyle(stateTint)
-
-                if let projectName = appModel.selectedProject?.name {
-                    LumaStatusChip(title: projectName, tint: LumaStageDesign.coolBlue)
-                }
-                LumaStatusChip(title: appModel.selectedCue?.localizedDisplayName ?? "Opening", tint: LumaStageDesign.warmAmber)
-                LumaStatusChip(title: "Standard Night", tint: LumaStageDesign.softGreen)
-
-                Spacer()
-
-                iconButton(
-                    systemImage: appModel.stageImmersionMode == .roomSpill ? "sun.max.fill" : "sun.max",
-                    tint: appModel.stageImmersionMode == .roomSpill ? LumaStageDesign.warmAmber : LumaStageDesign.textSecondary
-                ) {
-                    appModel.toggleStageImmersion()
-                }
-                .help(appModel.stageImmersionMode == .roomSpill ? "Stop spilling light onto your room" : "Spill stage light onto your room")
-
-                ToggleImmersiveSpaceButton(displayStyle: .icon)
-                    .buttonStyle(.plain)
-                    .help("Open or close the immersive stage")
-
-                micButton
-                sendButton
+    private var statusRow: some View {
+        HStack(spacing: 10) {
+            HStack(spacing: 7) {
+                Image(systemName: stateIcon)
+                Text(stateLabel)
             }
+            .font(.callout.weight(.semibold))
+            .foregroundStyle(stateTint)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .lumaNativeGlass(tint: stateTint.opacity(0.18), radius: 14)
+
+            if let projectName = appModel.selectedProject?.name {
+                LumaStatusChip(title: projectName, tint: LumaStageDesign.coolBlue)
+            }
+            LumaStatusChip(title: appModel.selectedCue?.localizedDisplayName ?? "Opening", tint: LumaStageDesign.warmAmber)
+            LumaStatusChip(title: "Standard Night", tint: LumaStageDesign.softGreen)
+
+            Spacer()
         }
-        .padding(.horizontal, 22)
-        .padding(.top, 24)
-        .padding(.bottom, 18)
-        .background(
-            LumaStageDesign.graphiteElevated.opacity(0.92),
-            in: RoundedRectangle(cornerRadius: composerCornerRadius)
-        )
+    }
+
+    private var controlRow: some View {
+        HStack(spacing: 12) {
+            Button("Back to Projects", systemImage: "folder", action: returnToProjects)
+                .labelStyle(.iconOnly)
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.circle)
+
+            Spacer()
+
+            Button(spillTitle, systemImage: appModel.stageImmersionMode == .roomSpill ? "sun.max.fill" : "sun.max") {
+                appModel.toggleStageImmersion()
+            }
+            .labelStyle(.iconOnly)
+            .buttonStyle(.bordered)
+            .buttonBorderShape(.circle)
+            .tint(appModel.stageImmersionMode == .roomSpill ? LumaStageDesign.warmAmber : nil)
+
+            ToggleImmersiveSpaceButton(displayStyle: .icon)
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.circle)
+                .help("Open or close the immersive stage")
+
+            micButton
+
+            sendButton
+        }
+    }
+
+    private var micButton: some View {
+        Button(
+            appModel.speechTranscriber.isRecording ? "Stop Listening" : "Start Voice Input",
+            systemImage: appModel.speechTranscriber.isRecording ? "stop.fill" : "mic"
+        ) {
+            Task { await appModel.toggleSpeechInput() }
+        }
+        .labelStyle(.iconOnly)
+        .buttonStyle(.bordered)
+        .buttonBorderShape(.circle)
+        .tint(appModel.speechTranscriber.isRecording ? .red : nil)
+        .disabled(!appModel.isModelAvailable)
+    }
+
+    private var sendButton: some View {
+        Button("Generate Lighting", systemImage: "arrow.up", action: sendPrompt)
+            .labelStyle(.iconOnly)
+            .font(.title3.weight(.bold))
+            .buttonStyle(.borderedProminent)
+            .buttonBorderShape(.circle)
+            .disabled(!canSendPrompt)
     }
 
     private var contextRow: some View {
@@ -100,7 +120,7 @@ struct VisionAIComposerBox: View {
             if let lastError = appModel.lastError {
                 Text(lastError)
                     .font(.caption.weight(.medium))
-                    .foregroundStyle(.red.opacity(0.9))
+                    .foregroundStyle(.red)
                     .lineLimit(1)
             } else {
                 Text(appModel.generationStatus)
@@ -110,51 +130,7 @@ struct VisionAIComposerBox: View {
             }
         }
         .foregroundStyle(LumaStageDesign.textSecondary)
-        .padding(.horizontal, 16)
-        .padding(.bottom, 2)
-    }
-
-    private var micButton: some View {
-        Button {
-            Task {
-                await appModel.toggleSpeechInput()
-            }
-        } label: {
-            Image(systemName: appModel.speechTranscriber.isRecording ? "stop.fill" : "mic")
-                .font(.title3.weight(.semibold))
-                .frame(width: 44, height: 44)
-                .foregroundStyle(appModel.speechTranscriber.isRecording ? .red : LumaStageDesign.textSecondary)
-        }
-        .buttonStyle(.plain)
-        .disabled(!appModel.isModelAvailable)
-        .help(appModel.speechTranscriber.isRecording ? "Stop Listening" : "Start Voice Input")
-    }
-
-    private var sendButton: some View {
-        Button(action: sendPrompt) {
-            Image(systemName: "arrow.up")
-                .font(.title3.weight(.bold))
-                .frame(width: 48, height: 48)
-                .foregroundStyle(LumaStageDesign.nightBlack)
-                .background(Color.white.opacity(canSendPrompt ? 0.84 : 0.32), in: Circle())
-        }
-        .buttonStyle(.plain)
-        .disabled(!canSendPrompt)
-        .help("Generate Lighting")
-    }
-
-    private func iconButton(
-        systemImage: String,
-        tint: Color,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.title3.weight(.medium))
-                .frame(width: 36, height: 36)
-                .foregroundStyle(tint)
-        }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 4)
     }
 
     private var contextText: String {
@@ -179,10 +155,16 @@ struct VisionAIComposerBox: View {
             && !appModel.typedPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    private var spillTitle: String {
+        appModel.stageImmersionMode == .roomSpill
+            ? "Stop spilling light onto your room"
+            : "Spill stage light onto your room"
+    }
+
     private var stateTint: Color {
         switch appModel.conversationState {
         case .idle:
-            return Color(red: 0.54, green: 0.76, blue: 1.0)
+            return LumaStageDesign.coolBlue
         case .listening, .transcribing:
             return LumaStageDesign.warmAmber
         case .interpreting, .applying:
@@ -191,6 +173,25 @@ struct VisionAIComposerBox: View {
             return LumaStageDesign.softGreen
         case .error:
             return .red
+        }
+    }
+
+    private var stateIcon: String {
+        switch appModel.conversationState {
+        case .idle:
+            return "wand.and.stars"
+        case .listening:
+            return "waveform"
+        case .transcribing:
+            return "text.bubble"
+        case .interpreting:
+            return "brain"
+        case .applying:
+            return "lightbulb.max"
+        case .explaining:
+            return "checkmark.seal"
+        case .error:
+            return "exclamationmark.triangle"
         }
     }
 

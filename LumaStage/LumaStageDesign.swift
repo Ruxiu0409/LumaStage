@@ -1,129 +1,100 @@
 import SwiftUI
 
 enum LumaStageDesign {
-    static let cornerRadius: CGFloat = 8
-    static let surfaceRadius: CGFloat = 18
-    static let panelPadding: CGFloat = 18
-    static let sectionSpacing: CGFloat = 14
+    static let cornerRadius: CGFloat = 16
+    static let surfaceRadius: CGFloat = 20
+    static let panelRadius: CGFloat = 32
+    static let panelPadding: CGFloat = 20
+    static let sectionSpacing: CGFloat = 16
 
-    static let nightBlack = Color(red: 0.025, green: 0.027, blue: 0.033)
-    static let graphite = Color(red: 0.105, green: 0.112, blue: 0.126)
-    static let graphiteElevated = Color(red: 0.145, green: 0.153, blue: 0.170)
+    // Brand accent tints. Used sparingly *over* the native system glass — never as opaque fills.
     static let coolBlue = Color(red: 0.275, green: 0.595, blue: 0.950)
     static let deepBlue = Color(red: 0.095, green: 0.205, blue: 0.660)
     static let warmAmber = Color(red: 1.000, green: 0.610, blue: 0.275)
     static let softGreen = Color(red: 0.410, green: 0.680, blue: 0.520)
     static let magenta = Color(red: 0.740, green: 0.315, blue: 0.900)
-    static let textPrimary = Color.white.opacity(0.94)
-    static let textSecondary = Color.white.opacity(0.62)
-    static let hairline = Color.white.opacity(0.12)
-    static let adoptsIOS26NativePanelStyle = true
 
-    static var usesNativeLiquidGlassSurfaces: Bool {
-#if os(iOS)
-        if #available(iOS 26.0, *) {
-            return true
-        }
+    // Dark tokens retained only for self-contained preview art (SceneKit fixtures, the project
+    // template thumbnails) that paints its own surfaces — not for chrome.
+    static let nightBlack = Color(red: 0.025, green: 0.027, blue: 0.033)
+    static let graphite = Color(red: 0.105, green: 0.112, blue: 0.126)
+    static let graphiteElevated = Color(red: 0.145, green: 0.153, blue: 0.170)
+
+    // Semantic text colors so vibrancy adapts to the native glass automatically, instead of
+    // hardcoded white opacities that fight the system material.
+    static let textPrimary = Color.primary
+    static let textSecondary = Color.secondary
+    static let hairline = Color.primary.opacity(0.08)
+}
+
+extension View {
+    /// The canonical floating-panel material for top-level visionOS surfaces (the AI composer,
+    /// the project picker). Uses the system glass backing — which supplies its own specular edge,
+    /// depth, and shadow — so callers must *not* add manual fills, strokes, or drop shadows.
+    @ViewBuilder
+    func lumaFloatingPanel(cornerRadius: CGFloat = LumaStageDesign.panelRadius) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+#if os(visionOS)
+        self.glassBackgroundEffect(in: shape)
+#else
+        self
+            .background(.ultraThinMaterial, in: shape)
+            .background(LumaStageDesign.graphite.opacity(0.42), in: shape)
 #endif
-        return false
+    }
+
+    /// A nested vibrant surface that layers *on top* of a floating panel — chips, inline sections,
+    /// template rows. Uses the system material (not the unified `glassEffect`, which is unavailable
+    /// on visionOS) so glass-on-glass reads cleanly with one frosted layer plus an optional tint.
+    @ViewBuilder
+    func lumaNativeGlass(
+        tint: Color = .clear,
+        radius: CGFloat = LumaStageDesign.surfaceRadius,
+        interactive: Bool = false,
+        fallbackOpacity: Double = 0.42
+    ) -> some View {
+        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+#if os(visionOS)
+        self
+            .background(tint, in: shape)
+            .background(.regularMaterial, in: shape)
+#else
+        self
+            .background(.ultraThinMaterial, in: shape)
+            .background(LumaStageDesign.graphite.opacity(fallbackOpacity), in: shape)
+#endif
+    }
+
+    /// Native button styling. `.bordered` / `.borderedProminent` already render as Liquid Glass
+    /// capsules on visionOS, so callers get the system look; pair with `.tint(_:)` for accents.
+    @ViewBuilder
+    func lumaGlassButton(prominent: Bool = false, tint: Color? = nil) -> some View {
+        if prominent {
+            self.buttonStyle(.borderedProminent)
+        } else {
+            self.buttonStyle(.bordered)
+        }
     }
 }
 
+/// A nested glass capsule used for top-level floating panels' inner content blocks.
 struct LumaPanel: ViewModifier {
     var padding: CGFloat = LumaStageDesign.panelPadding
-    var tint: Color = LumaStageDesign.nightBlack.opacity(0.22)
-    var interactive = false
+    var cornerRadius: CGFloat = LumaStageDesign.panelRadius
 
     func body(content: Content) -> some View {
-        let shape = RoundedRectangle(cornerRadius: LumaStageDesign.surfaceRadius, style: .continuous)
-
-        return content
+        content
             .padding(padding)
-            .lumaNativeGlass(
-                tint: tint,
-                radius: LumaStageDesign.surfaceRadius,
-                interactive: interactive,
-                fallbackOpacity: 0.42
-            )
-            .overlay {
-                shape
-                    .strokeBorder(
-                        LinearGradient(
-                            colors: [
-                                Color.white.opacity(0.24),
-                                Color.white.opacity(0.07)
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        ),
-                        lineWidth: 1
-                    )
-            }
-            .shadow(color: Color.black.opacity(0.16), radius: 18, x: 0, y: 10)
+            .lumaFloatingPanel(cornerRadius: cornerRadius)
     }
 }
 
 extension View {
     func lumaPanel(
         padding: CGFloat = LumaStageDesign.panelPadding,
-        tint: Color = LumaStageDesign.nightBlack.opacity(0.22),
-        interactive: Bool = false
+        cornerRadius: CGFloat = LumaStageDesign.panelRadius
     ) -> some View {
-        modifier(LumaPanel(padding: padding, tint: tint, interactive: interactive))
-    }
-
-    @ViewBuilder
-    func lumaNativeGlass(
-        tint: Color = .white.opacity(0.04),
-        radius: CGFloat = LumaStageDesign.surfaceRadius,
-        interactive: Bool = false,
-        fallbackOpacity: Double = 0.42
-    ) -> some View {
-#if os(iOS)
-        if #available(iOS 26.0, *) {
-            self
-                .background(Color.white.opacity(0.001), in: RoundedRectangle(cornerRadius: radius, style: .continuous))
-                .glassEffect(
-                    .regular.tint(tint).interactive(interactive),
-                    in: RoundedRectangle(cornerRadius: radius, style: .continuous)
-                )
-        } else {
-            self
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
-                .background(LumaStageDesign.graphite.opacity(fallbackOpacity), in: RoundedRectangle(cornerRadius: radius, style: .continuous))
-        }
-#else
-        self
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
-            .background(LumaStageDesign.graphite.opacity(fallbackOpacity), in: RoundedRectangle(cornerRadius: radius, style: .continuous))
-#endif
-    }
-
-    @ViewBuilder
-    func lumaGlassButton(prominent: Bool = false, tint: Color? = nil) -> some View {
-#if os(iOS)
-        if #available(iOS 26.0, *) {
-            if prominent {
-                self.buttonStyle(.glassProminent)
-            } else if let tint {
-                self.buttonStyle(.glass(.regular.tint(tint).interactive(true)))
-            } else {
-                self.buttonStyle(.glass)
-            }
-        } else {
-            if prominent {
-                self.buttonStyle(.borderedProminent)
-            } else {
-                self.buttonStyle(.bordered)
-            }
-        }
-#else
-        if prominent {
-            self.buttonStyle(.borderedProminent)
-        } else {
-            self.buttonStyle(.bordered)
-        }
-#endif
+        modifier(LumaPanel(padding: padding, cornerRadius: cornerRadius))
     }
 }
 
@@ -175,13 +146,9 @@ struct LumaStatusChip: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
         }
-        .padding(.horizontal, 9)
-        .padding(.vertical, 6)
-        .lumaNativeGlass(tint: tint.opacity(0.18), radius: 14, interactive: false, fallbackOpacity: 0.24)
-        .overlay {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(tint.opacity(0.35), lineWidth: 1)
-        }
+        .padding(.horizontal, 11)
+        .padding(.vertical, 7)
+        .lumaNativeGlass(tint: tint.opacity(0.22), radius: 14, fallbackOpacity: 0.24)
     }
 }
 
@@ -219,11 +186,7 @@ struct LumaControlSection<Content: View>: View {
             LumaSectionHeader(title: title, subtitle: subtitle, systemImage: systemImage)
             content
         }
-        .padding(14)
-        .lumaNativeGlass(tint: .white.opacity(0.03), radius: 14, interactive: false, fallbackOpacity: 0.34)
-        .overlay {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(LumaStageDesign.hairline, lineWidth: 1)
-        }
+        .padding(16)
+        .lumaNativeGlass(radius: LumaStageDesign.surfaceRadius, fallbackOpacity: 0.34)
     }
 }

@@ -11,16 +11,9 @@ struct ProjectSelectionView: View {
             projectList
             footer
         }
-        .padding(22)
-        .background(
-            LumaStageDesign.nightBlack.opacity(0.78),
-            in: RoundedRectangle(cornerRadius: 22)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 22)
-                .stroke(LumaStageDesign.hairline, lineWidth: 1)
-        }
-        .shadow(color: .black.opacity(0.3), radius: 26, y: 16)
+        .padding(28)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .lumaFloatingPanel()
         .foregroundStyle(LumaStageDesign.textPrimary)
         .sheet(isPresented: $showsFixtureIntro) {
             LightingFixtureIntroView()
@@ -45,13 +38,11 @@ struct ProjectSelectionView: View {
 
             Spacer()
 
-            Button {
+            Button("New Project", systemImage: "plus") {
                 showsProjectTemplatePicker = true
-            } label: {
-                Label("New", systemImage: "plus")
-                    .font(.callout.weight(.semibold))
             }
-            .buttonStyle(.borderedProminent)
+            .font(.callout.weight(.semibold))
+            .lumaGlassButton(prominent: true)
             .tint(LumaStageDesign.coolBlue)
         }
     }
@@ -79,14 +70,7 @@ struct ProjectSelectionView: View {
                 }
             }
         }
-        .background(
-            LumaStageDesign.graphiteElevated.opacity(0.62),
-            in: RoundedRectangle(cornerRadius: LumaStageDesign.cornerRadius)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: LumaStageDesign.cornerRadius)
-                .stroke(LumaStageDesign.hairline, lineWidth: 1)
-        }
+        .lumaNativeGlass(radius: LumaStageDesign.cornerRadius, fallbackOpacity: 0.34)
     }
 
     private var footer: some View {
@@ -99,13 +83,12 @@ struct ProjectSelectionView: View {
 
             Spacer()
 
-            Button {
+            Button("Fixture Guide", systemImage: "lightbulb.2") {
                 showsFixtureIntro = true
-            } label: {
-                Label("Fixture Guide", systemImage: "lightbulb.2")
-                    .font(.caption.weight(.semibold))
             }
-            .lumaGlassButton(tint: LumaStageDesign.warmAmber.opacity(0.28))
+            .font(.caption.weight(.semibold))
+            .lumaGlassButton()
+            .tint(LumaStageDesign.warmAmber)
 
             LumaStatusChip(title: "Standard Night", tint: LumaStageDesign.softGreen)
         }
@@ -134,7 +117,6 @@ private struct ProjectTemplateSelectionView: View {
                 }
                 .padding(22)
             }
-            .background(LumaStageDesign.nightBlack.ignoresSafeArea())
             .foregroundStyle(LumaStageDesign.textPrimary)
             .navigationTitle("Choose Scenario")
             .navigationBarTitleDisplayMode(.inline)
@@ -159,11 +141,7 @@ private struct ProjectTemplateSelectionView: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(18)
-        .lumaNativeGlass(tint: LumaStageDesign.coolBlue.opacity(0.10), radius: LumaStageDesign.surfaceRadius, fallbackOpacity: 0.34)
-        .overlay {
-            RoundedRectangle(cornerRadius: LumaStageDesign.surfaceRadius, style: .continuous)
-                .stroke(LumaStageDesign.hairline, lineWidth: 1)
-        }
+        .lumaNativeGlass(tint: LumaStageDesign.coolBlue.opacity(0.12), radius: LumaStageDesign.surfaceRadius, fallbackOpacity: 0.34)
     }
 }
 
@@ -223,11 +201,7 @@ private struct ProjectTemplateRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .lumaNativeGlass(tint: .white.opacity(0.035), radius: LumaStageDesign.cornerRadius, interactive: false, fallbackOpacity: 0.32)
-        .overlay {
-            RoundedRectangle(cornerRadius: LumaStageDesign.cornerRadius, style: .continuous)
-                .stroke(LumaStageDesign.hairline, lineWidth: 1)
-        }
+        .lumaNativeGlass(radius: LumaStageDesign.cornerRadius, interactive: true, fallbackOpacity: 0.32)
     }
 }
 
@@ -489,18 +463,15 @@ private struct EmptyProjectsState: View {
             }
 
             HStack(spacing: 12) {
-                Button(action: introAction) {
-                    Label("Learn Fixtures First", systemImage: "lightbulb.2")
-                        .font(.callout.weight(.semibold))
-                }
-                .lumaGlassButton(tint: LumaStageDesign.warmAmber.opacity(0.30))
+                Button("Learn Fixtures First", systemImage: "lightbulb.2", action: introAction)
+                    .font(.callout.weight(.semibold))
+                    .lumaGlassButton()
+                    .tint(LumaStageDesign.warmAmber)
 
-                Button(action: createAction) {
-                    Label("Create Project", systemImage: "plus")
-                        .font(.callout.weight(.semibold))
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(LumaStageDesign.coolBlue)
+                Button("Create Project", systemImage: "plus", action: createAction)
+                    .font(.callout.weight(.semibold))
+                    .lumaGlassButton(prominent: true)
+                    .tint(LumaStageDesign.coolBlue)
             }
             .padding(.top, 4)
         }

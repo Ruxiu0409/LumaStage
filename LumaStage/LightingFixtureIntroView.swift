@@ -30,7 +30,6 @@ struct LightingFixtureIntroView: View {
                 }
                 .padding(22)
             }
-            .background(LumaStageDesign.nightBlack.ignoresSafeArea())
             .foregroundStyle(LumaStageDesign.textPrimary)
             .navigationTitle("Fixture Guide")
             .navigationBarTitleDisplayMode(.inline)
