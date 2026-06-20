@@ -11,8 +11,14 @@ import FoundationModels
 struct FoundationModelsLightingService: LightingLookGenerating {
     private let model: SystemLanguageModel
 
-    init(model: SystemLanguageModel = .default) {
-        self.model = model
+    init(model: SystemLanguageModel? = nil) {
+        // Use the permissive content-transformation guardrails instead of `.default`.
+        // LumaStage only ever turns a benign lighting request into a lighting look, but the
+        // default guardrails run a sensitive-content analysis pass that false-positives on
+        // harmless prompts like "add a blue light" — and in the Simulator that pass fails
+        // outright as `com.apple.SensitiveContentAnalysisML error 15`. Permissive mode is the
+        // intended setting for this kind of user-content transformation and skips that check.
+        self.model = model ?? SystemLanguageModel(guardrails: .permissiveContentTransformations)
     }
 
     var availability: LightingModelAvailability {
@@ -110,6 +116,11 @@ struct FoundationModelsLightingService: LightingLookGenerating {
             }
         case let validationError as ValidationError:
             return validationError.errorDescription ?? "The generated lighting look was invalid."
+        case let nsError as NSError where nsError.domain == "com.apple.SensitiveContentAnalysisML":
+            // The on-device sensitive-content guardrail couldn't run. With permissive guardrails
+            // this should not normally surface; when it does it's an environment limitation
+            // (e.g. the analysis assets aren't provisioned in the Simulator).
+            return "The on-device safety check couldn't run here. Try on a Vision Pro with Apple Intelligence enabled."
         default:
             return error.localizedDescription
         }
