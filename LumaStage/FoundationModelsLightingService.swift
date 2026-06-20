@@ -24,6 +24,12 @@ struct FoundationModelsLightingService: LightingLookGenerating {
     var availability: LightingModelAvailability {
         switch model.availability {
         case .available:
+            // `availability` reports `.available` even when the device's language config keeps the
+            // model (and its guardrail safety model) from working, so also gate on the locale.
+            // Without this, generation fails late with a cryptic SensitiveContentAnalysisML error.
+            guard model.supportsLocale(.current) else {
+                return .unavailable(reason: Self.unsupportedLocaleReason)
+            }
             return .available
         case .unavailable(let reason):
             return .unavailable(reason: Self.describe(reason))
@@ -91,7 +97,24 @@ struct FoundationModelsLightingService: LightingLookGenerating {
         }
     }
 
+    private static let unsupportedLocaleReason =
+        "Apple Intelligence isn't ready for this device language. Set the system & Siri language to a supported one (e.g. English (US)), then let Apple Intelligence finish downloading."
+
+    /// `SensitiveContentAnalysisML error 15` means the guardrail safety-model assets aren't
+    /// provisioned (an environment/asset issue, not a content block) — common when the system
+    /// language is unsupported or in the Simulator. It can arrive raw or wrapped in another error.
+    private static func isSafetyModelAssetError(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        if nsError.domain == "com.apple.SensitiveContentAnalysisML" { return true }
+        if nsError.underlyingErrors.contains(where: { ($0 as NSError).domain == "com.apple.SensitiveContentAnalysisML" }) { return true }
+        return nsError.localizedDescription.contains("SensitiveContentAnalysisML")
+    }
+
     private static func describe(generationError error: Error) -> String {
+        if isSafetyModelAssetError(error) {
+            return "Apple Intelligence's safety model isn't ready here. Use a supported language (e.g. English (US)) and let assets download, or run on a real Vision Pro — the Simulator often can't run this check."
+        }
+
         // OS 27 surfaces generation failures through the top-level `LanguageModelError`
         // (the older `LanguageModelSession.GenerationError` is deprecated in 27.0).
         switch error {
@@ -116,11 +139,6 @@ struct FoundationModelsLightingService: LightingLookGenerating {
             }
         case let validationError as ValidationError:
             return validationError.errorDescription ?? "The generated lighting look was invalid."
-        case let nsError as NSError where nsError.domain == "com.apple.SensitiveContentAnalysisML":
-            // The on-device sensitive-content guardrail couldn't run. With permissive guardrails
-            // this should not normally surface; when it does it's an environment limitation
-            // (e.g. the analysis assets aren't provisioned in the Simulator).
-            return "The on-device safety check couldn't run here. Try on a Vision Pro with Apple Intelligence enabled."
         default:
             return error.localizedDescription
         }
