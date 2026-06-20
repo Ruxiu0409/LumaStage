@@ -13,6 +13,11 @@ struct LumaStageApp: App {
     @State private var appModel = AppModel()
 
     var body: some Scene {
+        // Eager read so the Scene re-evaluates — and re-applies the immersion style — when the
+        // in-space toggle flips stageImmersionMode. A computed `var` body would not otherwise
+        // observe a property only read inside the lazy binding closure below.
+        let _ = appModel.stageImmersionMode
+
         WindowGroup {
             ContentView()
                 .environment(appModel)
@@ -31,6 +36,16 @@ struct LumaStageApp: App {
                     appModel.immersiveSpaceState = .closed
                 }
         }
-        .immersionStyle(selection: .constant(.full), in: .full)
+        .immersionStyle(selection: immersionStyleSelection, in: .full, .mixed)
+    }
+
+    /// A mutable binding (not `.constant`) so the system can write immersion changes back into the
+    /// model; the getter derives the style from `stageImmersionMode` so the in-space toggle drives
+    /// the full↔mixed transition live.
+    private var immersionStyleSelection: Binding<any ImmersionStyle> {
+        Binding(
+            get: { appModel.immersionStyle },
+            set: { appModel.stageImmersionMode = ($0 is MixedImmersionStyle) ? .roomSpill : .fullStage }
+        )
     }
 }

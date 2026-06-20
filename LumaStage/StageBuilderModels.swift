@@ -1273,3 +1273,28 @@ enum StageLayoutValidationError: Error, Equatable, LocalizedError {
         }
     }
 }
+
+/// How the immersive scene presents: a full-immersion night-stage digital twin, or a passthrough
+/// "spill onto room" mode where the virtual stage spotlights illuminate the user's real room via
+/// `SpotLightComponent.SurroundingsLight` (visionOS 27). `.fullStage` is the default product.
+enum StageImmersionMode: String, Codable, CaseIterable {
+    case fullStage
+    case roomSpill
+
+    var displayName: String {
+        switch self {
+        case .fullStage: return "Full Stage"
+        case .roomSpill: return "Spill onto Room"
+        }
+    }
+}
+
+/// Foundation-only policy for the passthrough spill mode, so the decision is testable without
+/// RealityKit. The view layer reads this to gate geometry per mode.
+enum SurroundingsLightPolicy {
+    /// Opaque venue meshes (concrete floor, black backdrop) are shown only in full immersion; in
+    /// room-spill mode they would occlude passthrough and defeat the effect.
+    static func includesOpaqueVenue(in mode: StageImmersionMode) -> Bool {
+        mode == .fullStage
+    }
+}

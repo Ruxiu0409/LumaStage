@@ -34,12 +34,18 @@ struct ImmersiveView: View {
             if let selectedCue = appModel.selectedCue {
                 Self.apply(selectedCue, to: root)
             }
+
+            // Room-spill mode hides the opaque venue so the real room shows through passthrough.
+            if let venue = root.findEntity(named: Self.opaqueVenueName) {
+                venue.isEnabled = SurroundingsLightPolicy.includesOpaqueVenue(in: appModel.stageImmersionMode)
+            }
         } attachments: {
             Attachment(id: "ai_box") {
                 VisionAIComposerBox()
                     .environment(appModel)
             }
         }
+        .preferredSurroundingsEffect(appModel.stageImmersionMode == .roomSpill ? .dim(intensity: 0.45) : nil)
     }
 
     private static let stageScale: Float = 0.46
@@ -57,11 +63,18 @@ struct ImmersiveView: View {
         return root
     }
 
+    /// The concrete floor + black backdrop that make the full-immersion "night stage" illusion.
+    /// Grouped under one container so room-spill mode can hide them and reveal passthrough.
+    private static let opaqueVenueName = "venue_opaque"
+
     private static func addVenueEnvironment(to root: Entity, layout: StageLayout) {
-        root.addChild(box(name: "floor_concrete", width: 7.2, height: 0.018, depth: 5.4, hex: "#2D3032", intensity: 0.82, position: SIMD3<Float>(0, -0.025, -2.4)))
+        let venue = Entity()
+        venue.name = opaqueVenueName
+
+        venue.addChild(box(name: "floor_concrete", width: 7.2, height: 0.018, depth: 5.4, hex: "#2D3032", intensity: 0.82, position: SIMD3<Float>(0, -0.025, -2.4)))
 
         for offset in [-2.2, -1.1, 0, 1.1, 2.2] as [Float] {
-            root.addChild(box(name: "floor_seam_x", width: 0.008, height: 0.004, depth: 5.4, hex: "#1B1D1E", intensity: 0.7, position: SIMD3<Float>(offset, -0.012, -2.4)))
+            venue.addChild(box(name: "floor_seam_x", width: 0.008, height: 0.004, depth: 5.4, hex: "#1B1D1E", intensity: 0.7, position: SIMD3<Float>(offset, -0.012, -2.4)))
         }
 
         let upstageZ = layout.objects.flatMap(\.trussEndpoints).map(\.z).min() ?? -1.25
@@ -74,12 +87,14 @@ struct ImmersiveView: View {
             intensity: 0.92,
             position: scenePoint(Vector3Meters(x: 0, y: 1.05, z: upstageZ - 0.32))
         )
-        root.addChild(drape)
+        venue.addChild(drape)
 
         for index in 0..<9 {
             let x = -1.05 + Float(index) * 0.26
-            root.addChild(box(name: "drape_fold", width: 0.018, height: 1.45, depth: 0.018, hex: index.isMultiple(of: 2) ? "#171A20" : "#050609", intensity: 0.82, position: drape.position + SIMD3<Float>(x, 0, 0.018)))
+            venue.addChild(box(name: "drape_fold", width: 0.018, height: 1.45, depth: 0.018, hex: index.isMultiple(of: 2) ? "#171A20" : "#050609", intensity: 0.82, position: drape.position + SIMD3<Float>(x, 0, 0.018)))
         }
+
+        root.addChild(venue)
     }
 
     private static func addSpatialLights(to root: Entity) {
@@ -338,6 +353,12 @@ struct ImmersiveView: View {
         spot.light.outerAngleInDegrees = Float(cone.outer)
         spot.light.attenuationRadius = 18
         spot.shadow = SpotLightComponent.Shadow()
+
+        // Opt this virtual spotlight into illuminating the real room in passthrough (room-spill)
+        // mode. Inert in full immersion (no passthrough to light), so it's safe to always tag.
+        if #available(visionOS 27.0, *) {
+            spot.components.set(SpotLightComponent.SurroundingsLight())
+        }
 
         let position = scenePoint(sourceModel)
         spot.position = position

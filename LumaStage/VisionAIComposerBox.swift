@@ -60,6 +60,14 @@ struct VisionAIComposerBox: View {
 
                 Spacer()
 
+                iconButton(
+                    systemImage: appModel.stageImmersionMode == .roomSpill ? "sun.max.fill" : "sun.max",
+                    tint: appModel.stageImmersionMode == .roomSpill ? LumaStageDesign.warmAmber : LumaStageDesign.textSecondary
+                ) {
+                    appModel.toggleStageImmersion()
+                }
+                .help(appModel.stageImmersionMode == .roomSpill ? "Stop spilling light onto your room" : "Spill stage light onto your room")
+
                 ToggleImmersiveSpaceButton(displayStyle: .icon)
                     .buttonStyle(.plain)
                     .help("Open or close the immersive stage")

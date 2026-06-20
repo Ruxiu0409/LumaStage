@@ -41,6 +41,7 @@ struct LumaStageCoreSmokeTests {
         try lightingLookDraftBuildsValidatedLook()
         lightingLookDraftRejectsInvalidValues()
         try goboFlowsThroughDraftAndSurvivesCodec()
+        try surroundingsLightPolicyGatesOpaqueVenue()
         await unavailableLightingServiceReportsUnavailable()
         print("LumaStageCoreSmokeTests passed")
     }
@@ -604,6 +605,20 @@ struct LumaStageCoreSmokeTests {
         let legacy = try JSONDecoder().decode(FixtureGroup.self, from: legacyJSON)
         expect(legacy.gobo == nil, "Legacy fixtures without a gobo field should decode to nil")
         expect(legacy.fineControl == nil, "Legacy fixtures without a fineControl field should still decode")
+    }
+
+    private static func surroundingsLightPolicyGatesOpaqueVenue() throws {
+        expect(SurroundingsLightPolicy.includesOpaqueVenue(in: .fullStage),
+               "Full-stage immersion must keep the opaque venue (floor + backdrop)")
+        expect(!SurroundingsLightPolicy.includesOpaqueVenue(in: .roomSpill),
+               "Room-spill mode must hide the opaque venue so passthrough shows through")
+        expect(StageImmersionMode.allCases.count == 2, "There should be exactly two immersion modes")
+        expect(StageImmersionMode.fullStage.displayName == "Full Stage", "Full-stage display name should be stable")
+        expect(StageImmersionMode.roomSpill.displayName == "Spill onto Room", "Room-spill display name should be stable")
+
+        let encoded = try JSONEncoder().encode(StageImmersionMode.roomSpill)
+        let decoded = try JSONDecoder().decode(StageImmersionMode.self, from: encoded)
+        expect(decoded == .roomSpill, "StageImmersionMode should survive a Codable round-trip")
     }
 
     private static func unavailableLightingServiceReportsUnavailable() async {

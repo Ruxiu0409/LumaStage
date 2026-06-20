@@ -50,6 +50,7 @@ class AppModel {
     }
 
     var immersiveSpaceState = ImmersiveSpaceState.closed
+    var stageImmersionMode: StageImmersionMode = .fullStage
     var conversationState: ConversationState = .idle
     var projects = LumaStageProject.defaultProjects()
     var selectedProjectId: String?
@@ -140,6 +141,22 @@ class AppModel {
 
     func refreshModelAvailability() {
         modelAvailability = aiClient.availability
+    }
+
+    /// SwiftUI immersion style for the current mode: full-immersion night stage, or passthrough
+    /// mixed reality so the stage spotlights can spill onto the real room.
+    var immersionStyle: any ImmersionStyle {
+        switch stageImmersionMode {
+        case .fullStage: return .full
+        case .roomSpill: return .mixed
+        }
+    }
+
+    func toggleStageImmersion() {
+        stageImmersionMode = stageImmersionMode == .roomSpill ? .fullStage : .roomSpill
+        aiUnderstoodCommand = stageImmersionMode == .roomSpill
+            ? "Spilling the stage lights onto your real room"
+            : "Back to the full immersive stage"
     }
 
     func openProject(id: String) {
