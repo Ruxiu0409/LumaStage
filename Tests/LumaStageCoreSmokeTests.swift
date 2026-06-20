@@ -42,6 +42,7 @@ struct LumaStageCoreSmokeTests {
         lightingLookDraftRejectsInvalidValues()
         try goboFlowsThroughDraftAndSurvivesCodec()
         try surroundingsLightPolicyGatesOpaqueVenue()
+        aiComposerPlacementClampsWithinReach()
         await unavailableLightingServiceReportsUnavailable()
         print("LumaStageCoreSmokeTests passed")
     }
@@ -622,6 +623,20 @@ struct LumaStageCoreSmokeTests {
         let encoded = try JSONEncoder().encode(StageImmersionMode.roomSpill)
         let decoded = try JSONDecoder().decode(StageImmersionMode.self, from: encoded)
         expect(decoded == .roomSpill, "StageImmersionMode should survive a Codable round-trip")
+    }
+
+    private static func aiComposerPlacementClampsWithinReach() {
+        let home = AIComposerPlacement.defaultPosition
+        expect(home.z < 0, "Composer default must sit in front of the viewer (negative z)")
+        expect(AIComposerPlacement.clamped(home) == home, "Default position should already be within reach")
+
+        // A drag flung far away / behind the user is pulled back into the reachable front volume.
+        let farAway = AIComposerPlacement.clamped(SIMD3<Float>(99, 99, 99))
+        expect(farAway.x <= 2.0 && farAway.y <= 2.6 && farAway.z <= -0.4, "Out-of-range drag must clamp to the far bounds")
+        expect(farAway.z < 0, "Clamped composer must never end up behind the viewer")
+
+        let tooClose = AIComposerPlacement.clamped(SIMD3<Float>(-99, -99, -99))
+        expect(tooClose.x >= -2.0 && tooClose.y >= 0.6 && tooClose.z >= -3.0, "Below-range drag must clamp to the near bounds")
     }
 
     private static func unavailableLightingServiceReportsUnavailable() async {

@@ -1298,3 +1298,20 @@ enum SurroundingsLightPolicy {
         mode == .fullStage
     }
 }
+
+/// Spatial placement for the draggable in-space AI composer attachment. Foundation-only so the
+/// drag → position mapping (and its clamping) stays testable without RealityKit.
+enum AIComposerPlacement {
+    /// Where the composer sits when the immersive stage first opens (metres, scene space).
+    static let defaultPosition = SIMD3<Float>(0, 1.45, -1.15)
+
+    /// Keeps a dragged position within comfortable reach in front of the viewer, so the box can
+    /// never be flung behind the user (z must stay negative) or so far it can't be grabbed back.
+    static func clamped(_ position: SIMD3<Float>) -> SIMD3<Float> {
+        SIMD3<Float>(
+            min(max(position.x, -2.0), 2.0),
+            min(max(position.y, 0.6), 2.6),
+            min(max(position.z, -3.0), -0.4)
+        )
+    }
+}

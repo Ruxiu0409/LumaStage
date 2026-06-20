@@ -14,14 +14,21 @@ import simd
 struct ImmersiveView: View {
     @Environment(AppModel.self) private var appModel
 
+    /// Offset between the grab point and the composer's origin while a drag is in flight, so the
+    /// box follows the pinch without snapping its corner to the finger. `nil` when not dragging.
+    @State private var composerDragOffset: SIMD3<Float>?
+
     var body: some View {
         RealityView { content, attachments in
             let root = Self.makeStageRoot(layout: appModel.stageLayout)
             content.add(root)
 
             if let aiBox = attachments.entity(for: "ai_box") {
-                aiBox.position = SIMD3<Float>(0, 1.45, -1.15)
+                aiBox.position = AIComposerPlacement.defaultPosition
                 aiBox.scale = SIMD3<Float>(0.72, 0.72, 0.72)
+                // Make the attachment grabbable so it can be dragged anywhere in the scene.
+                aiBox.components.set(InputTargetComponent())
+                aiBox.generateCollisionShapes(recursive: true)
                 content.add(aiBox)
             }
         } update: { content, _ in
@@ -46,6 +53,25 @@ struct ImmersiveView: View {
             }
         }
         .preferredSurroundingsEffect(appModel.stageImmersionMode == .roomSpill ? .dim(intensity: 0.45) : nil)
+        .gesture(composerDragGesture)
+    }
+
+    /// Drag the floating AI composer to any spot in front of the viewer. Position is clamped by
+    /// `AIComposerPlacement` so the box can't be lost behind or out of reach.
+    private var composerDragGesture: some Gesture {
+        DragGesture()
+            .targetedToAnyEntity()
+            .onChanged { value in
+                guard let parent = value.entity.parent else { return }
+                let grabPoint = value.convert(value.location3D, from: .local, to: parent)
+                if composerDragOffset == nil {
+                    composerDragOffset = value.entity.position - grabPoint
+                }
+                value.entity.position = AIComposerPlacement.clamped(grabPoint + (composerDragOffset ?? .zero))
+            }
+            .onEnded { _ in
+                composerDragOffset = nil
+            }
     }
 
     private static let stageScale: Float = 0.46
