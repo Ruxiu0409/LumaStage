@@ -9,6 +9,7 @@ struct VisionAIComposerBox: View {
         @Bindable var appModel = appModel
 
         VStack(alignment: .leading, spacing: 18) {
+            dragHandle
             inputField(text: $appModel.typedPrompt)
             statusRow
             controlRow
@@ -17,6 +18,16 @@ struct VisionAIComposerBox: View {
         .padding(24)
         .frame(maxWidth: .infinity, alignment: .leading)
         .lumaFloatingPanel()
+    }
+
+    /// A non-interactive grab bar. Because it has no SwiftUI gesture of its own, a pinch here
+    /// falls through to the RealityView's entity drag gesture, giving a clear place to move the box.
+    private var dragHandle: some View {
+        Capsule()
+            .fill(LumaStageDesign.textSecondary.opacity(0.5))
+            .frame(width: 54, height: 5)
+            .frame(maxWidth: .infinity)
+            .contentShape(Capsule())
     }
 
     private func inputField(text: Binding<String>) -> some View {

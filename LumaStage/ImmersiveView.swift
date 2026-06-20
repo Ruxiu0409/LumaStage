@@ -19,6 +19,16 @@ struct ImmersiveView: View {
     @State private var composerDragOffset: SIMD3<Float>?
 
     var body: some View {
+        // Establish a body-level Observation dependency on the lighting look so a generation-
+        // or cue-driven look change re-evaluates this body, which re-runs the RealityView
+        // `update:` closure below and re-applies the cue to the spotlights. The look is otherwise
+        // read ONLY inside `update:` — an escaping closure that does NOT register its own body
+        // dependencies (WWDC25 "Better together: SwiftUI and RealityKit": the update closure is an
+        // extension of the view's body and only re-runs when the body re-evaluates) — so without
+        // this read, AI generation updates the AI box text but the scene never relights.
+        // Same pattern as LumaStageApp's `let _ = appModel.stageImmersionMode`.
+        let _ = appModel.lightingLook
+
         RealityView { content, attachments in
             let root = Self.makeStageRoot(layout: appModel.stageLayout)
             content.add(root)
@@ -26,12 +36,30 @@ struct ImmersiveView: View {
             if let aiBox = attachments.entity(for: "ai_box") {
                 aiBox.position = AIComposerPlacement.defaultPosition
                 aiBox.scale = SIMD3<Float>(0.72, 0.72, 0.72)
-                // Make the attachment grabbable so it can be dragged anywhere in the scene.
+                // Make the attachment grabbable. The collision shape is built later in `update:`
+                // once SwiftUI has measured the attachment — at `make` time its bounds are still
+                // zero, so a shape generated here would be empty and could never be hit-tested.
                 aiBox.components.set(InputTargetComponent())
-                aiBox.generateCollisionShapes(recursive: true)
                 content.add(aiBox)
             }
-        } update: { content, _ in
+        } update: { content, attachments in
+            // Give the composer a real collision shape once it has a measured size, so the
+            // drag gesture has something to target. Done once, when bounds become non-zero.
+            if let aiBox = attachments.entity(for: "ai_box"),
+               aiBox.components[CollisionComponent.self] == nil {
+                let bounds = aiBox.visualBounds(relativeTo: aiBox)
+                if bounds.extents.x > 0, bounds.extents.y > 0 {
+                    // Offset the box by the visual-bounds center: `generateBox(size:)` is centered
+                    // on the entity origin, which need not coincide with the hosted SwiftUI view's
+                    // center — and the drag handle sits at the panel's top edge, the region most
+                    // likely to fall outside an origin-centered collider. `isStatic: false` so the
+                    // collider tracks the box as it's dragged. Mirrors `FixtureObservatoryView.sync`.
+                    let shape = ShapeResource.generateBox(size: bounds.extents)
+                        .offsetBy(translation: bounds.center)
+                    aiBox.components.set(CollisionComponent(shapes: [shape], isStatic: false))
+                }
+            }
+
             guard let root = content.entities.first(where: { $0.name == "LumaStageRoot" }) else {
                 return
             }
