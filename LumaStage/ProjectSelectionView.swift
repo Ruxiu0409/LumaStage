@@ -31,14 +31,14 @@ struct ProjectSelectionView: View {
                 Text("LumaStage")
                     .font(.system(.largeTitle, design: .rounded, weight: .bold))
 
-                Text("Select Project")
+                Text("選擇專案")
                     .font(.headline)
                     .foregroundStyle(LumaStageDesign.textSecondary)
             }
 
             Spacer()
 
-            Button("New Project", systemImage: "plus") {
+            Button("新增專案", systemImage: "plus") {
                 showsProjectTemplatePicker = true
             }
             .font(.callout.weight(.semibold))
@@ -78,19 +78,19 @@ struct ProjectSelectionView: View {
             Image(systemName: "folder")
                 .font(.callout.weight(.semibold))
 
-            Text("\(appModel.projects.count) Projects")
+            Text("\(appModel.projects.count) 個專案")
                 .font(.callout.weight(.medium))
 
             Spacer()
 
-            Button("Fixture Guide", systemImage: "lightbulb.2") {
+            Button("燈具指南", systemImage: "lightbulb.2") {
                 showsFixtureIntro = true
             }
             .font(.caption.weight(.semibold))
             .lumaGlassButton()
             .tint(LumaStageDesign.warmAmber)
 
-            LumaStatusChip(title: "Standard Night", tint: LumaStageDesign.softGreen)
+            LumaStatusChip(title: "標準夜景", tint: LumaStageDesign.softGreen)
         }
         .foregroundStyle(LumaStageDesign.textSecondary)
     }
@@ -118,11 +118,11 @@ private struct ProjectTemplateSelectionView: View {
                 .padding(22)
             }
             .foregroundStyle(LumaStageDesign.textPrimary)
-            .navigationTitle("Choose Scenario")
+            .navigationTitle("新增專案")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Cancel") {
+                    Button("取消") {
                         dismiss()
                     }
                 }
@@ -132,10 +132,10 @@ private struct ProjectTemplateSelectionView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label("Choose a Starting Point", systemImage: "rectangle.3.group.bubble")
+            Label("新增舞台專案", systemImage: "rectangle.3.group.bubble")
                 .font(.title2.weight(.bold))
 
-            Text("Start from a blank project or choose a student-stage scenario with preset lighting and project details.")
+            Text("建立一個附有預設燈光與專案細節的學生活動舞台，再用 AI 微調整體效果。")
                 .font(.callout)
                 .foregroundStyle(LumaStageDesign.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -158,7 +158,7 @@ private struct ProjectTemplateRow: View {
                 HStack(alignment: .top, spacing: 14) {
                     Image(systemName: template.systemImage)
                         .font(.title2.weight(.semibold))
-                        .foregroundStyle(template.kind == .blank ? LumaStageDesign.textSecondary : LumaStageDesign.coolBlue)
+                        .foregroundStyle(LumaStageDesign.coolBlue)
                         .frame(width: 42, height: 42)
                         .background(
                             Circle()
@@ -237,7 +237,7 @@ private struct ProjectTemplatePreviewImage: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke(LumaStageDesign.hairline, lineWidth: 1)
         }
-        .accessibilityLabel("\(template.title) scenario preview")
+        .accessibilityLabel("\(template.title) 情境預覽")
     }
 
     private var background: some View {
@@ -452,23 +452,23 @@ private struct EmptyProjectsState: View {
                 .foregroundStyle(LumaStageDesign.coolBlue)
 
             VStack(spacing: 5) {
-                Text("No Projects Yet")
+                Text("尚無專案")
                     .font(.title3.weight(.semibold))
                     .foregroundStyle(LumaStageDesign.textPrimary)
 
-                Text("Create your first stage project, then start AI lighting design.")
+                Text("建立你的第一個舞台專案，接著開始 AI 燈光設計。")
                     .font(.callout)
                     .foregroundStyle(LumaStageDesign.textSecondary)
                     .multilineTextAlignment(.center)
             }
 
             HStack(spacing: 12) {
-                Button("Learn Fixtures First", systemImage: "lightbulb.2", action: introAction)
+                Button("先認識燈具", systemImage: "lightbulb.2", action: introAction)
                     .font(.callout.weight(.semibold))
                     .lumaGlassButton()
                     .tint(LumaStageDesign.warmAmber)
 
-                Button("Create Project", systemImage: "plus", action: createAction)
+                Button("建立專案", systemImage: "plus", action: createAction)
                     .font(.callout.weight(.semibold))
                     .lumaGlassButton(prominent: true)
                     .tint(LumaStageDesign.coolBlue)

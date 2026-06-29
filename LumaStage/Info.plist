@@ -2,10 +2,11 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>NSMicrophoneUsageDescription</key>
-	<string>LumaStage uses the microphone to turn spoken lighting requests into lighting prompts.</string>
-	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>LumaStage uses speech recognition so you can describe stage lighting changes by voice.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_lumastage-sync._tcp</string>
+		<string>_lumastage-sync._udp</string>
+	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationPreferredDefaultSceneSessionRole</key>

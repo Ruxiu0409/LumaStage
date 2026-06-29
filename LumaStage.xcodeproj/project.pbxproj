@@ -11,11 +11,38 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		F71ABA0C2FE95AFD007848FC /* LumaStageControl.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LumaStageControl.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		F7FB77362FBE069900A9C110 /* LumaStage.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LumaStage.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		F7FB773A2FBE069900A9C110 /* RealityKitContent */ = {isa = PBXFileReference; lastKnownFileType = wrapper; path = RealityKitContent; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		F71ABA1C2FE95B54007848FC /* Exceptions for "LumaStage" folder in "LumaStageControl" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				iPadPanel/LumaPanelApp.swift,
+				iPadPanel/LumaPanelModel.swift,
+				iPadPanel/PanelChatView.swift,
+				iPadPanel/PanelLightingView.swift,
+				iPadPanel/PanelRootView.swift,
+				LightingAIService.swift,
+				LightingFixtureCatalog.swift,
+				LightingModels.swift,
+				LumaStageDesign.swift,
+				LumaSyncProtocol.swift,
+				LumaSyncTransport.swift,
+				MultipeerSyncTransport.swift,
+				StageBuilderModels.swift,
+			);
+			target = F71ABA0B2FE95AFD007848FC /* LumaStageControl */;
+		};
+		F71ABA1E2FE95C30007848FC /* Exceptions for "LumaStageControl" folder in "LumaStageControl" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = F71ABA0B2FE95AFD007848FC /* LumaStageControl */;
+		};
 		F7FB77462FBE069B00A9C110 /* Exceptions for "LumaStage" folder in "LumaStage" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
@@ -26,10 +53,19 @@
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		F71ABA0D2FE95AFD007848FC /* LumaStageControl */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				F71ABA1E2FE95C30007848FC /* Exceptions for "LumaStageControl" folder in "LumaStageControl" target */,
+			);
+			path = LumaStageControl;
+			sourceTree = "<group>";
+		};
 		F7FB77382FBE069900A9C110 /* LumaStage */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
 				F7FB77462FBE069B00A9C110 /* Exceptions for "LumaStage" folder in "LumaStage" target */,
+				F71ABA1C2FE95B54007848FC /* Exceptions for "LumaStage" folder in "LumaStageControl" target */,
 			);
 			path = LumaStage;
 			sourceTree = "<group>";
@@ -37,6 +73,13 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		F71ABA092FE95AFD007848FC /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		F7FB77332FBE069900A9C110 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -53,6 +96,7 @@
 			children = (
 				F7FB77382FBE069900A9C110 /* LumaStage */,
 				F7FB77392FBE069900A9C110 /* Packages */,
+				F71ABA0D2FE95AFD007848FC /* LumaStageControl */,
 				F7FB77372FBE069900A9C110 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -61,6 +105,7 @@
 			isa = PBXGroup;
 			children = (
 				F7FB77362FBE069900A9C110 /* LumaStage.app */,
+				F71ABA0C2FE95AFD007848FC /* LumaStageControl.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -76,6 +121,28 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		F71ABA0B2FE95AFD007848FC /* LumaStageControl */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F71ABA162FE95B00007848FC /* Build configuration list for PBXNativeTarget "LumaStageControl" */;
+			buildPhases = (
+				F71ABA082FE95AFD007848FC /* Sources */,
+				F71ABA092FE95AFD007848FC /* Frameworks */,
+				F71ABA0A2FE95AFD007848FC /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				F71ABA0D2FE95AFD007848FC /* LumaStageControl */,
+			);
+			name = LumaStageControl;
+			packageProductDependencies = (
+			);
+			productName = LumaStageControl;
+			productReference = F71ABA0C2FE95AFD007848FC /* LumaStageControl.app */;
+			productType = "com.apple.product-type.application";
+		};
 		F7FB77352FBE069900A9C110 /* LumaStage */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = F7FB77472FBE069B00A9C110 /* Build configuration list for PBXNativeTarget "LumaStage" */;
@@ -106,9 +173,12 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
-				LastSwiftUpdateCheck = 2640;
+				LastSwiftUpdateCheck = 2700;
 				LastUpgradeCheck = 2640;
 				TargetAttributes = {
+					F71ABA0B2FE95AFD007848FC = {
+						CreatedOnToolsVersion = 27.0;
+					};
 					F7FB77352FBE069900A9C110 = {
 						CreatedOnToolsVersion = 26.4;
 					};
@@ -132,11 +202,19 @@
 			projectRoot = "";
 			targets = (
 				F7FB77352FBE069900A9C110 /* LumaStage */,
+				F71ABA0B2FE95AFD007848FC /* LumaStageControl */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		F71ABA0A2FE95AFD007848FC /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		F7FB77342FBE069900A9C110 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -147,6 +225,13 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		F71ABA082FE95AFD007848FC /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		F7FB77322FBE069900A9C110 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -157,6 +242,78 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
+		F71ABA142FE95B00007848FC /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 3WMZ8937S4;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = LumaStageControl/Info.plist;
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "LumaStage 使用本機網路，將 iPad 控制面板與 Apple Vision Pro 連結。";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ruxiu0409.LumaStageControl;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		F71ABA152FE95B00007848FC /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 3WMZ8937S4;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = LumaStageControl/Info.plist;
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "LumaStage 使用本機網路，將 iPad 控制面板與 Apple Vision Pro 連結。";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ruxiu0409.LumaStageControl;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 		F7FB77482FBE069B00A9C110 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -168,6 +325,10 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "$(TARGET_NAME)/Info.plist";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "LumaStage 使用本機網路，將 iPad 控制面板與 Apple Vision Pro 連結。";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "LumaStage 使用麥克風，將口說的燈光需求轉換為燈光提示。";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "LumaStage 使用語音辨識，讓你可以用語音描述舞台燈光的變化。";
+				INFOPLIST_KEY_NSWorldSensingUsageDescription = "LumaStage 偵測你周遭的水平桌面，把編輯用的小型舞台模型穩穩放在真實桌面上。";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -197,6 +358,10 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "$(TARGET_NAME)/Info.plist";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "LumaStage 使用本機網路，將 iPad 控制面板與 Apple Vision Pro 連結。";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "LumaStage 使用麥克風，將口說的燈光需求轉換為燈光提示。";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "LumaStage 使用語音辨識，讓你可以用語音描述舞台燈光的變化。";
+				INFOPLIST_KEY_NSWorldSensingUsageDescription = "LumaStage 偵測你周遭的水平桌面，把編輯用的小型舞台模型穩穩放在真實桌面上。";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -339,6 +504,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		F71ABA162FE95B00007848FC /* Build configuration list for PBXNativeTarget "LumaStageControl" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F71ABA142FE95B00007848FC /* Debug */,
+				F71ABA152FE95B00007848FC /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		F7FB77312FBE069900A9C110 /* Build configuration list for PBXProject "LumaStage" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

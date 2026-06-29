@@ -13,11 +13,16 @@ struct FoundationModelsLightingService: LightingLookGenerating {
 
     init(model: SystemLanguageModel? = nil) {
         // Use the permissive content-transformation guardrails instead of `.default`.
-        // LumaStage only ever turns a benign lighting request into a lighting look, but the
-        // default guardrails run a sensitive-content analysis pass that false-positives on
-        // harmless prompts like "add a blue light" — and in the Simulator that pass fails
-        // outright as `com.apple.SensitiveContentAnalysisML error 15`. Permissive mode is the
-        // intended setting for this kind of user-content transformation and skips that check.
+        // LumaStage only ever turns a benign lighting request into a lighting look, and permissive
+        // mode is the intended setting for that — it reduces `.default`'s `guardrailViolation`
+        // false-positives on harmless prompts like "add a blue light".
+        //
+        // It does NOT, however, remove the output safety pass: that pass depends on a SEPARATE
+        // safety-model asset (`com.apple.fm.language.instruct_300m.safety`) which downloads
+        // independently of the base model and is frequently missing in the Simulator. When it's
+        // absent, `respond(...)` throws `com.apple.SensitiveContentAnalysisML error 15` regardless
+        // of guardrail mode — an asset/environment condition (test on a real device with a matching
+        // system + Siri locale), NOT something this setting can fix. See `isSafetyModelAssetError`.
         self.model = model ?? SystemLanguageModel(guardrails: .permissiveContentTransformations)
     }
 
@@ -34,7 +39,7 @@ struct FoundationModelsLightingService: LightingLookGenerating {
         case .unavailable(let reason):
             return .unavailable(reason: Self.describe(reason))
         @unknown default:
-            return .unavailable(reason: "Apple Intelligence is currently unavailable.")
+            return .unavailable(reason: "Apple Intelligence 目前無法使用。")
         }
     }
 
@@ -45,7 +50,7 @@ struct FoundationModelsLightingService: LightingLookGenerating {
         }
 
         guard case .available = model.availability else {
-            throw LightingGenerationError.modelUnavailable(availability.unavailableReason ?? "Apple Intelligence is unavailable.")
+            throw LightingGenerationError.modelUnavailable(availability.unavailableReason ?? "Apple Intelligence 無法使用。")
         }
 
         let session = LanguageModelSession(
@@ -53,8 +58,13 @@ struct FoundationModelsLightingService: LightingLookGenerating {
             instructions: Instructions(Self.instructions)
         )
 
-        // Low temperature + greedy sampling: this is structured extraction, not creative writing.
-        let options = GenerationOptions(samplingMode: .greedy, temperature: 0.2)
+        // Randomized (nucleus) sampling with NO fixed seed so each generation differs — choosing a
+        // lighting look is a creative act, not extraction. `.greedy` made every run byte-identical
+        // for a given prompt (and ignores `temperature` entirely), which read as "the output is
+        // always the same". The `@Generable` schema still enforces the shape (two cues, two beams
+        // each), so randomness only varies the colors / intensities / mood / wording — never the
+        // structure. Pass a `seed:` here only if you need reproducible output for debugging.
+        let options = GenerationOptions(samplingMode: .random(probabilityThreshold: 0.9), temperature: 0.9)
 
         do {
             let generated = try await session.respond(
@@ -63,7 +73,7 @@ struct FoundationModelsLightingService: LightingLookGenerating {
                 options: options
             ).content
 
-            let look = try generated.draft.makeValidatedLook()
+            let look = try generated.makeValidatedLook()
             return LightingGenerationResult(look: look, source: .foundationModels)
         } catch let error as LightingGenerationError {
             throw error
@@ -73,32 +83,58 @@ struct FoundationModelsLightingService: LightingLookGenerating {
     }
 
     private static let instructions = """
-    You generate MVP stage lighting looks for LumaStage.
-    The scene is a fixed standardNight outdoor student-event stage.
-    Produce content for exactly two cues: an Opening (softer, establishing) and a Highlight (brighter, more focused).
-    For each cue, return two or more fixture groups. Use only the fixture roles wash, spot, frontLight, and backgroundWash.
-    Intensity is 0.0 to 1.0. Colors are RGB hex like #FFD1A3.
-    A fixture may optionally project a gobo pattern (breakup, stripes, stars, or grid); default to none and only choose a pattern when the request clearly calls for one (e.g. "dappled forest floor", "starry backdrop", "window light").
-    The explanation must teach one industry lighting term in language a beginner can understand,
-    and relate to what this look actually changed.
+    You are a lighting designer for LumaStage, designing a full lighting rig for a night outdoor
+    student-event stage. From the user's request, design the WHOLE scene.
+
+    Treat the user's request as the primary driver: match the event and mood. A dance-crew showcase
+    ("熱舞社成發") wants an energetic, colorful rig — several moving head beams, a strobe, and one or two
+    lasers up on the truss, bold saturated colors, maybe gobos; a talk or award wants a few gentle front
+    fresnels and soft washes, warm and even. Pick a fixture count that fits: a big showcase uses 8–12
+    fixtures, a simple event 4–6.
+
+    Available fixture types: frontFresnel, ledFresnel (soft performer front light); spotBarrel (tight
+    focused spot); movingHeadBeam (punchy moving beam for effects); washBar, backgroundBatten, ledPar
+    (broad color washes); ledStrobeBar (strobe/flash accents); audienceBlinder (big bright blinders
+    facing the crowd); laser (razor-thin saturated aerial beams — the most eye-catching effect, ideal
+    for drops, choruses and high-energy peaks; reach for it on energetic events, especially dance/EDM,
+    and prefer punchy saturated colors like green, red or blue for it).
+    Mounting zones: frontOfHouse (out front, lights performers), upstageTruss (behind, washes the
+    backdrop / beam effects), sideStageLeft, sideStageRight (side accents), floor (uplight from the deck).
+
+    Design a SHOW: an ordered list of 2 to 5 cues the operator steps through with a GO button, telling a
+    short arc. A simple event can be just two cues (Opening, Highlight); a dance showcase or song wants
+    more — e.g. Opening → Build → Chorus → Finale, or Intro → Verse → Drop → Bows. Name each cue with a
+    short, human label in the order it plays. The first cue is the softer establishing look; later cues
+    should escalate or change energy so the sequence clearly progresses (not five near-identical cues).
+
+    Define the rig ONCE as a list of fixtures. For EVERY fixture provide a `states` array with exactly one
+    entry per cue, IN THE SAME ORDER as the cue list — so states[0] is that fixture in the first cue,
+    states[1] in the second, and so on. Each state sets: enabled, intensity (0.0–1.0), an RGB hex color of
+    exactly six hex digits such as #FFD1A3 (no trailing comma or other text), beam spread in degrees
+    (5 tight … 120 wide), and an optional gobo. Give fixtures roles that contrast — warm front vs.
+    cool/colored backlight, for instance — so the stage looks designed, not flat. A fixture can be off
+    (enabled false / intensity 0) in some cues and on in others to build the arc.
+    Only use a gobo when the request calls for a texture (e.g. "starry backdrop", "dappled forest").
+
+    The explanation teaches one industry lighting term a beginner can understand, tied to this look.
     Voice prompts may mix Chinese and English; interpret lighting vocabulary in either language.
     """
 
     private static func describe(_ reason: SystemLanguageModel.Availability.UnavailableReason) -> String {
         switch reason {
         case .deviceNotEligible:
-            return "This device does not support Apple Intelligence."
+            return "此裝置不支援 Apple Intelligence。"
         case .appleIntelligenceNotEnabled:
-            return "Apple Intelligence is not enabled in Settings."
+            return "尚未在「設定」中啟用 Apple Intelligence。"
         case .modelNotReady:
-            return "The on-device model is still downloading or preparing."
+            return "裝置端模型仍在下載或準備中。"
         @unknown default:
-            return "Apple Intelligence is currently unavailable."
+            return "Apple Intelligence 目前無法使用。"
         }
     }
 
     private static let unsupportedLocaleReason =
-        "Apple Intelligence isn't ready for this device language. Set the system & Siri language to a supported one (e.g. English (US)), then let Apple Intelligence finish downloading."
+        "Apple Intelligence 尚未支援此裝置語言。請將系統與 Siri 語言設為支援的語言（例如英文（美國）），再讓 Apple Intelligence 完成下載。"
 
     /// `SensitiveContentAnalysisML error 15` means the guardrail safety-model assets aren't
     /// provisioned (an environment/asset issue, not a content block) — common when the system
@@ -112,7 +148,7 @@ struct FoundationModelsLightingService: LightingLookGenerating {
 
     private static func describe(generationError error: Error) -> String {
         if isSafetyModelAssetError(error) {
-            return "Apple Intelligence's safety model isn't ready here. Use a supported language (e.g. English (US)) and let assets download, or run on a real Vision Pro — the Simulator often can't run this check."
+            return "Apple Intelligence 的安全模型在此尚未就緒。請使用支援的語言（例如英文（美國））並讓資產下載完成，或改在實體 Vision Pro 上執行 — 模擬器通常無法執行此項檢查。"
         }
 
         // OS 27 surfaces generation failures through the top-level `LanguageModelError`
@@ -121,103 +157,130 @@ struct FoundationModelsLightingService: LightingLookGenerating {
         case let modelError as LanguageModelError:
             switch modelError {
             case .contextSizeExceeded:
-                return "The request was too long for the on-device model. Try a shorter prompt."
+                return "此請求對裝置端模型來說太長了。請改用較短的提示。"
             case .guardrailViolation:
-                return "The request was blocked by the safety system."
+                return "此請求被安全系統封鎖。"
             case .rateLimited:
-                return "Too many requests. Try again in a moment."
+                return "請求過於頻繁。請稍候再試一次。"
             case .unsupportedLanguageOrLocale:
-                return "This language is not supported by Apple Intelligence."
+                return "Apple Intelligence 不支援此語言。"
             case .refusal:
-                return "The model declined to generate a lighting look. Try rephrasing."
+                return "模型拒絕生成燈光效果。請嘗試換個說法。"
             case .timeout:
-                return "The request timed out. Try again."
+                return "請求逾時。請再試一次。"
             case .unsupportedCapability, .unsupportedTranscriptContent, .unsupportedGenerationGuide:
-                return "This request used a capability Apple Intelligence does not support here."
+                return "此請求使用了 Apple Intelligence 在此不支援的功能。"
             @unknown default:
-                return modelError.errorDescription ?? "Apple Intelligence could not complete the request."
+                return modelError.errorDescription ?? "Apple Intelligence 無法完成此請求。"
             }
         case let validationError as ValidationError:
-            return validationError.errorDescription ?? "The generated lighting look was invalid."
+            return validationError.errorDescription ?? "生成的燈光效果無效。"
         default:
             return error.localizedDescription
         }
     }
 }
 
-// MARK: - Structured output schema
+// MARK: - Structured output schema (dynamic rig)
 
-/// Compile-time structured-output schema the model fills in. Cue identity (ids/names) is
-/// fixed by `LightingLookDraft`, so the model only supplies fixture content, mood, name,
-/// and the teaching explanation.
+/// Compile-time structured-output schema the model fills in. The model designs a SHOW: an ordered list
+/// of cues plus the WHOLE rig — a variable list of fixtures, each with a type, a stage zone, and a
+/// `states` array carrying its state in EACH cue (aligned by index to the cue list). Defining the rig
+/// once and giving each fixture one state per cue keeps rig identity stable across the whole sequence.
+/// Cue ids are fixed downstream (`cue_0`, `cue_1`, …) in `makeValidatedLook()`.
 @Generable
 struct GeneratedLightingLook {
-    @Guide(description: "Human-friendly name for this lighting look, e.g. 'Warm Opening Lighting'")
+    @Guide(description: "Human-friendly name for this lighting look, e.g. 'Dance Crew Showcase'")
     var lookName: String
 
-    @Guide(description: "Short mood summary, e.g. 'warm, welcoming, student showcase'")
+    @Guide(description: "Short mood summary, e.g. 'high-energy, colorful, dance crew finale'")
     var mood: String
 
-    @Guide(description: "Opening cue: softer establishing lighting that keeps performers visible")
-    var openingCue: GeneratedCue
+    @Guide(description: "The ordered cue list — 2 to 5 cues the operator steps through with GO, telling a short arc (e.g. Opening, Build, Chorus, Finale). The first is the establishing look; later cues escalate or change energy.", .count(2...5))
+    var cues: [GeneratedCue]
 
-    @Guide(description: "Highlight cue: brighter, more focused lighting for the main moment")
-    var highlightCue: GeneratedCue
+    @Guide(description: "The whole lighting rig: the fixtures that together light this event. Pick a count and a mix of fixture types and zones that genuinely suit the request — e.g. several moving heads + strobes + colored washes for a dance showcase; a few gentle front fresnels and washes for a talk or award.", .count(4...12))
+    var fixtures: [GeneratedFixture]
 
     @Guide(description: "One short teaching note about an industry lighting term used in this look")
     var explanation: GeneratedExplanation
 
     @Generable
     struct GeneratedExplanation {
-        @Guide(description: "Industry term being taught, e.g. 'Intensity' or 'Background Wash'")
+        @Guide(description: "Industry term being taught, e.g. 'Wash', 'Gobo', 'Key Light', or 'Color Temperature'")
         var term: String
 
         @Guide(description: "Beginner-friendly plain-language explanation of the term")
         var plainText: String
 
-        @Guide(description: "One sentence summarizing what this look changed")
+        @Guide(description: "One sentence summarizing what this look does")
         var actionSummary: String
     }
 
+    /// One cue in the ordered show — just its display label (its fixture states live on each fixture's
+    /// `states` array at the matching index).
     @Generable
     struct GeneratedCue {
-        @Guide(description: "Two to four fixture groups lighting the stage for this cue", .count(2...4))
-        var fixtureGroups: [GeneratedFixture]
+        @Guide(description: "Short human label for this cue, e.g. 'Opening', 'Build', 'Chorus', 'Finale'")
+        var name: String
+    }
+
+    /// One fixture in the rig: its type and mounting zone, plus a `states` array with one entry per cue
+    /// (same order as the cue list).
+    @Generable
+    struct GeneratedFixture {
+        @Guide(description: "Short label, e.g. 'Front Fresnel L' or 'Upstage Moving Head 2'")
+        var name: String
+
+        @Guide(description: "Fixture type")
+        var type: GeneratedFixtureType
+
+        @Guide(description: "Where the fixture is mounted on the stage")
+        var zone: GeneratedZone
+
+        @Guide(description: "This fixture's state in each cue, IN THE SAME ORDER as the cue list: states[0] is the first cue, states[1] the second, and so on. Provide exactly one state per cue.", .count(2...5))
+        var states: [GeneratedFixtureState]
     }
 
     @Generable
-    struct GeneratedFixture {
-        @Guide(description: "Stable lowercase identifier, e.g. 'front_wash' or 'background_wash'")
-        var id: String
-
-        @Guide(description: "Display name, e.g. 'Front Wash'")
-        var name: String
-
-        @Guide(description: "Fixture role: wash, spot, frontLight (performer-facing), or backgroundWash")
-        var role: GeneratedRole
-
-        @Guide(description: "Stage zone the fixture covers: stageFront, stageBack, stageLeft, stageRight, or fullStage")
-        var zone: GeneratedZone
-
-        @Guide(description: "Whether this fixture group is on for this cue")
+    struct GeneratedFixtureState {
+        @Guide(description: "Whether this fixture is on in this cue")
         var enabled: Bool
 
         @Guide(description: "Brightness from 0.0 (off) to 1.0 (full)", .range(0.0...1.0))
         var intensity: Double
 
-        @Guide(description: "RGB hex color string like #FFD1A3")
+        @Guide(description: "RGB hex color as exactly six hex digits like #FFD1A3 — no trailing comma or extra characters")
         var colorHex: String
 
-        @Guide(description: "Optional projected light pattern (gobo) for this fixture: none for a plain beam, breakup (dappled foliage), stripes (slats), stars (starfield), or grid (window). Use none unless the request clearly asks for a pattern.")
+        @Guide(description: "Beam spread in degrees: 5 (tight beam) to 120 (wide flood)", .range(5.0...120.0))
+        var beamAngleDegrees: Double
+
+        @Guide(description: "Optional projected pattern (gobo): none for a plain beam, breakup (dappled foliage), stripes (slats), stars (starfield), or grid (window). Use none unless the request clearly calls for a pattern.")
         var gobo: GeneratedGobo
     }
 
     @Generable
-    enum GeneratedRole {
-        case wash
-        case spot
-        case frontLight
-        case backgroundWash
+    enum GeneratedFixtureType {
+        case frontFresnel
+        case ledFresnel
+        case spotBarrel
+        case washBar
+        case backgroundBatten
+        case movingHeadBeam
+        case ledStrobeBar
+        case ledPar
+        case audienceBlinder
+        case laser
+    }
+
+    @Generable
+    enum GeneratedZone {
+        case frontOfHouse
+        case upstageTruss
+        case sideStageLeft
+        case sideStageRight
+        case floor
     }
 
     @Generable
@@ -228,25 +291,31 @@ struct GeneratedLightingLook {
         case stars
         case grid
     }
-
-    @Generable
-    enum GeneratedZone {
-        case stageFront
-        case stageBack
-        case stageLeft
-        case stageRight
-        case fullStage
-    }
 }
 
 extension GeneratedLightingLook {
-    /// Maps the constrained model output into the testable Foundation-only draft.
-    var draft: LightingLookDraft {
-        LightingLookDraft(
+    /// Maps the dynamic model output into a validated multi-cue `LightingLook`. The rig is defined once;
+    /// for each cue (in playback order) every fixture contributes its state at the matching index, so the
+    /// same physical fixture (stable `fixture_<i>` id) stays addressable across the whole show. Counts are
+    /// reconciled defensively — a fixture that supplied fewer states than there are cues reuses its last
+    /// state; extra states are ignored — so a slightly off-count generation still assembles a valid show.
+    func makeValidatedLook() throws -> LightingLook {
+        let cueCount = max(cues.count, 1)
+        let draftCues: [LightingLookDraft.Cue] = (0..<cueCount).map { cueIndex in
+            let rawName = cueIndex < cues.count ? cues[cueIndex].name : ""
+            let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? "Cue \(cueIndex + 1)"
+                : rawName
+            let cueFixtures = fixtures.enumerated().map { index, fixture in
+                fixture.draftFixture(index: index, cueIndex: cueIndex)
+            }
+            return LightingLookDraft.Cue(id: "cue_\(cueIndex)", name: name, fixtures: cueFixtures)
+        }
+
+        return try LightingLookDraft.makeValidatedLook(
             lookName: lookName,
             mood: mood,
-            openingFixtures: openingCue.fixtureGroups.map { $0.draftFixture },
-            highlightFixtures: highlightCue.fixtureGroups.map { $0.draftFixture },
+            cues: draftCues,
             explanationTerm: explanation.term,
             explanationPlainText: explanation.plainText,
             explanationActionSummary: explanation.actionSummary
@@ -255,17 +324,62 @@ extension GeneratedLightingLook {
 }
 
 private extension GeneratedLightingLook.GeneratedFixture {
-    var draftFixture: LightingLookDraft.Fixture {
-        LightingLookDraft.Fixture(
-            id: id,
-            name: name,
-            role: role.fixtureRole,
+    /// This fixture's draft entry for `cueIndex`, picking the matching `states` entry (clamped: a short
+    /// `states` array reuses its last entry). Guards an empty `states` (impossible under the
+    /// `.count(2...5)` guide, but a degenerate decode must never crash) with an off state.
+    func draftFixture(index: Int, cueIndex: Int) -> LightingLookDraft.Fixture {
+        let model = type.visualModel
+        let resolvedName = name.isEmpty ? "燈具 \(index + 1)" : name
+
+        guard !states.isEmpty else {
+            return LightingLookDraft.Fixture(
+                id: "fixture_\(index)", name: resolvedName, role: model.derivedRole,
+                zone: zone.stageZone, enabled: false, intensity: 0, colorHex: "#000000", model: model
+            )
+        }
+
+        let state = states[min(max(cueIndex, 0), states.count - 1)]
+        return LightingLookDraft.Fixture(
+            id: "fixture_\(index)",
+            name: resolvedName,
+            role: model.derivedRole,
             zone: zone.stageZone,
-            enabled: enabled,
-            intensity: intensity,
-            colorHex: colorHex,
-            gobo: gobo.goboPattern
+            enabled: state.enabled,
+            intensity: state.intensity,
+            colorHex: state.colorHex,
+            gobo: state.gobo.goboPattern,
+            model: model,
+            beamAngleDegrees: state.beamAngleDegrees
         )
+    }
+}
+
+private extension GeneratedLightingLook.GeneratedFixtureType {
+    var visualModel: LightingFixtureVisualModel {
+        switch self {
+        case .frontFresnel: return .frontFresnel
+        case .ledFresnel: return .ledFresnel
+        case .spotBarrel: return .spotBarrel
+        case .washBar: return .washBar
+        case .backgroundBatten: return .backgroundBatten
+        case .movingHeadBeam: return .movingHeadBeam
+        case .ledStrobeBar: return .ledStrobeBar
+        case .ledPar: return .ledPar
+        case .audienceBlinder: return .audienceBlinder
+        case .laser: return .laser
+        }
+    }
+}
+
+private extension GeneratedLightingLook.GeneratedZone {
+    var stageZone: StageZone {
+        switch self {
+        case .frontOfHouse: return .stageFront
+        case .upstageTruss: return .stageBack
+        case .sideStageLeft: return .stageLeft
+        case .sideStageRight: return .stageRight
+        case .floor: return .fullStage
+        }
     }
 }
 
@@ -282,26 +396,4 @@ private extension GeneratedLightingLook.GeneratedGobo {
     }
 }
 
-private extension GeneratedLightingLook.GeneratedRole {
-    var fixtureRole: FixtureRole {
-        switch self {
-        case .wash: return .wash
-        case .spot: return .spot
-        case .frontLight: return .frontLight
-        case .backgroundWash: return .backgroundWash
-        }
-    }
-}
-
-private extension GeneratedLightingLook.GeneratedZone {
-    var stageZone: StageZone {
-        switch self {
-        case .stageFront: return .stageFront
-        case .stageBack: return .stageBack
-        case .stageLeft: return .stageLeft
-        case .stageRight: return .stageRight
-        case .fullStage: return .fullStage
-        }
-    }
-}
 #endif

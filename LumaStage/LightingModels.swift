@@ -17,12 +17,18 @@ enum FixtureRole: String, Codable, CaseIterable {
     case frontLight
     case backgroundWash
 
-    /// Roles the visionOS renderer currently realizes as real spotlights (and can therefore
-    /// project a gobo through). The other roles aren't rendered yet, so a gobo on them would be
-    /// a silent no-op — `LightingLookDraft` clears gobos on non-rendering roles so persisted
-    /// state never claims a projection that won't appear.
-    var rendersProjectedGobo: Bool {
+    /// Roles the visionOS renderer currently realizes as real spotlights. The other roles
+    /// (`wash`/`spot`) validate fine but are NOT drawn on stage, so a look made only of them changes
+    /// nothing on screen — the relight debug panel flags this via `RelightDebugSnapshot`.
+    var isRenderedAsSpotlight: Bool {
         self == .frontLight || self == .backgroundWash
+    }
+
+    /// Roles the renderer realizes as real spotlights (and can therefore project a gobo through). The
+    /// other roles aren't rendered, so a gobo on them would be a silent no-op — `LightingLookDraft`
+    /// clears gobos on non-rendering roles so persisted state never claims a projection that won't appear.
+    var rendersProjectedGobo: Bool {
+        isRenderedAsSpotlight
     }
 }
 
@@ -68,7 +74,9 @@ struct CueTransition: Codable, Equatable {
     var duration: Double
     var easing: String
 
-    static let mvpDefault = CueTransition(duration: 1.2, easing: "easeInOut")
+    // Linear (not eased) over a deliberate 2.5s, so a look change reads as a real stage fade —
+    // a steady cross-fade rather than a quick snap. `ImmersiveView.animation(for:)` maps `easing`.
+    static let mvpDefault = CueTransition(duration: 2.5, easing: "linear")
 }
 
 struct FixtureColor: Codable, Equatable {
@@ -84,14 +92,30 @@ struct FixtureColor: Codable, Equatable {
     }
 
     static func normalizedHex(_ value: String) -> String? {
+        // Be lenient with on-device-model output, which sometimes appends stray punctuation to a colour
+        // (observed in the wild: "#FFD1A3," — the model echoed the prompt's example *with* its comma) or
+        // wraps the value in prose. Locate the first "#", read the run of hex digits that follows, and
+        // accept it only if that run is exactly six (an #RRGGBB triple). Trailing non-hex characters are
+        // ignored; genuinely malformed values (no "#", too few or too many digits) still fail so the
+        // validators keep their teeth.
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.count == 7, trimmed.first == "#" else {
+        guard let hashIndex = trimmed.firstIndex(of: "#") else {
             return nil
         }
 
-        let hex = String(trimmed.dropFirst())
         let allowed = CharacterSet(charactersIn: "0123456789abcdefABCDEF")
-        guard hex.unicodeScalars.allSatisfy({ allowed.contains($0) }) else {
+        var hex = ""
+        for scalar in trimmed[trimmed.index(after: hashIndex)...].unicodeScalars {
+            guard allowed.contains(scalar) else {
+                break   // stop at the first non-hex character (stray comma, space, prose, …)
+            }
+            hex.unicodeScalars.append(scalar)
+            if hex.count > 6 {
+                break   // longer than an #RRGGBB run — reject below rather than silently truncating
+            }
+        }
+
+        guard hex.count == 6 else {
             return nil
         }
 
@@ -199,6 +223,63 @@ struct FixtureFineControl: Codable, Equatable {
     }
 }
 
+/// The area a fixture is aimed at — a controlled vocabulary of stage targets (the JSON `target`
+/// field). Encodes as the snake_case string the JSON uses (e.g. `center_stage`).
+enum FixtureTarget: String, Codable, CaseIterable {
+    case centerStage = "center_stage"
+    case upstage
+    case downstage
+    case stageLeft = "stage_left"
+    case stageRight = "stage_right"
+    case audience
+    case fullStage = "full_stage"
+
+    var displayName: String {
+        switch self {
+        case .centerStage: return "舞台中央"
+        case .upstage: return "舞台後方"
+        case .downstage: return "舞台前緣"
+        case .stageLeft: return "舞台左側"
+        case .stageRight: return "舞台右側"
+        case .audience: return "觀眾席"
+        case .fullStage: return "整個舞台"
+        }
+    }
+}
+
+/// A fixture's real-world DMX patch (the JSON `dmx` block): the universe + start address a physical
+/// console uses, and which channel drives each control parameter. Output/integration only — the
+/// virtual digital-twin renderer ignores it. Validated by `validate()`; reused over persistence and
+/// the iPad sync via `Codable`.
+struct DMXPatch: Codable, Equatable {
+    var universe: Int
+    var address: Int
+    var channels: ChannelMap
+
+    /// One DMX channel per control parameter (matching the JSON `channels` map).
+    struct ChannelMap: Codable, Equatable {
+        var dimmer: Int
+        var red: Int
+        var green: Int
+        var blue: Int
+    }
+
+    func validate() throws {
+        guard universe >= 1 else {
+            throw ValidationError.invalidDMXValue("universe", universe)
+        }
+        guard (1...512).contains(address) else {
+            throw ValidationError.invalidDMXValue("address", address)
+        }
+        for (name, channel) in [
+            ("dimmer", channels.dimmer), ("red", channels.red),
+            ("green", channels.green), ("blue", channels.blue)
+        ] where !(1...512).contains(channel) {
+            throw ValidationError.invalidDMXValue(name, channel)
+        }
+    }
+}
+
 struct FixtureGroup: Codable, Equatable, Identifiable {
     var id: String
     var name: String
@@ -209,9 +290,29 @@ struct FixtureGroup: Codable, Equatable, Identifiable {
     var color: FixtureColor
     var fineControl: FixtureFineControl? = nil
     var gobo: GoboPattern? = nil
+    /// The physical fixture type the renderer instantiates as geometry. Optional + back-compat:
+    /// looks saved before dynamic rigs (and the fixed 2-role MVP) decode it as nil and fall back to
+    /// `renderModel`, which derives a sensible model from `role`/`zone`.
+    var model: LightingFixtureVisualModel? = nil
+
+    /// The area this fixture is aimed at — a human-authored target label (the JSON `target`), distinct
+    /// from the numeric `aim` the renderer computes from `zone`. Optional metadata carried through
+    /// persistence + the iPad sync; not yet used to drive the on-stage aim.
+    var target: FixtureTarget? = nil
+
+    /// Real-world DMX patch (the JSON `dmx` block) — how a physical console addresses this fixture.
+    /// Output/integration only: the virtual twin ignores it; it's here so a look can later drive real
+    /// fixtures (Art-Net / sACN) or export a patch sheet. Optional + back-compat (old looks decode nil).
+    var dmx: DMXPatch? = nil
 
     var effectiveFineControl: FixtureFineControl {
         fineControl ?? .default(role: role, zone: zone)
+    }
+
+    /// The visual model the renderer should build for this fixture — the explicit `model` if set,
+    /// otherwise derived from the role/zone so legacy 2-role looks still render real geometry.
+    var renderModel: LightingFixtureVisualModel {
+        model ?? LightingFixtureVisualModel.derived(role: role, zone: zone)
     }
 }
 
@@ -224,9 +325,9 @@ struct LightingCue: Codable, Equatable, Identifiable {
     var localizedDisplayName: String {
         switch name {
         case "Opening":
-            return "Opening"
+            return "開場"
         case "Highlight":
-            return "Highlight"
+            return "重點"
         default:
             return name
         }
@@ -238,6 +339,207 @@ struct LightingCue: Codable, Equatable, Identifiable {
         }
 
         return fixture
+    }
+}
+
+/// A read-only summary of how the current cue's fixtures map onto the immersive renderer — the data
+/// behind the in-app relight debug panel. Pure logic so the panel view stays thin and this stays
+/// smoke-tested. `isRendered` flags fixtures whose role the scene does NOT draw (`wash`/`spot`), so an
+/// all-non-rendered look reads as "won't show on stage" at a glance.
+struct RelightDebugSnapshot: Equatable {
+    struct Row: Equatable, Identifiable {
+        var id: String { fixtureId }
+        var fixtureId: String
+        var name: String
+        var role: FixtureRole
+        var hex: String
+        var intensityPercent: Int
+        var beamDegrees: Int
+        var gobo: GoboPattern?
+        var isRendered: Bool
+    }
+
+    var cueId: String
+    var cueName: String
+    var rows: [Row]
+
+    /// How many fixtures will actually light the stage (rendered roles).
+    var renderedCount: Int { rows.filter(\.isRendered).count }
+
+    static func make(from cue: LightingCue) -> RelightDebugSnapshot {
+        RelightDebugSnapshot(
+            cueId: cue.id,
+            cueName: cue.localizedDisplayName,
+            rows: cue.fixtureGroups.map { fixture in
+                Row(
+                    fixtureId: fixture.id,
+                    name: fixture.name,
+                    role: fixture.role,
+                    hex: fixture.color.value,
+                    intensityPercent: Int((fixture.intensity * 100).rounded()),
+                    beamDegrees: Int(fixture.effectiveFineControl.beamAngleDegrees.rounded()),
+                    gobo: fixture.gobo,
+                    // Every fixture in the dynamic rig is rendered as a real spotlight now.
+                    isRendered: true
+                )
+            }
+        )
+    }
+}
+
+// MARK: - Deterministic single-light control
+
+/// The displayed name for the Nth addressable light. Lights are numbered 1-based in the order they
+/// appear in the cue's `fixtureGroups`, so "Light 3" is the third fixture — dynamic over any rig size.
+enum StageLightLabel {
+    static func displayName(number: Int) -> String { "Light \(number)" }
+}
+
+/// A per-light manual override layered ON TOP of the cue's group values — the deterministic control
+/// layer (vs. the generative cue). Each field is optional: nil means "follow the cue". Overrides
+/// persist across AI generations until explicitly cleared, so manual single-light tweaks stay on top
+/// of new looks.
+struct LightOverride: Equatable {
+    var isOff: Bool = false
+    var colorHex: String? = nil
+    var intensity: Double? = nil
+
+    /// Whether this override still changes anything (else it can be dropped so the light follows the cue).
+    var isActive: Bool { isOff || colorHex != nil || intensity != nil }
+
+    /// Final (color, intensity) for the light given the cue group's values it sits on top of.
+    func resolved(cueColor: String, cueIntensity: Double) -> (color: String, intensity: Double) {
+        let color = colorHex ?? cueColor
+        if isOff { return (color, 0) }
+        return (color, intensity ?? cueIntensity)
+    }
+}
+
+/// A deterministic single-light command parsed from a typed/spoken phrase. When `parse` returns a
+/// command the app applies it directly (no AI generation) — instant and predictable, the Action
+/// Phrase model. A `nil` result falls through to generative AI look design.
+enum LightCommand: Equatable {
+    case close(Int)
+    case open(Int)
+    case setColor(Int, hex: String)
+    case setIntensity(Int, fraction: Double)
+    case allOff
+    case resetAll
+
+    /// The light number a single-light command targets (nil for the global `allOff`/`resetAll`).
+    var targetLightNumber: Int? {
+        switch self {
+        case .close(let number), .open(let number): return number
+        case .setColor(let number, _), .setIntensity(let number, _): return number
+        case .allOff, .resetAll: return nil
+        }
+    }
+
+    /// Common color names → hex, so "set light 1 to blue" resolves without the user typing a hex.
+    static let colorNames: [String: String] = [
+        "red": "#FF0000", "green": "#00FF00", "blue": "#0000FF", "yellow": "#FFFF00",
+        "orange": "#FF7A00", "purple": "#8A2BE2", "violet": "#8A2BE2", "magenta": "#FF00FF",
+        "pink": "#FF6FB5", "cyan": "#00FFFF", "teal": "#1FBFB8", "white": "#FFFFFF",
+        "amber": "#FFBF00", "gold": "#FFD700", "lavender": "#B79CED", "warm": "#FFE4C2"
+    ]
+
+    static func parse(_ raw: String) -> LightCommand? {
+        let text = raw.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return nil }
+
+        let words = Set(text.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init))
+
+        // Global commands (no specific light number needed).
+        if text.contains("blackout") || text.contains("all off") || text.contains("lights off")
+            || text.contains("turn off all") || text.contains("kill all") {
+            return .allOff
+        }
+        if text.contains("all on") || text.contains("lights on") || text.contains("turn on all")
+            || text.contains("reset lights") || text.contains("reset all") || text.contains("clear lights") {
+            return .resetAll
+        }
+
+        // Everything else targets one numbered light. The rig size is dynamic, so any number ≥ 1
+        // parses here; `AppModel.applyLightCommand` validates it against the current fixture count.
+        guard let number = lightNumber(in: text), number >= 1 else {
+            return nil
+        }
+
+        if let hex = colorHex(in: text, words: words) {
+            return .setColor(number, hex: hex)
+        }
+        if let fraction = intensityFraction(in: text) {
+            return .setIntensity(number, fraction: fraction)
+        }
+        if text.contains("turn off") || text.contains("switch off") || text.contains("shut off")
+            || words.contains("close") || words.contains("off") || words.contains("kill") {
+            return .close(number)
+        }
+        if text.contains("turn on") || text.contains("switch on")
+            || words.contains("open") || words.contains("on") || words.contains("restore") {
+            return .open(number)
+        }
+        return nil
+    }
+
+    /// The 1–4 light number that follows the word "light" (digit or word form), e.g. "the light 2".
+    private static func lightNumber(in text: String) -> Int? {
+        let tokens = text.split(whereSeparator: { $0 == " " }).map(String.init)
+        for (index, token) in tokens.enumerated() where token.hasPrefix("light") {
+            // "light2" stuck together.
+            if token.count > 5, let n = numberToken(String(token.dropFirst(5))) { return n }
+            if index + 1 < tokens.count, let n = numberToken(tokens[index + 1]) { return n }
+        }
+        return nil
+    }
+
+    private static func numberToken(_ token: String) -> Int? {
+        let cleaned = token.trimmingCharacters(in: CharacterSet(charactersIn: ".,!?:;#"))
+        if let n = Int(cleaned) { return n }
+        switch cleaned {
+        case "one", "first": return 1
+        case "two", "second": return 2
+        case "three", "third": return 3
+        case "four", "fourth": return 4
+        default: return nil
+        }
+    }
+
+    private static func colorHex(in text: String, words: Set<String>) -> String? {
+        // Explicit hex like #RRGGBB.
+        if let range = text.range(of: "#"), text.distance(from: range.lowerBound, to: text.endIndex) >= 7 {
+            let hex = String(text[range.lowerBound...].prefix(7))
+            if FixtureColor.normalizedHex(hex) != nil { return hex.uppercased() }
+        }
+        // "warm white" reads as warm.
+        if text.contains("warm white") || text.contains("warm") { return colorNames["warm"] }
+        for (name, hex) in colorNames where words.contains(name) {
+            return hex
+        }
+        return nil
+    }
+
+    /// A brightness percentage, from "...30%", "...30 percent", or "dim/brightness ... 30".
+    private static func intensityFraction(in text: String) -> Double? {
+        let hasPercentMarker = text.contains("%") || text.contains("percent")
+        let mentionsBrightness = text.contains("dim") || text.contains("bright") || text.contains("intensity") || text.contains("level")
+        guard hasPercentMarker || mentionsBrightness else { return nil }
+
+        // Pull the first standalone number that isn't the light index right after "light".
+        let tokens = text.split(whereSeparator: { !$0.isNumber && $0 != "." }).map(String.init)
+        // Reconstruct numbers while skipping the "light N" index.
+        var lightIndexValue: Int? = lightNumber(in: text)
+        for token in tokens {
+            guard let value = Double(token) else { continue }
+            if let li = lightIndexValue, Int(value) == li {
+                // Likely the light number itself (e.g. the "9" in "light 9") — skip once.
+                lightIndexValue = nil
+                continue
+            }
+            let fraction = value > 1 ? value / 100.0 : value
+            return min(max(fraction, 0), 1)
+        }
+        return nil
     }
 }
 
@@ -261,8 +563,8 @@ struct LightingLook: Codable, Equatable {
         LightingLook(
             schemaVersion: "1.0",
             intent: .generateLook,
-            lookName: "Warm Opening Lighting",
-            mood: "Warm, welcoming, student showcase",
+            lookName: "溫暖開場燈光",
+            mood: "溫暖、熱情、學生展演",
             ambient: AmbientState(
                 preset: .standardNight,
                 level: 0.35,
@@ -277,7 +579,16 @@ struct LightingLook: Codable, Equatable {
                     fixtureGroups: [
                         FixtureGroup(
                             id: "front_wash",
-                            name: "Front Wash",
+                            name: "前方泛光（左）",
+                            role: .frontLight,
+                            zone: .stageFront,
+                            enabled: true,
+                            intensity: 0.6,
+                            color: FixtureColor(mode: .rgb, value: "#FFD1A3")
+                        ),
+                        FixtureGroup(
+                            id: "front_wash_right",
+                            name: "前方泛光（右）",
                             role: .frontLight,
                             zone: .stageFront,
                             enabled: true,
@@ -286,12 +597,22 @@ struct LightingLook: Codable, Equatable {
                         ),
                         FixtureGroup(
                             id: "background_wash",
-                            name: "Background Wash",
+                            name: "背景泛光",
                             role: .backgroundWash,
                             zone: .stageBack,
                             enabled: true,
                             intensity: 0.75,
                             color: FixtureColor(mode: .rgb, value: "#4FA8FF")
+                        ),
+                        FixtureGroup(
+                            id: "laser_fan",
+                            name: "雷射扇",
+                            role: .spot,
+                            zone: .stageBack,
+                            enabled: true,
+                            intensity: 0.7,
+                            color: FixtureColor(mode: .rgb, value: "#26FF6A"),
+                            model: .laser
                         )
                     ]
                 ),
@@ -302,7 +623,16 @@ struct LightingLook: Codable, Equatable {
                     fixtureGroups: [
                         FixtureGroup(
                             id: "front_wash",
-                            name: "Front Wash",
+                            name: "前方泛光（左）",
+                            role: .frontLight,
+                            zone: .stageFront,
+                            enabled: true,
+                            intensity: 0.75,
+                            color: FixtureColor(mode: .rgb, value: "#FFE0B8")
+                        ),
+                        FixtureGroup(
+                            id: "front_wash_right",
+                            name: "前方泛光（右）",
                             role: .frontLight,
                             zone: .stageFront,
                             enabled: true,
@@ -311,20 +641,115 @@ struct LightingLook: Codable, Equatable {
                         ),
                         FixtureGroup(
                             id: "background_wash",
-                            name: "Background Wash",
+                            name: "背景泛光",
                             role: .backgroundWash,
                             zone: .stageBack,
                             enabled: true,
                             intensity: 0.9,
                             color: FixtureColor(mode: .rgb, value: "#2F6BFF")
+                        ),
+                        FixtureGroup(
+                            id: "laser_fan",
+                            name: "雷射扇",
+                            role: .spot,
+                            zone: .stageBack,
+                            enabled: true,
+                            intensity: 0.95,
+                            color: FixtureColor(mode: .rgb, value: "#26FF6A"),
+                            model: .laser
                         )
                     ]
                 )
             ],
             explanation: LightingExplanation(
-                term: "Intensity",
-                plainText: "Intensity describes how strong the light output is. A 60% front light keeps performers visible without overpowering the background wash.",
-                actionSummary: "Generated Opening and Highlight cues with warm front light and cool background wash contrast."
+                term: "亮度",
+                plainText: "亮度描述燈光輸出的強度。60% 的前光能讓表演者清晰可見，同時不會壓過背景泛光。",
+                actionSummary: "已生成開場與重點場景：溫暖前光、冷色背景泛光，並加入綠色雷射光束在空中點題。"
+            )
+        )
+    }
+
+    /// A richer multi-fixture demo (key fresnels, moving heads, PARs, a strobe, an audience blinder) for
+    /// previews and the iPad panel's offline mock. Exercises the dynamic rig with diverse fixture types,
+    /// colors, DMX patches, and aim targets; validates like any generated look. Both cues carry the same
+    /// fixture ids in the same order (rig identity), differing only in per-cue state.
+    static func showcaseDemo() -> LightingLook {
+        struct Spec {
+            let id: String
+            let name: String
+            let model: LightingFixtureVisualModel
+            let zone: StageZone
+            let target: FixtureTarget
+            let openingHex: String
+            let highlightHex: String
+            let openingIntensity: Double
+            let highlightIntensity: Double
+            let beam: Double
+            let pan: Double
+            let tilt: Double
+        }
+
+        let specs: [Spec] = [
+            Spec(id: "key_l", name: "主光柔光燈（左）", model: .frontFresnel, zone: .stageFront, target: .downstage,
+                 openingHex: "#FFE6C2", highlightHex: "#FFF1DC", openingIntensity: 0.55, highlightIntensity: 0.80, beam: 40, pan: -8, tilt: -35),
+            Spec(id: "key_r", name: "主光柔光燈（右）", model: .frontFresnel, zone: .stageFront, target: .downstage,
+                 openingHex: "#FFE6C2", highlightHex: "#FFF1DC", openingIntensity: 0.55, highlightIntensity: 0.80, beam: 40, pan: 8, tilt: -35),
+            Spec(id: "mh_l", name: "搖頭光束燈（左）", model: .movingHeadBeam, zone: .stageBack, target: .centerStage,
+                 openingHex: "#2E6BFF", highlightHex: "#1E54FF", openingIntensity: 0.40, highlightIntensity: 0.95, beam: 14, pan: -20, tilt: -18),
+            Spec(id: "mh_r", name: "搖頭光束燈（右）", model: .movingHeadBeam, zone: .stageBack, target: .centerStage,
+                 openingHex: "#A24BFF", highlightHex: "#FF2D9E", openingIntensity: 0.40, highlightIntensity: 0.95, beam: 14, pan: 20, tilt: -18),
+            Spec(id: "par_l", name: "LED PAR（左）", model: .ledPar, zone: .stageLeft, target: .stageLeft,
+                 openingHex: "#27D7E0", highlightHex: "#33E07A", openingIntensity: 0.50, highlightIntensity: 0.85, beam: 30, pan: 0, tilt: -22),
+            Spec(id: "par_r", name: "LED PAR（右）", model: .ledPar, zone: .stageRight, target: .stageRight,
+                 openingHex: "#33E07A", highlightHex: "#27D7E0", openingIntensity: 0.50, highlightIntensity: 0.85, beam: 30, pan: 0, tilt: -22),
+            Spec(id: "strobe", name: "LED 頻閃燈條", model: .ledStrobeBar, zone: .stageBack, target: .fullStage,
+                 openingHex: "#FFFFFF", highlightHex: "#FFFFFF", openingIntensity: 0.0, highlightIntensity: 0.70, beam: 60, pan: 0, tilt: -10),
+            Spec(id: "blinder", name: "觀眾爆閃燈", model: .audienceBlinder, zone: .stageFront, target: .audience,
+                 openingHex: "#FFB46B", highlightHex: "#FFD9A8", openingIntensity: 0.0, highlightIntensity: 0.60, beam: 90, pan: 0, tilt: 10),
+            Spec(id: "laser", name: "雷射燈", model: .laser, zone: .stageBack, target: .fullStage,
+                 openingHex: "#22FF6A", highlightHex: "#2BFF88", openingIntensity: 0.0, highlightIntensity: 0.95, beam: 6, pan: 0, tilt: -6)
+        ]
+
+        func fixtures(highlight: Bool) -> [FixtureGroup] {
+            specs.enumerated().map { index, spec in
+                let role = spec.model.derivedRole
+                var fineControl = FixtureFineControl.default(role: role, zone: spec.zone)
+                fineControl.beamAngleDegrees = spec.beam
+                fineControl.panDegrees = spec.pan
+                fineControl.tiltDegrees = spec.tilt
+                let base = index * 4 + 1   // dimmer + RGB = 4 channels per fixture, all on universe 1
+                return FixtureGroup(
+                    id: spec.id,
+                    name: spec.name,
+                    role: role,
+                    zone: spec.zone,
+                    enabled: true,
+                    intensity: highlight ? spec.highlightIntensity : spec.openingIntensity,
+                    color: FixtureColor(mode: .rgb, value: highlight ? spec.highlightHex : spec.openingHex),
+                    fineControl: fineControl,
+                    model: spec.model,
+                    target: spec.target,
+                    dmx: DMXPatch(universe: 1, address: base,
+                                  channels: .init(dimmer: base, red: base + 1, green: base + 2, blue: base + 3))
+                )
+            }
+        }
+
+        return LightingLook(
+            schemaVersion: "1.0",
+            intent: .generateLook,
+            lookName: "舞團演出 Showcase",
+            mood: "高能量、彩色、舞團收尾",
+            ambient: AmbientState(preset: .standardNight, level: 0.30, colorTemperature: 4200),
+            selectedCueId: "cue_highlight",
+            cues: [
+                LightingCue(id: "cue_opening", name: "Opening", transition: .mvpDefault, fixtureGroups: fixtures(highlight: false)),
+                LightingCue(id: "cue_highlight", name: "Highlight", transition: .mvpDefault, fixtureGroups: fixtures(highlight: true))
+            ],
+            explanation: LightingExplanation(
+                term: "Key Light",
+                plainText: "主光（Key Light）是打亮表演者的主要光源；其餘燈具圍繞它堆疊顏色與動態，營造層次。",
+                actionSummary: "已生成八支燈具的舞團 Showcase：暖色主光、冷暖對比的搖頭光束與 PAR、頻閃與觀眾爆閃點題。"
             )
         )
     }
@@ -346,12 +771,16 @@ struct LightingLook: Codable, Equatable {
             throw ValidationError.unsupportedAmbientPreset(ambient.preset.rawValue)
         }
 
-        let cueIds = Set(cues.map(\.id))
-        guard cueIds.contains("cue_opening"), cueIds.contains("cue_highlight") else {
+        // A lighting look is a cue *stack*: it must carry at least one cue, and the selected cue must
+        // resolve. (Earlier the schema hard-pinned exactly `cue_opening` + `cue_highlight`; the rig is
+        // now a growable, ordered sequence — templates still ship those two named cues, AI generates a
+        // multi-cue show, and the user can add/remove cues — so the invariant is "non-empty + the
+        // selection resolves", not two fixed ids. See `StageState`'s cue-stack ops and `goToNextCue`.)
+        guard !cues.isEmpty else {
             throw ValidationError.missingRequiredCue
         }
 
-        guard cueIds.contains(selectedCueId) else {
+        guard cues.contains(where: { $0.id == selectedCueId }) else {
             throw ValidationError.missingCue(selectedCueId)
         }
 
@@ -378,6 +807,10 @@ struct LightingLook: Codable, Equatable {
         if let fineControl = fixture.fineControl {
             try fineControl.validate()
         }
+
+        if let dmx = fixture.dmx {
+            try dmx.validate()
+        }
     }
 }
 
@@ -398,45 +831,45 @@ struct LumaStageProject: Codable, Equatable, Identifiable {
         [
             LumaStageProject(
                 id: "project_campus_music_night",
-                name: "Campus Music Night",
-                venueDescription: "Outdoor student stage",
-                eventType: "Student Performance",
-                lastEditedDescription: "Demo Project",
+                name: "校園音樂之夜",
+                venueDescription: "戶外學生舞台",
+                eventType: "學生表演",
+                lastEditedDescription: "示範專案",
                 stageLayout: .defaultStudentOutdoor(),
                 lightingLook: look(
-                    name: "Warm Opening Lighting",
-                    mood: "Warm, welcoming, student showcase"
+                    name: "溫暖開場燈光",
+                    mood: "溫暖、熱情、學生展演"
                 )
             ),
             LumaStageProject(
                 id: "project_club_showcase",
-                name: "Club Showcase",
-                venueDescription: "Outdoor truss stage",
-                eventType: "Club Presentation",
-                lastEditedDescription: "Ready to Preview",
+                name: "社團展演",
+                venueDescription: "戶外桁架舞台",
+                eventType: "社團演出",
+                lastEditedDescription: "可預覽",
                 stageLayout: .defaultStudentOutdoor(),
                 lightingLook: look(
-                    name: "Cool Showcase Lighting",
-                    mood: "Cool, focused, student showcase"
+                    name: "冷調展演燈光",
+                    mood: "冷調、聚焦、學生展演"
                 )
             ),
             LumaStageProject(
                 id: "project_graduation_party",
-                name: "Graduation Party",
-                venueDescription: "Night outdoor stage",
-                eventType: "Celebration",
-                lastEditedDescription: "Draft Lighting",
+                name: "畢業派對",
+                venueDescription: "夜間戶外舞台",
+                eventType: "慶祝活動",
+                lastEditedDescription: "燈光草稿",
                 stageLayout: .defaultStudentOutdoor(),
                 lightingLook: look(
-                    name: "Party Highlight Lighting",
-                    mood: "Bright, celebratory, outdoor event"
+                    name: "派對重點燈光",
+                    mood: "明亮、歡慶、戶外活動"
                 )
             )
         ]
     }
 
     static func newProject(index: Int) -> LumaStageProject {
-        newProject(index: index, template: .blank)
+        newProject(index: index, template: .campusMusic)
     }
 
     static func newProject(index: Int, template: ProjectCreationTemplate.Kind) -> LumaStageProject {
@@ -447,7 +880,7 @@ struct LumaStageProject: Codable, Equatable, Identifiable {
             name: "\(template.projectName) \(index)",
             venueDescription: template.venueDescription,
             eventType: template.eventType,
-            lastEditedDescription: "New Project",
+            lastEditedDescription: "新專案",
             stageLayout: .defaultStudentOutdoor(),
             lightingLook: look(name: template.lookName, mood: template.mood)
         )
@@ -463,10 +896,7 @@ struct LumaStageProject: Codable, Equatable, Identifiable {
 
 struct ProjectCreationTemplate: Codable, Equatable, Identifiable {
     enum Kind: String, CaseIterable, Codable {
-        case blank
         case campusMusic
-        case clubShowcase
-        case graduationParty
     }
 
     enum VisualStyle: String, Codable, Hashable {
@@ -491,56 +921,17 @@ struct ProjectCreationTemplate: Codable, Equatable, Identifiable {
 
     static let allTemplates: [ProjectCreationTemplate] = [
         ProjectCreationTemplate(
-            kind: .blank,
-            title: "Blank Project",
-            subtitle: "Start with a basic outdoor stage, then adjust stage and lighting manually.",
-            introduction: "Best when you already know what you want to build. LumaStage prepares only the stage base and basic truss, so fixtures, cues, and mood can be configured inside the project.",
-            systemImage: "square.dashed",
-            visualStyle: .emptyStage,
-            projectName: "Untitled Project",
-            venueDescription: "Outdoor student stage",
-            eventType: "Student Showcase",
-            lookName: "Opening Lighting",
-            mood: "To be designed, fully adjustable"
-        ),
-        ProjectCreationTemplate(
             kind: .campusMusic,
-            title: "Campus Music Night",
-            subtitle: "For bands, vocals, and club nights, with a warm opening and performer focus.",
-            introduction: "Designed for an outdoor evening performance. Front light keeps performers clear, while warm and blue background layers suit student bands, singing contests, and small concerts.",
+            title: "校園音樂之夜",
+            subtitle: "適合樂團、歌唱與社團之夜，溫暖開場並聚焦表演者。",
+            introduction: "專為戶外夜間演出設計。前光讓表演者清晰可見，溫暖與藍色的背景層次適合學生樂團、歌唱比賽與小型音樂會。",
             systemImage: "music.mic",
             visualStyle: .warmConcert,
-            projectName: "Campus Music Night",
-            venueDescription: "Outdoor student stage",
-            eventType: "Student Performance",
-            lookName: "Warm Opening Lighting",
-            mood: "Warm, welcoming, student showcase"
-        ),
-        ProjectCreationTemplate(
-            kind: .clubShowcase,
-            title: "Club Showcase",
-            subtitle: "For multi-act programs, with clear front light and a cool background.",
-            introduction: "Built for dance, theater, and club presentation programs with multiple segments. The template keeps front light stable so performers remain readable between scenes.",
-            systemImage: "person.3.sequence",
-            visualStyle: .coolShowcase,
-            projectName: "Club Showcase",
-            venueDescription: "Outdoor truss stage",
-            eventType: "Club Presentation",
-            lookName: "Cool Showcase Lighting",
-            mood: "Cool, focused, student showcase"
-        ),
-        ProjectCreationTemplate(
-            kind: .graduationParty,
-            title: "Graduation Party",
-            subtitle: "For post-ceremony moments and party sections, with bright celebratory cues.",
-            introduction: "Designed for post-ceremony highlights, raffles, performances, and group photos. Higher intensity and celebratory colors make the stage feel like a finale.",
-            systemImage: "sparkles",
-            visualStyle: .partyFinale,
-            projectName: "Graduation Party",
-            venueDescription: "Night outdoor stage",
-            eventType: "Celebration",
-            lookName: "Party Highlight Lighting",
-            mood: "Bright, celebratory, outdoor event"
+            projectName: "校園音樂之夜",
+            venueDescription: "戶外學生舞台",
+            eventType: "學生表演",
+            lookName: "溫暖開場燈光",
+            mood: "溫暖、熱情、學生展演"
         )
     ]
 
@@ -602,9 +993,9 @@ struct StageState: Equatable {
                 fixture.intensity = intensity
             }
             lightingLook.explanation = LightingExplanation(
-                term: "Intensity",
-                plainText: "Intensity is the industry term for how strong a fixture output is. Setting front light to \(Int(round(intensity * 100)))% makes the performer-facing light use that output level.",
-                actionSummary: "Adjusted the front light intensity for the current cue."
+                term: "亮度",
+                plainText: "亮度是業界用來形容燈具輸出強度的術語。將前光設為 \(Int(round(intensity * 100)))% 會讓面向表演者的燈光採用該輸出等級。",
+                actionSummary: "已調整目前場景的前光亮度。"
             )
 
         case .backgroundWashColor(let hexColor):
@@ -616,9 +1007,9 @@ struct StageState: Equatable {
                 fixture.color.value = normalizedHex
             }
             lightingLook.explanation = LightingExplanation(
-                term: "Background Wash",
-                plainText: "A background wash is a broad area of colored light placed behind the stage or on the backdrop. Changing its color directly shifts the stage mood.",
-                actionSummary: "Adjusted the background wash color for the current cue."
+                term: "背景泛光",
+                plainText: "背景泛光是一片放置在舞台後方或背景幕上的大面積彩色燈光。改變其顏色會直接改變舞台氛圍。",
+                actionSummary: "已調整目前場景的背景泛光顏色。"
             )
 
         case .fixtureIntensity(let fixtureId, let intensity):
@@ -630,9 +1021,9 @@ struct StageState: Equatable {
                 fixture.intensity = intensity
             }
             lightingLook.explanation = LightingExplanation(
-                term: "Fixture Intensity",
-                plainText: "Fine Control directly edits the selected fixture in the current cue, without changing matching fixtures in other cues.",
-                actionSummary: "Adjusted the selected fixture intensity."
+                term: "燈具亮度",
+                plainText: "精細控制會直接編輯目前場景中所選的燈具，而不會改變其他場景中相符的燈具。",
+                actionSummary: "已調整所選燈具的亮度。"
             )
 
         case .fixtureColor(let fixtureId, let hexColor):
@@ -644,9 +1035,9 @@ struct StageState: Equatable {
                 fixture.color.value = normalizedHex
             }
             lightingLook.explanation = LightingExplanation(
-                term: "Fixture Color",
-                plainText: "The color picker applies an RGB hex value to the selected fixture in the current cue, making single-source visual tweaks precise.",
-                actionSummary: "Adjusted the selected fixture color."
+                term: "燈具顏色",
+                plainText: "顏色選擇器會將 RGB 十六進位色值套用到目前場景中所選的燈具，讓單一來源的視覺微調更精準。",
+                actionSummary: "已調整所選燈具的顏色。"
             )
 
         case .fixtureFineControl(let fixtureId, let control):
@@ -655,9 +1046,9 @@ struct StageState: Equatable {
                 fixture.fineControl = control
             }
             lightingLook.explanation = LightingExplanation(
-                term: "Fixture Angle and Position",
-                plainText: "Position, pan, tilt, roll, and beam angle are stored on the selected fixture in the current cue for synchronized MR fine control.",
-                actionSummary: "Updated the selected fixture position, rotation, and beam angle."
+                term: "燈具角度與位置",
+                plainText: "位置、水平旋轉、垂直俯仰、滾轉與光束角度會儲存在目前場景中所選的燈具上，用於同步的 MR 精細控制。",
+                actionSummary: "已更新所選燈具的位置、旋轉與光束角度。"
             )
         }
 
@@ -666,18 +1057,99 @@ struct StageState: Equatable {
 
     mutating func resetSelectedCue() throws {
         let selectedCueId = selectedCueId
-        let baselineCue = try baselineLook.requireCue(id: selectedCueId)
+        guard let baselineCue = try? baselineLook.requireCue(id: selectedCueId) else {
+            // A user-added cue (not present in the generation baseline) has nothing to restore to —
+            // leave it untouched rather than throwing, so reset stays valid in a grown cue stack.
+            return
+        }
         guard let cueIndex = lightingLook.cues.firstIndex(where: { $0.id == selectedCueId }) else {
             throw ValidationError.missingCue(selectedCueId)
         }
 
         lightingLook.cues[cueIndex] = baselineCue
         lightingLook.explanation = LightingExplanation(
-            term: "Cue Baseline",
-            plainText: "Reset only returns the current cue to the AI-generated baseline and does not affect the other cue.",
-            actionSummary: "Reset the current cue to its generated baseline."
+            term: "場景基準",
+            plainText: "重置只會將目前場景還原為 AI 生成的基準，不會影響其他場景。",
+            actionSummary: "已將目前場景重置為其生成基準。"
         )
 
+        try lightingLook.validate()
+    }
+
+    // MARK: - Cue stack (multi-cue sequence + GO)
+    //
+    // A lighting look is an ordered list of cues a designer steps through during a show (grandMA2's
+    // Sequence + GO key). These ops grow/shrink/advance that list while keeping `selectedCueId` valid
+    // and re-validating. The id is supplied by the caller (AppModel mints a UUID-based id) so the pure
+    // logic here stays deterministic for the smoke tests.
+
+    /// The cue ids in playback order.
+    var cueOrder: [String] { lightingLook.cues.map(\.id) }
+
+    /// Index of the selected cue in playback order (0 if it can't be found, which `validate()` prevents).
+    var selectedCueIndex: Int {
+        lightingLook.cues.firstIndex(where: { $0.id == selectedCueId }) ?? 0
+    }
+
+    /// Advances the selection to the next cue in order, wrapping at the end — the GO key. Returns the
+    /// now-selected cue so the renderer can cross-fade over *its* transition.
+    @discardableResult
+    mutating func goToNextCue() -> LightingCue {
+        advanceSelection(by: 1)
+    }
+
+    /// Steps the selection to the previous cue, wrapping at the start (GO back).
+    @discardableResult
+    mutating func goToPreviousCue() -> LightingCue {
+        advanceSelection(by: -1)
+    }
+
+    private mutating func advanceSelection(by step: Int) -> LightingCue {
+        let cues = lightingLook.cues
+        let count = cues.count
+        let nextIndex = ((selectedCueIndex + step) % count + count) % count
+        lightingLook.selectedCueId = cues[nextIndex].id
+        return cues[nextIndex]
+    }
+
+    /// Appends a new cue by duplicating the selected cue (so the rig identity — same fixtures, ids and
+    /// order — carries over), inserts it right after the selected cue, and selects it. Validates.
+    mutating func appendCue(id: String, name: String) throws {
+        guard let sourceIndex = lightingLook.cues.firstIndex(where: { $0.id == selectedCueId }) else {
+            throw ValidationError.missingCue(selectedCueId)
+        }
+
+        var newCue = lightingLook.cues[sourceIndex]
+        newCue.id = id
+        newCue.name = name
+        lightingLook.cues.insert(newCue, at: sourceIndex + 1)
+        lightingLook.selectedCueId = id
+        try lightingLook.validate()
+    }
+
+    /// Removes a cue by id. Refuses to remove the last remaining cue (a look must keep ≥ 1). If the
+    /// removed cue was selected, the selection moves to its neighbour. Validates.
+    mutating func removeCue(id: String) throws {
+        guard lightingLook.cues.count > 1 else {
+            throw ValidationError.cannotRemoveLastCue
+        }
+        guard let index = lightingLook.cues.firstIndex(where: { $0.id == id }) else {
+            throw ValidationError.missingCue(id)
+        }
+
+        lightingLook.cues.remove(at: index)
+        if selectedCueId == id {
+            lightingLook.selectedCueId = lightingLook.cues[min(index, lightingLook.cues.count - 1)].id
+        }
+        try lightingLook.validate()
+    }
+
+    /// Renames a cue (e.g. to label a generated show's sections — "Verse", "Chorus", "Bows"). Validates.
+    mutating func renameCue(id: String, to name: String) throws {
+        guard let index = lightingLook.cues.firstIndex(where: { $0.id == id }) else {
+            throw ValidationError.missingCue(id)
+        }
+        lightingLook.cues[index].name = name
         try lightingLook.validate()
     }
 
@@ -754,37 +1226,192 @@ enum SpotLightRenderMath {
     }
 }
 
+// MARK: - Dynamic rig: fixture-type rendering metadata + zone placement
+
+/// `LightingFixtureVisualModel` lives in the fixture catalog as the visual vocabulary; here it gains
+/// the renderer-facing metadata (photometrics, optics, mounting) the dynamic rig needs, plus Codable
+/// so it can persist on a `FixtureGroup`.
+extension LightingFixtureVisualModel: Codable {}
+
+extension LightingFixtureVisualModel {
+    /// A sensible visual model for a legacy/role-only fixture so 2-role MVP looks still render real gear.
+    static func derived(role: FixtureRole, zone: StageZone) -> LightingFixtureVisualModel {
+        switch role {
+        case .frontLight: return .frontFresnel
+        case .backgroundWash: return .movingHeadBeam
+        case .wash: return .washBar
+        case .spot: return .spotBarrel
+        }
+    }
+
+    /// A reasonable role for a fixture defined only by its visual model (the dynamic-rig direction:
+    /// the AI picks a fixture *type*, and role becomes derived metadata used for fine-control defaults
+    /// and the debug panel — it no longer gates rendering).
+    var derivedRole: FixtureRole {
+        switch self {
+        case .frontFresnel, .ledFresnel, .audienceBlinder: return .frontLight
+        case .spotBarrel, .movingHeadBeam, .laser: return .spot
+        case .washBar, .ledStrobeBar, .ledPar: return .wash
+        case .backgroundBatten: return .backgroundWash
+        }
+    }
+
+    /// Peak luminous output (lumens) a fully-on fixture of this type emits. Tuned alongside the
+    /// stage twin; only the mapping shape (clamp/endpoints/monotonicity) is pinned by tests.
+    var maxLumens: Double {
+        switch self {
+        case .audienceBlinder: return 8000
+        case .spotBarrel: return 7000
+        case .frontFresnel: return 6000
+        case .laser: return 5500   // intense but thin — the visible beam carries the look; the cone is a colour spill
+        case .ledFresnel: return 5200
+        case .movingHeadBeam: return 5000
+        case .ledStrobeBar: return 5000
+        case .washBar: return 4500
+        case .ledPar: return 4500
+        case .backgroundBatten: return 4000
+        }
+    }
+
+    /// Front-facing key lights earn higher shadow quality; wash/effect fixtures stay medium.
+    var isKeyLight: Bool {
+        switch self {
+        case .frontFresnel, .ledFresnel, .spotBarrel: return true
+        default: return false
+        }
+    }
+
+    /// Default full-cone beam spread (degrees) when a fixture doesn't carry its own beam angle.
+    var defaultBeamDegrees: Double {
+        switch self {
+        case .laser: return 6     // a laser is a near-collimated pencil beam, the tightest fixture in the rig
+        case .spotBarrel: return 18
+        case .movingHeadBeam: return 22
+        case .frontFresnel: return 35
+        case .ledFresnel: return 30
+        case .ledPar: return 40
+        case .ledStrobeBar: return 55
+        case .washBar: return 60
+        case .backgroundBatten: return 70
+        case .audienceBlinder: return 90
+        }
+    }
+
+    /// The stage zone this fixture type is typically mounted in — drives `RigPlacement` and gives the
+    /// AI a sensible default when it picks a fixture without stating a zone.
+    var defaultMountZone: StageZone {
+        switch self {
+        case .frontFresnel, .ledFresnel, .spotBarrel, .audienceBlinder: return .stageFront
+        case .washBar, .backgroundBatten, .movingHeadBeam, .ledStrobeBar, .laser: return .stageBack
+        case .ledPar: return .fullStage
+        }
+    }
+}
+
+extension SpotLightRenderMath {
+    /// Peak lumens by fixture visual model (the dynamic-rig replacement for the role-based overload).
+    static func maxLumens(model: LightingFixtureVisualModel) -> Double { model.maxLumens }
+
+    /// Maps a 0...1 cue intensity to spotlight lumens for a fixture model. Same clamp/shape as the
+    /// role-based overload; 0 -> 0, 1 -> the model's peak.
+    static func lumens(forIntensity intensity: Double, model: LightingFixtureVisualModel) -> Double {
+        min(max(intensity, 0), 1) * model.maxLumens
+    }
+}
+
+/// Foundation-only placement: where each fixture in a stage zone mounts and what it aims at, in model
+/// metres, spreading `count` fixtures evenly across the zone. The renderer converts to scene space.
+/// This generalizes the old hardcoded 2 FOH stands + 2 upstage moving heads to any fixture count.
+enum RigPlacement {
+    static func placement(zone: StageZone, slot: Int, count: Int, layout: StageLayout)
+        -> (position: Vector3Meters, aim: Vector3Meters) {
+        let stageBase = layout.objects.first { $0.type == .stageBase }
+        let size = stageBase?.size ?? StageObjectSize(width: 6, depth: 3, height: 0.8)
+        let centerX = stageBase?.position.x ?? 0
+        let centerZ = stageBase?.position.z ?? 0
+        let topY = (stageBase?.position.y ?? size.height / 2) + size.height / 2
+        let upstageZ = layout.objects.flatMap(\.trussEndpoints).map(\.z).min() ?? (centerZ - size.depth / 2)
+        let maxTrussY = layout.objects.flatMap(\.trussEndpoints).map(\.y).max() ?? (topY + 2)
+
+        // Even spread fraction in -1...1 across the slots (0 when a single fixture).
+        let spread = count <= 1 ? 0.0 : (Double(slot) / Double(count - 1)) * 2.0 - 1.0
+
+        switch zone {
+        case .stageFront:
+            // Front-of-house stands in the audience area, aimed at the performer zone.
+            let position = Vector3Meters(
+                x: centerX + spread * size.width * 0.45,
+                y: topY + 1.9,
+                z: centerZ + size.depth * 0.95 + 0.7
+            )
+            let aim = Vector3Meters(x: centerX, y: topY + 0.05, z: centerZ + size.depth * 0.12)
+            return (position, aim)
+
+        case .stageBack, .fullStage:
+            // Hung on the upstage truss, washing the stage / backdrop.
+            let position = Vector3Meters(
+                x: centerX + spread * size.width * 0.5,
+                y: maxTrussY - 0.18,
+                z: upstageZ + 0.08
+            )
+            let aim = Vector3Meters(
+                x: centerX,
+                y: topY + (maxTrussY - topY) * 0.45,
+                z: upstageZ - 0.28
+            )
+            return (position, aim)
+
+        case .stageLeft, .stageRight:
+            // Side booms, spread along stage depth, aimed across the stage.
+            let sideX = centerX + (zone == .stageLeft ? -1.0 : 1.0) * size.width * 0.55
+            let position = Vector3Meters(
+                x: sideX,
+                y: topY + 1.2,
+                z: centerZ + spread * size.depth * 0.35
+            )
+            let aim = Vector3Meters(x: centerX, y: topY + 0.4, z: centerZ)
+            return (position, aim)
+        }
+    }
+}
+
 enum ValidationError: Error, Equatable, LocalizedError {
     case unsupportedSchemaVersion(String)
     case unsupportedAmbientPreset(String)
     case unsupportedColorMode(String)
     case missingRequiredCue
+    case cannotRemoveLastCue
     case missingCue(String)
     case missingFixture(String)
     case invalidIntensity(Double)
     case invalidHexColor(String)
     case invalidFineControlValue(String, Double)
+    case invalidDMXValue(String, Int)
 
     var errorDescription: String? {
         switch self {
         case .unsupportedSchemaVersion(let version):
-            return "Unsupported schema version: \(version)"
+            return "不支援的結構描述版本：\(version)"
         case .unsupportedAmbientPreset(let preset):
-            return "Unsupported ambient preset: \(preset)"
+            return "不支援的環境光預設：\(preset)"
         case .unsupportedColorMode(let mode):
-            return "Unsupported color mode: \(mode)"
+            return "不支援的顏色模式：\(mode)"
         case .missingRequiredCue:
-            return "Opening and Highlight cues are required."
+            return "燈光設計至少需要一個場景。"
+        case .cannotRemoveLastCue:
+            return "至少需要保留一個場景，無法刪除最後一個場景。"
         case .missingCue(let id):
-            return "Cue not found: \(id)"
+            return "找不到場景：\(id)"
         case .missingFixture(let role):
-            return "Fixture role not found: \(role)"
+            return "找不到燈具角色：\(role)"
         case .invalidIntensity(let intensity):
-            return "Intensity must be between 0.0 and 1.0. Current value: \(intensity)."
+            return "亮度必須介於 0.0 與 1.0 之間。目前值：\(intensity)。"
         case .invalidHexColor(let value):
-            return "Invalid RGB hex color: \(value)"
+            return "無效的 RGB 十六進位色值：\(value)"
         case .invalidFineControlValue(let field, let value):
-            return "Invalid Fine Control parameter: \(field)=\(value)."
+            return "無效的精細控制參數：\(field)=\(value)。"
+        case .invalidDMXValue(let field, let value):
+            return "無效的 DMX 參數：\(field)=\(value)。"
         }
     }
 }

@@ -62,9 +62,9 @@ enum LightingGenerationError: Error, LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .modelUnavailable(let reason):
-            return "Apple Intelligence is unavailable: \(reason)"
+            return "Apple Intelligence 無法使用：\(reason)"
         case .emptyPrompt:
-            return "Enter a lighting request first."
+            return "請先輸入燈光需求。"
         case .generationFailed(let message):
             return message
         }
@@ -89,6 +89,10 @@ struct LightingLookDraft: Equatable {
         var intensity: Double
         var colorHex: String
         var gobo: GoboPattern? = nil
+        /// The physical fixture type (dynamic rig). Optional + back-compat: nil falls back to a model
+        /// derived from `role` when assembled. `beamAngleDegrees` likewise carries the per-fixture beam.
+        var model: LightingFixtureVisualModel? = nil
+        var beamAngleDegrees: Double? = nil
     }
 
     var lookName: String
@@ -136,8 +140,67 @@ struct LightingLookDraft: Equatable {
         return look
     }
 
+    /// One named cue in a multi-cue show: an id, a display name, and the rig's per-cue fixture states.
+    /// (The fixtures across a look's cues share ids/order — rig identity — so the same physical light is
+    /// addressable in every cue.)
+    struct Cue: Equatable {
+        var id: String
+        var name: String
+        var fixtures: [Fixture]
+    }
+
+    /// Builds a multi-cue `LightingLook` from an ordered cue list — the AI's "describe the whole show →
+    /// a sequence of cues" path (and the manual cue-stack editor). The first cue is selected; ambient
+    /// baseline + transitions are pinned here, cue ids/names come from the caller, and `validate()` runs
+    /// the same invariants. Foundation-only so the smoke tests pin the multi-cue assembly without the
+    /// on-device model. The two-cue `makeValidatedLook()` above still backs templates and legacy looks.
+    static func makeValidatedLook(
+        lookName: String,
+        mood: String,
+        cues: [Cue],
+        explanationTerm: String,
+        explanationPlainText: String,
+        explanationActionSummary: String
+    ) throws -> LightingLook {
+        let lightingCues = cues.map { cue in
+            LightingCue(
+                id: cue.id,
+                name: cue.name,
+                transition: .mvpDefault,
+                fixtureGroups: cue.fixtures.map(Self.fixtureGroup(from:))
+            )
+        }
+
+        let look = LightingLook(
+            schemaVersion: "1.0",
+            intent: .generateLook,
+            lookName: lookName,
+            mood: mood,
+            ambient: AmbientState(preset: .standardNight, level: 0.35, colorTemperature: 4200),
+            selectedCueId: lightingCues.first?.id ?? "cue_opening",
+            cues: lightingCues,
+            explanation: LightingExplanation(
+                term: explanationTerm,
+                plainText: explanationPlainText,
+                actionSummary: explanationActionSummary
+            )
+        )
+
+        try look.validate()
+        return look
+    }
+
     private static func fixtureGroup(from fixture: Fixture) -> FixtureGroup {
-        FixtureGroup(
+        // Carry the per-fixture beam angle when the model supplied one (dynamic rig); otherwise the
+        // role/zone default applies. Every rig fixture renders now, so the gobo is kept regardless.
+        // Values are NOT clamped here — `LightingLook.validate()` stays the single gate that rejects
+        // out-of-range intensity/beam (the @Generable `.range` guides keep the model in bounds).
+        var fineControl = FixtureFineControl.default(role: fixture.role, zone: fixture.zone)
+        if let beam = fixture.beamAngleDegrees {
+            fineControl.beamAngleDegrees = beam
+        }
+
+        return FixtureGroup(
             id: fixture.id,
             name: fixture.name,
             role: fixture.role,
@@ -148,9 +211,76 @@ struct LightingLookDraft: Equatable {
                 mode: .rgb,
                 value: FixtureColor.normalizedHex(fixture.colorHex) ?? fixture.colorHex
             ),
-            // Drop gobos on roles the renderer can't project, so stored state matches what shows.
-            gobo: fixture.role.rendersProjectedGobo ? fixture.gobo : nil
+            fineControl: fineControl,
+            gobo: fixture.gobo,
+            model: fixture.model
         )
+    }
+}
+
+// MARK: - Renderable draft assembly
+
+extension LightingLookDraft {
+    /// One cue's worth of the only two beams the immersive scene actually renders: a performer-facing
+    /// front light and a backdrop wash. The renderer (`ImmersiveView.apply`) relights ONLY the
+    /// `.frontLight` and `.backgroundWash` roles, so a generated look made of any other role
+    /// (`wash`/`spot`) would validate fine yet leave the stage unchanged. Generation is constrained to
+    /// exactly these two beams (see `FoundationModelsLightingService`) so every look visibly relights.
+    struct RenderableCue: Equatable {
+        var frontLightIntensity: Double
+        var frontLightHex: String
+        var frontLightGobo: GoboPattern?
+        var backgroundWashIntensity: Double
+        var backgroundWashHex: String
+        var backgroundWashGobo: GoboPattern?
+    }
+
+    /// Assembles a draft whose every cue carries a `.frontLight` and a `.backgroundWash` fixture with
+    /// fixed ids/zones. Forcing the two rendered roles here — in Foundation, where the smoke tests can
+    /// pin it — rather than trusting the model is what guarantees a generated look changes the stage.
+    init(
+        lookName: String,
+        mood: String,
+        opening: RenderableCue,
+        highlight: RenderableCue,
+        explanationTerm: String,
+        explanationPlainText: String,
+        explanationActionSummary: String
+    ) {
+        self.init(
+            lookName: lookName,
+            mood: mood,
+            openingFixtures: Self.renderableFixtures(from: opening),
+            highlightFixtures: Self.renderableFixtures(from: highlight),
+            explanationTerm: explanationTerm,
+            explanationPlainText: explanationPlainText,
+            explanationActionSummary: explanationActionSummary
+        )
+    }
+
+    private static func renderableFixtures(from cue: RenderableCue) -> [Fixture] {
+        [
+            Fixture(
+                id: "front_light",
+                name: "前光",
+                role: .frontLight,
+                zone: .stageFront,
+                enabled: true,
+                intensity: cue.frontLightIntensity,
+                colorHex: cue.frontLightHex,
+                gobo: cue.frontLightGobo
+            ),
+            Fixture(
+                id: "background_wash",
+                name: "背景泛光",
+                role: .backgroundWash,
+                zone: .stageBack,
+                enabled: true,
+                intensity: cue.backgroundWashIntensity,
+                colorHex: cue.backgroundWashHex,
+                gobo: cue.backgroundWashGobo
+            )
+        ]
     }
 }
 
@@ -161,7 +291,7 @@ struct LightingLookDraft: Equatable {
 struct UnavailableLightingLookService: LightingLookGenerating {
     let reason: String
 
-    init(reason: String = "Apple Intelligence is not available in this environment.") {
+    init(reason: String = "此環境中無法使用 Apple Intelligence。") {
         self.reason = reason
     }
 

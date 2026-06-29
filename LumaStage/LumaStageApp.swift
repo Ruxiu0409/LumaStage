@@ -18,25 +18,77 @@ struct LumaStageApp: App {
         // observe a property only read inside the lazy binding closure below.
         let _ = appModel.stageImmersionMode
 
-        WindowGroup {
+        WindowGroup(id: AppModel.mainWindowID) {
             ContentView()
                 .environment(appModel)
+                // Advertise for the iPad control panel as soon as the app is up. Idempotent, so it
+                // survives the main window being dismissed/recreated for the immersive stage.
+                .task { appModel.startIPadSync() }
         }
         .windowStyle(.plain)
         .windowResizability(.contentSize)
         .defaultSize(width: 860, height: 260)
 
         ImmersiveSpace(id: appModel.immersiveSpaceID) {
+            // `ImmersiveView` owns the open/close lifecycle (state + opening the composer window)
+            // in its own onAppear/onDisappear, since `openWindow` needs a View environment.
             ImmersiveView()
                 .environment(appModel)
-                .onAppear {
-                    appModel.immersiveSpaceState = .open
-                }
-                .onDisappear {
-                    appModel.immersiveSpaceState = .closed
-                }
         }
         .immersionStyle(selection: immersionStyleSelection, in: .full, .mixed)
+
+        // The AI composer is a real native window (not a RealityView attachment) so it gets the
+        // system move bar and smooth, compositor-driven dragging. `.plain` lets the panel's own
+        // glass be the surface; `.utilityPanel` placement seats it within reach in front of the
+        // user each time it opens. `.environment(appModel)` is required — `openWindow` doesn't
+        // inherit the opener's environment. Opened/dismissed with the immersive space by
+        // `ImmersiveView` (own-app windows aren't auto-hidden in full immersion).
+        WindowGroup(id: AppModel.aiComposerWindowID) {
+            VisionAIComposerBox()
+                .environment(appModel)
+        }
+        .windowStyle(.plain)
+        .windowResizability(.contentSize)
+        .defaultWindowPlacement { _, _ in
+            WindowPlacement(.utilityPanel)
+        }
+
+        // Spatial fixture observatory, opened from the Fixture Guide as two independent, separately
+        // movable objects sharing `appModel.fixtureCarousel`: a volumetric window holding the 3D
+        // model, and a plain window holding the info card (with its own paging + back controls).
+        WindowGroup(id: AppModel.fixtureObservatoryWindowID) {
+            FixtureObservatoryView()
+                .environment(appModel)
+        }
+        .windowStyle(.volumetric)
+        .defaultSize(width: 0.7, height: 0.7, depth: 0.7, in: .meters)
+
+        WindowGroup(id: AppModel.fixtureInfoCardWindowID) {
+            FixtureInfoCardWindow()
+                .environment(appModel)
+        }
+        .windowStyle(.plain)
+        .defaultSize(width: 480, height: 460)
+        // Open the info card to the RIGHT of the volumetric model window, so each fixture is
+        // presented with its 3D model on the left and its info card on the right. The model window
+        // is opened first (see `LightingFixtureIntroView`), so it's already in `context.windows`
+        // when this placement runs; if it isn't found, fall back to the system's default placement.
+        .defaultWindowPlacement { _, context in
+            if let observatory = context.windows.first(where: { $0.id == AppModel.fixtureObservatoryWindowID }) {
+                return WindowPlacement(.trailing(observatory))
+            }
+            return WindowPlacement(nil)
+        }
+
+        // Tabletop stage editor: a small editable stage model that ARKit rests on the user's real table.
+        // Its own MIXED (passthrough) immersive space — so the room is visible and content can anchor to
+        // a detected table — opened from the AI composer's "Edit Stage" button in place of the 1:1 stage
+        // space. Edits persist to the project, so the immersive stage reflects them on return.
+        ImmersiveSpace(id: appModel.tabletopEditorSpaceID) {
+            TabletopStageEditorView()
+                .environment(appModel)
+        }
+        .immersionStyle(selection: .constant(.mixed), in: .mixed)
     }
 
     /// A mutable binding (not `.constant`) so the system can write immersion changes back into the

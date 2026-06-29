@@ -26,12 +26,12 @@ final class SpeechTranscriber {
     func start() async throws {
 #if canImport(Speech) && canImport(AVFoundation)
         guard await requestSpeechAuthorization() else {
-            lastError = "Speech recognition permission has not been granted."
+            lastError = "尚未取得語音辨識權限。"
             throw SpeechTranscriberError.permissionDenied
         }
 
         guard let recognizer, recognizer.isAvailable else {
-            lastError = "Speech recognition is currently unavailable."
+            lastError = "語音辨識目前無法使用。"
             throw SpeechTranscriberError.recognizerUnavailable
         }
 
@@ -76,7 +76,7 @@ final class SpeechTranscriber {
             }
         }
 #else
-        lastError = "Speech recognition is not supported on this platform."
+        lastError = "此平台不支援語音辨識。"
         throw SpeechTranscriberError.recognizerUnavailable
 #endif
     }
@@ -116,9 +116,9 @@ enum SpeechTranscriberError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .permissionDenied:
-            return "Microphone or speech recognition permission was denied."
+            return "麥克風或語音辨識權限遭拒。"
         case .recognizerUnavailable:
-            return "Speech recognition is currently unavailable."
+            return "語音辨識目前無法使用。"
         }
     }
 }

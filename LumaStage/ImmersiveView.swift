@@ -13,10 +13,8 @@ import simd
 #if os(visionOS)
 struct ImmersiveView: View {
     @Environment(AppModel.self) private var appModel
-
-    /// Offset between the grab point and the composer's origin while a drag is in flight, so the
-    /// box follows the pinch without snapping its corner to the finger. `nil` when not dragging.
-    @State private var composerDragOffset: SIMD3<Float>?
+    @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismissWindow) private var dismissWindow
 
     var body: some View {
         // Establish a body-level Observation dependency on the lighting look so a generation-
@@ -28,83 +26,74 @@ struct ImmersiveView: View {
         // this read, AI generation updates the AI box text but the scene never relights.
         // Same pattern as LumaStageApp's `let _ = appModel.stageImmersionMode`.
         let _ = appModel.lightingLook
+        // Also depend on the per-light overrides so "close the light 3" re-runs the update closure.
+        let _ = appModel.lightOverrides
 
-        RealityView { content, attachments in
+        RealityView { content in
             let root = Self.makeStageRoot(layout: appModel.stageLayout)
+            // Build the dynamic rig (fixtures + spotlights + labels) from the look's fixtures, then light it.
+            Self.syncRig(cue: appModel.selectedCue, layout: appModel.stageLayout, in: root)
+            if let selectedCue = appModel.selectedCue {
+                Self.apply(selectedCue, overrides: appModel.lightOverrides, to: root)
+            }
             content.add(root)
-
-            if let aiBox = attachments.entity(for: "ai_box") {
-                aiBox.position = AIComposerPlacement.defaultPosition
-                aiBox.scale = SIMD3<Float>(0.72, 0.72, 0.72)
-                // Make the attachment grabbable. The collision shape is built later in `update:`
-                // once SwiftUI has measured the attachment — at `make` time its bounds are still
-                // zero, so a shape generated here would be empty and could never be hit-tested.
-                aiBox.components.set(InputTargetComponent())
-                content.add(aiBox)
-            }
-        } update: { content, attachments in
-            // Give the composer a real collision shape once it has a measured size, so the
-            // drag gesture has something to target. Done once, when bounds become non-zero.
-            if let aiBox = attachments.entity(for: "ai_box"),
-               aiBox.components[CollisionComponent.self] == nil {
-                let bounds = aiBox.visualBounds(relativeTo: aiBox)
-                if bounds.extents.x > 0, bounds.extents.y > 0 {
-                    // Offset the box by the visual-bounds center: `generateBox(size:)` is centered
-                    // on the entity origin, which need not coincide with the hosted SwiftUI view's
-                    // center — and the drag handle sits at the panel's top edge, the region most
-                    // likely to fall outside an origin-centered collider. `isStatic: false` so the
-                    // collider tracks the box as it's dragged. Mirrors `FixtureObservatoryView.sync`.
-                    let shape = ShapeResource.generateBox(size: bounds.extents)
-                        .offsetBy(translation: bounds.center)
-                    aiBox.components.set(CollisionComponent(shapes: [shape], isStatic: false))
-                }
-            }
-
+        } update: { content in
             guard let root = content.entities.first(where: { $0.name == "LumaStageRoot" }) else {
                 return
             }
 
             Self.syncStageLayout(appModel.stageLayout, in: root)
+            // Reconcile the rig to the current look (rebuilds only when the fixture set changes — e.g.
+            // a new AI generation with different fixtures), then relight the selected cue + overrides.
+            Self.syncRig(cue: appModel.selectedCue, layout: appModel.stageLayout, in: root)
 
             if let selectedCue = appModel.selectedCue {
-                Self.apply(selectedCue, to: root)
+                Self.apply(selectedCue, overrides: appModel.lightOverrides, to: root)
             }
 
             // Room-spill mode hides the opaque venue so the real room shows through passthrough.
             if let venue = root.findEntity(named: Self.opaqueVenueName) {
                 venue.isEnabled = SurroundingsLightPolicy.includesOpaqueVenue(in: appModel.stageImmersionMode)
             }
-        } attachments: {
-            Attachment(id: "ai_box") {
-                VisionAIComposerBox()
-                    .environment(appModel)
-            }
         }
         .preferredSurroundingsEffect(appModel.stageImmersionMode == .roomSpill ? .dim(intensity: 0.45) : nil)
-        .gesture(composerDragGesture)
+        // The AI composer is a native `WindowGroup` (declared in LumaStageApp) so it gets the
+        // system move bar and smooth, compositor-driven dragging instead of a hand-rolled entity
+        // drag. The system does NOT auto-hide an app's own windows when an immersive space opens,
+        // so it's opened with the space here and dismissed when the space closes.
+        .onAppear {
+            appModel.immersiveSpaceState = .open
+            openWindow(id: AppModel.aiComposerWindowID)
+            // Dismiss the launch/project window for the duration of the stage. It's otherwise left
+            // behind the immersive scene as nothing but its empty, draggable system bar (ContentView
+            // collapses to a 1x1 clear view, but the window — and its move bar — stays alive).
+            // Reopened in onDisappear; the auto-open guard lives in AppModel so the recreated
+            // ContentView doesn't re-open the stage the user just closed.
+            dismissWindow(id: AppModel.mainWindowID)
+        }
+        .onDisappear {
+            appModel.immersiveSpaceState = .closed
+            dismissWindow(id: AppModel.aiComposerWindowID)
+            openWindow(id: AppModel.mainWindowID)
+        }
     }
 
-    /// Drag the floating AI composer to any spot in front of the viewer. Position is clamped by
-    /// `AIComposerPlacement` so the box can't be lost behind or out of reach.
-    private var composerDragGesture: some Gesture {
-        DragGesture()
-            .targetedToAnyEntity()
-            .onChanged { value in
-                guard let parent = value.entity.parent else { return }
-                let grabPoint = value.convert(value.location3D, from: .local, to: parent)
-                if composerDragOffset == nil {
-                    composerDragOffset = value.entity.position - grabPoint
-                }
-                value.entity.position = AIComposerPlacement.clamped(grabPoint + (composerDragOffset ?? .zero))
-            }
-            .onEnded { _ in
-                composerDragOffset = nil
-            }
-    }
-
-    private static let stageScale: Float = 0.46
-    private static let stageOrigin = SIMD3<Float>(0, 0, -2.45)
+    /// True 1:1 scale: one modelled metre renders as one real metre, per the spec's "1:1 night
+    /// outdoor stage digital twin". (Previously 0.46, which made the stage read as a tabletop model.)
+    private static let stageScale: Float = 1.0
+    /// Push the stage back so its front edge sits a comfortable ~3m in front of the viewer at 1:1.
+    private static let stageOrigin = SIMD3<Float>(0, 0, -4.5)
     private static let layoutRootPrefix = "stage_layout_root_"
+
+    /// `SpotLightRenderMath` lumens were tuned at the original 0.46 scene scale. Spotlight illuminance
+    /// falls off with distance², so at full 1:1 the same lumens read dimmer (source→target distances
+    /// grow by 1/0.46). Scale lumens by (stageScale / referenceScale)² to preserve the tuned surface
+    /// brightness — it equals 1.0 at the reference scale, so dialling `stageScale` back stays lossless.
+    private static let photometricReferenceScale: Float = 0.46
+    private static var lumenScaleCompensation: Float {
+        let ratio = stageScale / photometricReferenceScale
+        return ratio * ratio
+    }
 
     private static func makeStageRoot(layout: StageLayout) -> Entity {
         let root = Entity()
@@ -113,7 +102,9 @@ struct ImmersiveView: View {
         addVenueEnvironment(to: root, layout: layout)
         addSpatialLights(to: root)
         root.addChild(makeStageLayoutEntity(plan: ImmersiveStageGeometryPlan.make(from: layout), layout: layout))
-        addLightingPreview(to: root, layout: layout)
+        // Fixtures (lit gear + their spotlights) are built dynamically from the look's rig by
+        // `syncRig`, not here — the rig varies per look (any number/type of fixtures).
+        addPerformerStandIn(to: root, layout: layout)
         return root
     }
 
@@ -125,45 +116,89 @@ struct ImmersiveView: View {
         let venue = Entity()
         venue.name = opaqueVenueName
 
-        venue.addChild(box(name: "floor_concrete", width: 7.2, height: 0.018, depth: 5.4, hex: "#2D3032", intensity: 0.82, position: SIMD3<Float>(0, -0.025, -2.4)))
+        // Derive the venue footprint from the actual stage so the floor + backdrop stay coherent with
+        // the stage at any `stageScale`. The old fixed 7.2 x 5.4 floor only matched the 0.46 model and
+        // left the (real-scale) floor dwarfing the shrunken stage.
+        let stageBase = layout.objects.first { $0.type == .stageBase }
+        let stageSize = stageBase?.size ?? StageObjectSize(width: 6, depth: 3, height: 0.8)
+        let stageCenterX = stageBase?.position.x ?? 0
+        let stageCenterZ = stageBase?.position.z ?? 0
+        let frontEdgeZ = stageCenterZ + stageSize.depth / 2
+        let upstageZ = layout.objects.flatMap(\.trussEndpoints).map(\.z).min() ?? (stageCenterZ - stageSize.depth / 2)
+        let trussTopY = layout.objects.flatMap(\.trussEndpoints).map(\.y).max() ?? 3
 
-        for offset in [-2.2, -1.1, 0, 1.1, 2.2] as [Float] {
-            venue.addChild(box(name: "floor_seam_x", width: 0.008, height: 0.004, depth: 5.4, hex: "#1B1D1E", intensity: 0.7, position: SIMD3<Float>(offset, -0.012, -2.4)))
+        // Floor: from the viewer's feet (downstage) to behind the truss, with a margin on each side.
+        let floorWidth = stageSize.width + 4.0
+        let floorFrontZ = frontEdgeZ + 3.5
+        let floorBackZ = upstageZ - 2.0
+        let floorDepth = floorFrontZ - floorBackZ
+        let floorCenterZ = (floorFrontZ + floorBackZ) / 2
+        var floorPosition = scenePoint(Vector3Meters(x: stageCenterX, y: 0, z: floorCenterZ))
+        floorPosition.y = -0.02
+        venue.addChild(box(name: "floor_concrete", width: sceneLength(floorWidth), height: 0.02, depth: sceneLength(floorDepth), hex: "#2D3032", intensity: 0.82, position: floorPosition))
+
+        let seamCount = 9
+        for index in 0..<seamCount {
+            let fraction = Double(index) / Double(seamCount - 1)
+            let seamX = stageCenterX - floorWidth / 2 + fraction * floorWidth
+            var seamPosition = scenePoint(Vector3Meters(x: seamX, y: 0, z: floorCenterZ))
+            seamPosition.y = -0.012
+            venue.addChild(box(name: "floor_seam_x", width: 0.008, height: 0.006, depth: sceneLength(floorDepth), hex: "#1B1D1E", intensity: 0.7, position: seamPosition))
         }
 
-        let upstageZ = layout.objects.flatMap(\.trussEndpoints).map(\.z).min() ?? -1.25
+        // Backdrop cyclorama: a light, near-neutral surface a touch wider than the truss and exactly
+        // as tall as its top, set just behind it. It is intentionally LIGHT (not the old near-black drape)
+        // so the coloured background wash actually shows — a real cyc is pale precisely so a wash reads
+        // on it; a black backdrop just absorbed the colour. With the venue ambient now dimmed, the cyc
+        // mostly shows the wash colour.
+        let drapeWidth = stageSize.width + 1.5
+        let drapeHeight = trussTopY   // match the truss top exactly — the cyc shouldn't loom above the rig
         let drape = box(
-            name: "black_backdrop_drape",
-            width: 2.45,
-            height: 1.55,
-            depth: 0.025,
-            hex: "#08090D",
-            intensity: 0.92,
-            position: scenePoint(Vector3Meters(x: 0, y: 1.05, z: upstageZ - 0.32))
+            name: "backdrop_cyclorama",
+            width: sceneLength(drapeWidth),
+            height: sceneLength(drapeHeight),
+            depth: 0.03,
+            hex: "#C8CCD2",
+            intensity: 1.0,
+            position: scenePoint(Vector3Meters(x: stageCenterX, y: drapeHeight / 2, z: upstageZ - 0.5))
         )
         venue.addChild(drape)
 
-        for index in 0..<9 {
-            let x = -1.05 + Float(index) * 0.26
-            venue.addChild(box(name: "drape_fold", width: 0.018, height: 1.45, depth: 0.018, hex: index.isMultiple(of: 2) ? "#171A20" : "#050609", intensity: 0.82, position: drape.position + SIMD3<Float>(x, 0, 0.018)))
+        // Faint, low-contrast vertical seams so the cyc reads as panelled rather than a flat slab —
+        // light enough that they don't break up the projected wash colour.
+        let foldCount = 15
+        for index in 0..<foldCount {
+            let fraction = Double(index) / Double(foldCount - 1)
+            let foldX = -drapeWidth / 2 + fraction * drapeWidth
+            let foldPosition = drape.position + SIMD3<Float>(sceneLength(foldX), 0, 0.02)
+            venue.addChild(box(name: "cyclorama_seam", width: 0.012, height: sceneLength(drapeHeight * 0.95), depth: 0.02, hex: index.isMultiple(of: 2) ? "#BFC3C9" : "#CDD1D7", intensity: 1.0, position: foldPosition))
         }
 
         root.addChild(venue)
     }
 
     private static func addSpatialLights(to root: Entity) {
+        // These are AMBIENT venue lights only — just enough to read the stage structure. They are kept
+        // DIM and near-neutral on purpose so the cue spotlights dominate and their colour reads true: a
+        // strong, unchanging warm key + saturated blue fill previously washed the whole stage and made
+        // a cue colour change (e.g. "make it yellow") barely perceptible.
         let keyLight = DirectionalLight()
         keyLight.name = "venue_key_light"
-        keyLight.light.intensity = 2600
-        keyLight.light.color = UIColor(red: 1.0, green: 0.92, blue: 0.78, alpha: 1.0)
+        keyLight.light.intensity = 700   // directional intensity is in lux (no distance falloff), so it's scale-independent
+        keyLight.light.color = UIColor(red: 0.90, green: 0.93, blue: 1.0, alpha: 1.0)
         keyLight.orientation = simd_quatf(angle: -.pi / 4, axis: SIMD3<Float>(1, 0, 0)) * simd_quatf(angle: .pi / 7, axis: SIMD3<Float>(0, 1, 0))
         root.addChild(keyLight)
 
+        // A gentle, near-neutral fill from stage-left-front. Positioned in model space (so it scales
+        // with the stage) and brightened by the same distance² compensation as the spotlights —
+        // PointLight is lumens-based. Much dimmer/less saturated than before so it no longer tints the
+        // cue colours.
         let fillLight = PointLight()
         fillLight.name = "venue_fill_light"
-        fillLight.light.intensity = 900
-        fillLight.light.color = UIColor(red: 0.55, green: 0.72, blue: 1.0, alpha: 1.0)
-        fillLight.position = SIMD3<Float>(-1.8, 1.6, -1.2)
+        fillLight.light.intensity = 240 * lumenScaleCompensation
+        fillLight.light.attenuationRadius = sceneLength(40)
+        fillLight.light.color = UIColor(red: 0.80, green: 0.85, blue: 0.96, alpha: 1.0)
+        fillLight.position = scenePoint(Vector3Meters(x: -3.0, y: 2.5, z: 1.0))
         root.addChild(fillLight)
     }
 
@@ -196,10 +231,36 @@ struct ImmersiveView: View {
         }
 
         for block in plan.connectorBlocks {
-            layoutEntity.addChild(connectorBlock(block))
+            layoutEntity.addChild(connectorBlock(block, layout: layout))
         }
 
+        addLatticeNodes(plan, to: layoutEntity)
+
         return layoutEntity
+    }
+
+    /// Caps the interior lattice junctions (where diagonal braces meet the chords) with small metal
+    /// node spheres, closing the thin-cylinder gaps that show at 1:1. Junctions that coincide with a
+    /// truss-to-truss connector are skipped — the connector cube already covers those.
+    private static func addLatticeNodes(_ plan: ImmersiveStageGeometryPlan, to layoutEntity: Entity) {
+        var nodes: [Vector3Meters] = []
+        for member in plan.trussMembers {
+            for point in [member.start, member.end] {
+                if nodes.contains(where: { $0.distance(to: point) < 0.02 }) { continue }
+                if plan.connectorBlocks.contains(where: { $0.position.distance(to: point) < 0.26 }) { continue }
+                nodes.append(point)
+            }
+        }
+        for (index, node) in nodes.enumerated() {
+            let sphere = ModelEntity(
+                mesh: .generateSphere(radius: sceneLength(0.055)),
+                materials: [material(hex: "#C2C4C1", intensity: 0.95, isMetallic: true)]
+            )
+            sphere.name = "truss_node_\(index)"
+            sphere.position = scenePoint(node)
+            markShadowCaster(sphere)
+            layoutEntity.addChild(sphere)
+        }
     }
 
     private static func addStageBase(_ object: StageObject, to root: Entity) {
@@ -250,7 +311,7 @@ struct ImmersiveView: View {
             Vector3Meters(x: leftX + legInset, y: size.height / 2, z: frontZ - legInset)
         ].enumerated() {
             let legEntity = ModelEntity(
-                mesh: .generateCylinder(height: sceneLength(size.height), radius: 0.018),
+                mesh: .generateCylinder(height: sceneLength(size.height), radius: sceneLength(0.04)),
                 materials: [material(hex: "#6C6F73", intensity: 0.80, isMetallic: true)]
             )
             legEntity.name = "stage_leg_\(object.id)_\(index)"
@@ -282,7 +343,7 @@ struct ImmersiveView: View {
         }
 
         let entity = ModelEntity(
-            mesh: .generateCylinder(height: length, radius: 0.018),
+            mesh: .generateCylinder(height: length, radius: sceneLength(0.04)),
             materials: [material(hex: "#D6D8D5", intensity: 0.96, isMetallic: true)]
         )
         entity.name = "truss_member_\(index)"
@@ -292,100 +353,468 @@ struct ImmersiveView: View {
         return entity
     }
 
-    private static func connectorBlock(_ block: TrussConnectorBlock) -> ModelEntity {
-        let size = sceneLength(block.size)
-        let entity = box(
-            name: "truss_connector_\(block.id)",
-            width: size,
-            height: size,
-            depth: size,
-            hex: "#C9CBC8",
-            intensity: 0.95,
-            position: scenePoint(block.position)
-        )
-        entity.orientation = simd_quatf(angle: .pi / 10, axis: SIMD3<Float>(0, 1, 0))
-        entity.model?.materials = [material(hex: "#C9CBC8", intensity: 0.95, isMetallic: true)]
-        addConnectorBolts(to: entity, blockSize: size)
-        markShadowCaster(entity)
-        return entity
+    private static func connectorBlock(_ block: TrussConnectorBlock, layout: StageLayout) -> Entity {
+        // The portal is planar in X-Y, so truss only ever enters a joint along ±X / ±Y; ±Z always stays
+        // clear and faces the audience. Knowing the occupied axes lets us bolt the clear faces and add a
+        // base plate under a foot.
+        let incoming = incomingTrussDirections(at: block.position, layout: layout)
+        let isFooting = block.position.y < 0.05
+        let isCorner = incoming.count == 2 && abs(simd_dot(incoming[0], incoming[1])) < 0.5
+
+        // The cube must be big enough to *swallow* the chord/brace ends that converge at the joint —
+        // otherwise the bare tubes crossing read as a tangle. A 90° corner needs a notably bigger block
+        // (real portal truss uses a prominent corner cube there).
+        let cubeSize = sceneLength(block.size) * (isCorner ? 1.5 : (incoming.count <= 1 ? 1.3 : 1.15))
+
+        let connector = Entity()
+        connector.name = "truss_connector_\(block.id)"
+        // Lift a floor joint so the cube rests on the deck/floor rather than sinking half below it.
+        var origin = scenePoint(block.position)
+        if isFooting { origin.y += cubeSize / 2 }
+        connector.position = origin
+
+        // Axis-aligned solid cube, same finish as the truss (the old 18° tilt read as a skewed joint).
+        let cube = box(name: "connector_cube_\(block.id)", width: cubeSize, height: cubeSize, depth: cubeSize, hex: "#D6D8D5", intensity: 0.96, position: .zero)
+        cube.model?.materials = [material(hex: "#D6D8D5", intensity: 0.96, isMetallic: true)]
+        markShadowCaster(cube)
+        connector.addChild(cube)
+
+        // Bolt studs on every face the truss doesn't pass through (and not the footing's underside).
+        let faces: [SIMD3<Float>] = [
+            SIMD3(0, 0, 1), SIMD3(0, 0, -1),
+            SIMD3(1, 0, 0), SIMD3(-1, 0, 0),
+            SIMD3(0, 1, 0), SIMD3(0, -1, 0)
+        ]
+        for normal in faces {
+            if incoming.contains(where: { simd_dot($0, normal) > 0.5 }) { continue }
+            if isFooting && normal.y < -0.5 { continue }
+            addConnectorBolts(to: cube, blockSize: cubeSize, faceNormal: normal)
+        }
+
+        if isFooting {
+            addBasePlate(to: connector, blockSize: cubeSize)
+        }
+
+        return connector
     }
 
-    private static func addConnectorBolts(to connector: Entity, blockSize: Float) {
-        let boltSize = max(0.012, blockSize * 0.12)
-        for x in [-0.24, 0.24] as [Float] {
-            for y in [-0.24, 0.24] as [Float] {
-                let bolt = box(
-                    name: "connector_bolt",
-                    width: boltSize,
-                    height: boltSize,
-                    depth: 0.006,
-                    hex: "#74777A",
-                    intensity: 0.75,
-                    position: SIMD3<Float>(x * blockSize, y * blockSize, blockSize * 0.52)
+    /// Unit directions (along ±X / ±Y) of the truss segments meeting at a joint, in model/scene axes
+    /// (`scenePoint` only scales+translates, so model axes == scene axes).
+    private static func incomingTrussDirections(at position: Vector3Meters, layout: StageLayout) -> [SIMD3<Float>] {
+        var directions: [SIMD3<Float>] = []
+        for object in layout.objects where object.type == .trussSegment {
+            let endpoints = object.trussEndpoints
+            guard endpoints.count == 2 else { continue }
+            for (index, endpoint) in endpoints.enumerated() where endpoint.distance(to: position) <= 0.06 {
+                let toward = endpoints[1 - index] - endpoint
+                let vector = SIMD3<Float>(Float(toward.x), Float(toward.y), Float(toward.z))
+                let length = simd_length(vector)
+                guard length > 0.0001 else { continue }
+                let unit = vector / length
+                if !directions.contains(where: { simd_dot($0, unit) > 0.9 }) {
+                    directions.append(unit)
+                }
+            }
+        }
+        return directions
+    }
+
+    private static func addConnectorBolts(to connector: Entity, blockSize: Float, faceNormal: SIMD3<Float>) {
+        let studRadius = max(0.01, blockSize * 0.085)
+        let studHeight = max(0.02, blockSize * 0.12)
+        let inset = blockSize * 0.26
+        // Two in-plane axes spanning the face.
+        let reference: SIMD3<Float> = abs(faceNormal.y) > 0.5 ? SIMD3(0, 0, 1) : SIMD3(0, 1, 0)
+        let inPlaneA = simd_normalize(simd_cross(reference, faceNormal))
+        let inPlaneB = simd_normalize(simd_cross(faceNormal, inPlaneA))
+        let faceCenter = faceNormal * (blockSize * 0.5 + studHeight * 0.3)
+        for a in [-inset, inset] as [Float] {
+            for b in [-inset, inset] as [Float] {
+                let stud = ModelEntity(
+                    mesh: .generateCylinder(height: studHeight, radius: studRadius),
+                    materials: [material(hex: "#8A8D90", intensity: 0.82, isMetallic: true)]
                 )
-                bolt.model?.materials = [material(hex: "#74777A", intensity: 0.75, isMetallic: true)]
+                stud.name = "connector_bolt"
+                stud.position = faceCenter + inPlaneA * a + inPlaneB * b
+                // The cylinder's axis is local +Y; lay it along the face normal so the stud pokes out.
+                stud.orientation = orientation(from: SIMD3<Float>(0, 1, 0), to: faceNormal)
+                connector.addChild(stud)
+            }
+        }
+    }
+
+    /// Flat square steel base plate under a truss leg foot, with anchor bolts — a realistic ground joint.
+    private static func addBasePlate(to connector: Entity, blockSize: Float) {
+        let plateSize = blockSize * 1.8
+        let plateThickness = sceneLength(0.03)
+        // The connector origin was lifted by blockSize/2, so the floor sits at local y = -blockSize/2.
+        let plateY = -blockSize / 2 + plateThickness / 2
+        let plate = box(name: "connector_baseplate", width: plateSize, height: plateThickness, depth: plateSize, hex: "#9A9CA0", intensity: 0.9, position: SIMD3<Float>(0, plateY, 0))
+        plate.model?.materials = [material(hex: "#9A9CA0", intensity: 0.9, isMetallic: true)]
+        markShadowCaster(plate)
+        connector.addChild(plate)
+
+        let inset = plateSize * 0.36
+        for x in [-inset, inset] as [Float] {
+            for z in [-inset, inset] as [Float] {
+                let bolt = ModelEntity(
+                    mesh: .generateCylinder(height: plateThickness * 1.8, radius: blockSize * 0.06),
+                    materials: [material(hex: "#74777A", intensity: 0.8, isMetallic: true)]
+                )
+                bolt.name = "connector_bolt"
+                bolt.position = SIMD3<Float>(x, plateY + plateThickness * 0.7, z)
                 connector.addChild(bolt)
             }
         }
     }
 
-    private static func addLightingPreview(to root: Entity, layout: StageLayout) {
+    private static let rigRootPrefix = "rig_root_"
+
+    /// Builds the dynamic rig — visible gear + a spotlight per fixture — from the cue's fixtures, placed
+    /// by `RigPlacement` (any number/type, spread across their zones). Reconciles like `syncStageLayout`:
+    /// it only rebuilds when the fixture set changes (a new AI look with different fixtures), so cue
+    /// switches and per-cue relights don't churn the geometry. Each fixture's spotlight is named
+    /// `spot_<fixtureId>` so `apply` can drive it.
+    private static func syncRig(cue: LightingCue?, layout: StageLayout, in root: Entity) {
+        guard let cue else { return }
+
+        let signature = cue.fixtureGroups
+            .map { "\($0.id)|\($0.renderModel.rawValue)|\($0.zone.rawValue)" }
+            .sorted()
+            .joined(separator: ",")
+        let expectedName = "\(rigRootPrefix)\(abs(signature.hashValue))"
+        if root.children.contains(where: { $0.name == expectedName }) {
+            return
+        }
+
+        for child in root.children where child.name.hasPrefix(rigRootPrefix) {
+            child.removeFromParent()
+        }
+
+        let rig = Entity()
+        rig.name = expectedName
+
+        // Spread fixtures evenly within each zone: each fixture's slot is its index among the fixtures
+        // sharing its zone, and count is how many share it.
+        var zoneTotals: [StageZone: Int] = [:]
+        for fixture in cue.fixtureGroups {
+            zoneTotals[fixture.zone, default: 0] += 1
+        }
+        var zoneSlots: [StageZone: Int] = [:]
+        for (index, fixture) in cue.fixtureGroups.enumerated() {
+            let slot = zoneSlots[fixture.zone, default: 0]
+            zoneSlots[fixture.zone] = slot + 1
+            let placement = RigPlacement.placement(
+                zone: fixture.zone,
+                slot: slot,
+                count: zoneTotals[fixture.zone] ?? 1,
+                layout: layout
+            )
+            addRigFixture(fixture, lightNumber: index + 1, at: placement, to: rig)
+        }
+
+        root.addChild(rig)
+    }
+
+    /// Instantiates one fixture's visible gear + its (initially dark) spotlight at a placement, plus a
+    /// floating "Light N" label so it can be addressed by voice ("close the light N"). FOH-zone fixtures
+    /// get a floor stand; others hang like a moving head. `apply` drives color/intensity later.
+    private static func addRigFixture(
+        _ fixture: FixtureGroup,
+        lightNumber: Int,
+        at placement: (position: Vector3Meters, aim: Vector3Meters),
+        to rig: Entity
+    ) {
+        if fixture.renderModel == .laser {
+            // The laser builds its own emitter + visible aerial beam fan; the spotlight below still adds
+            // a faint colour spill on the surfaces the cone reaches.
+            addLaserProjector(name: "laser_\(fixture.id)", to: rig, source: placement.position, beamColorHex: fixture.color.value)
+        } else if fixture.zone == .stageFront || fixture.renderModel.defaultMountZone == .stageFront {
+            addFrontLightStand(name: "stand_\(fixture.id)", to: rig, at: placement.position, aim: placement.aim)
+        } else {
+            addMovingHeadFixture(
+                name: "head_\(fixture.id)",
+                to: rig,
+                position: placement.position,
+                color: "#2B2F38",
+                lensColor: "#9FB6FF"
+            )
+        }
+
+        addStageSpotLight(
+            name: "spot_\(fixture.id)",
+            to: rig,
+            from: placement.position,
+            aim: placement.aim,
+            beamAngleDegrees: fixture.effectiveFineControl.beamAngleDegrees
+        )
+
+        addLightLabel(number: lightNumber, near: placement.position, to: rig)
+    }
+
+    /// A small floating "Light N" name tag above a fixture (RealityKit text, unlit so it reads at any
+    /// brightness, on a dark backing). Faces +Z (toward the audience/viewer). Lets the user see which
+    /// number to say for single-light commands.
+    private static func addLightLabel(number: Int, near position: Vector3Meters, to rig: Entity) {
+        let label = makeLabelEntity(StageLightLabel.displayName(number: number))
+        label.name = "light_label_\(number)"
+        label.position = scenePoint(position) + SIMD3<Float>(0, sceneLength(0.34), 0)
+        rig.addChild(label)
+    }
+
+    private static func makeLabelEntity(_ text: String) -> Entity {
+        let container = Entity()
+
+        let mesh = MeshResource.generateText(
+            text,
+            extrusionDepth: 0.004,
+            font: .systemFont(ofSize: 0.12, weight: .semibold),
+            containerFrame: .zero,
+            alignment: .center,
+            lineBreakMode: .byClipping
+        )
+        let textEntity = ModelEntity(mesh: mesh, materials: [UnlitMaterial(color: .white)])
+        let bounds = textEntity.model?.mesh.bounds ?? mesh.bounds
+        // Recenter the glyphs (generateText pivots at the baseline origin) and float them in front.
+        textEntity.position = SIMD3<Float>(-bounds.center.x, -bounds.center.y, 0.004)
+        container.addChild(textEntity)
+
+        let backing = ModelEntity(
+            mesh: .generatePlane(width: bounds.extents.x + 0.06, height: bounds.extents.y + 0.045, cornerRadius: 0.02),
+            materials: [UnlitMaterial(color: UIColor(white: 0.05, alpha: 1.0))]
+        )
+        container.addChild(backing)
+        return container
+    }
+
+    /// A front-of-house lighting stand: a tripod-footed vertical column carrying a par/fresnel-style
+    /// fixture at `source`, the exact point the matching `spot_frontLight_*` emits from, aimed at the
+    /// stage. Makes the otherwise-invisible front light read as real gear standing in the audience area
+    /// — so the user can see where the light comes from. Stage geometry (not the opaque venue), so it
+    /// stays visible in room-spill passthrough too.
+    private static func addFrontLightStand(name: String, to root: Entity, at source: Vector3Meters, aim target: Vector3Meters) {
+        let stand = Entity()
+        stand.name = name
+
+        // Vertical column from the floor up to just under the fixture.
+        let columnTopY = max(0.3, source.y - 0.14)
+        if let column = strut(named: "\(name)_column",
+                              from: Vector3Meters(x: source.x, y: 0.0, z: source.z),
+                              to: Vector3Meters(x: source.x, y: columnTopY, z: source.z),
+                              radius: 0.035, hex: "#3A3D42", intensity: 0.72) {
+            stand.addChild(column)
+        }
+
+        // Tripod feet splayed from a hub low on the column to the floor.
+        let hub = Vector3Meters(x: source.x, y: min(0.6, columnTopY), z: source.z)
+        let spread = 0.55
+        for leg in 0..<3 {
+            let angle = Double(leg) / 3.0 * 2.0 * Double.pi
+            let foot = Vector3Meters(x: source.x + cos(angle) * spread, y: 0.02, z: source.z + sin(angle) * spread)
+            if let legEntity = strut(named: "\(name)_leg_\(leg)", from: hub, to: foot, radius: 0.022, hex: "#3A3D42", intensity: 0.66) {
+                stand.addChild(legEntity)
+            }
+        }
+
+        // Fixture aimed at the stage: its barrel axis points along the throw direction.
+        let aimVector = scenePoint(target) - scenePoint(source)
+        let aimUnit = simd_length(aimVector) > 0.0001 ? simd_normalize(aimVector) : SIMD3<Float>(0, 0, -1)
+        let headOrientation = orientation(from: SIMD3<Float>(0, 1, 0), to: aimUnit)
+
+        // Yoke bracket between the column top and the can.
+        let yoke = box(name: "\(name)_yoke", width: 0.10, height: 0.05, depth: 0.10, hex: "#26292F", intensity: 0.8,
+                       position: scenePoint(Vector3Meters(x: source.x, y: columnTopY + 0.04, z: source.z)))
+        yoke.model?.materials = [material(hex: "#26292F", intensity: 0.8, isMetallic: true)]
+        markShadowCaster(yoke)
+        stand.addChild(yoke)
+
+        // Par-can body centred on the emit point, barrel along the throw.
+        let can = ModelEntity(
+            mesh: .generateCylinder(height: sceneLength(0.30), radius: sceneLength(0.14)),
+            materials: [material(hex: "#1B1E24", intensity: 0.85, isMetallic: true)]
+        )
+        can.name = "\(name)_can"
+        can.position = scenePoint(source)
+        can.orientation = headOrientation
+        markShadowCaster(can)
+        stand.addChild(can)
+
+        // Warm lens disc at the front of the can so the emitter reads as a glowing source.
+        let lens = ModelEntity(
+            mesh: .generateCylinder(height: sceneLength(0.02), radius: sceneLength(0.125)),
+            materials: [material(hex: "#FFE7B8", intensity: 0.95)]
+        )
+        lens.name = "\(name)_lens"
+        lens.position = scenePoint(source) + aimUnit * sceneLength(0.16)
+        lens.orientation = headOrientation
+        stand.addChild(lens)
+
+        root.addChild(stand)
+    }
+
+    /// A metal strut (cylinder) spanning two model-space points — shared by the front-light stand's
+    /// column and tripod legs. Mirrors `trussMember`'s start→end orientation math.
+    private static func strut(named name: String, from a: Vector3Meters, to b: Vector3Meters, radius: Double, hex: String, intensity: Double) -> ModelEntity? {
+        let start = scenePoint(a)
+        let end = scenePoint(b)
+        let direction = end - start
+        let length = simd_length(direction)
+        guard length > 0.001 else {
+            return nil
+        }
+
+        let entity = ModelEntity(
+            mesh: .generateCylinder(height: length, radius: sceneLength(radius)),
+            materials: [material(hex: hex, intensity: intensity, isMetallic: true)]
+        )
+        entity.name = name
+        entity.position = (start + end) / 2
+        entity.orientation = orientation(from: SIMD3<Float>(0, 1, 0), to: direction / length)
+        markShadowCaster(entity)
+        return entity
+    }
+
+    /// A neutral, light-grey performer stand-in centred where the front light aims. An empty deck gives
+    /// the coloured front light nothing to land on, so a cue colour change is invisible; a matte mid-grey
+    /// figure takes on the front-light colour at a glance and casts a shadow that shows the beam. It is
+    /// stage geometry (not part of the opaque venue), so it stays visible in room-spill passthrough too.
+    private static func addPerformerStandIn(to root: Entity, layout: StageLayout) {
         guard let stageBase = layout.objects.first(where: { $0.type == .stageBase }),
               let stageSize = stageBase.size else {
             return
         }
 
-        let stageTopY = stageBase.position.y + stageSize.height / 2
-        let upstageZ = layout.objects.flatMap(\.trussEndpoints).map(\.z).min() ?? (stageBase.position.z - stageSize.depth / 2)
-        let maxTrussY = layout.objects.flatMap(\.trussEndpoints).map(\.y).max() ?? (stageTopY + 2)
-        let fixtureY = maxTrussY - 0.18
+        let deckTopY = stageBase.position.y + stageSize.height / 2
+        let standX = stageBase.position.x
+        let standZ = stageBase.position.z + stageSize.depth * 0.12
 
-        // Visible moving-head fixtures on the upstage truss double as the real background-wash
-        // emitters, casting light back onto the backdrop drape.
-        let washTarget = Vector3Meters(
-            x: stageBase.position.x,
-            y: stageTopY + (maxTrussY - stageTopY) * 0.45,
-            z: upstageZ - 0.28
-        )
-        for (index, xOffset) in [-0.75, 0.75].enumerated() {
-            let fixture = Vector3Meters(x: stageBase.position.x + stageSize.width * xOffset / 2, y: fixtureY, z: upstageZ + 0.08)
-            addMovingHeadFixture(
-                name: "moving_head_\(index)",
-                to: root,
-                position: fixture,
-                color: "#2B2F38",
-                lensColor: "#9FB6FF"
-            )
-            addStageSpotLight(
-                name: "spot_backgroundWash_\(index)",
-                to: root,
-                from: Vector3Meters(x: fixture.x, y: fixture.y - 0.12, z: fixture.z + 0.05),
-                aim: washTarget,
-                beamAngleDegrees: 60
-            )
+        let feet = Vector3Meters(x: standX, y: deckTopY, z: standZ)
+        let plan = HumanoidFigurePlan.make(feet: feet)
+        let skin = mannequinMaterial()        // one shared instance — uniform surface, single allocation
+
+        let performer = Entity()
+        performer.name = "performer_stand_in"
+
+        // Smooth limbs: a cylinder per limb, capped at both ends by the joint spheres below (same radius),
+        // so each arm/leg reads as one seamless rounded tube.
+        for (index, bone) in plan.bones.enumerated() {
+            if let entity = limbBone(
+                name: "performer_bone_\(index)_\(bone.role.rawValue)",
+                from: bone.a,
+                to: bone.b,
+                radius: bone.radius,
+                material: skin
+            ) {
+                performer.addChild(entity)
+            }
         }
 
-        // Front-of-house key light: elevated and downstage of the deck, aimed at the performer
-        // area. No visible fixture — FOH positions sit out past the audience in a real venue.
-        let frontTarget = Vector3Meters(
-            x: stageBase.position.x,
-            y: stageTopY + 0.05,
-            z: stageBase.position.z + stageSize.depth * 0.12
-        )
-        for (index, xOffset) in [-0.55, 0.55].enumerated() {
-            let source = Vector3Meters(
-                x: stageBase.position.x + stageSize.width * xOffset / 2,
-                y: stageTopY + 1.9,
-                z: stageBase.position.z + stageSize.depth * 0.95 + 0.7
-            )
-            addStageSpotLight(
-                name: "spot_frontLight_\(index)",
-                to: root,
-                from: source,
-                aim: frontTarget,
-                beamAngleDegrees: 40
-            )
+        // Rounded joint caps and hand/foot stubs — radius matches the limb so the surface stays smooth.
+        for joint in plan.joints where joint.capRadius > 0 {
+            performer.addChild(sphereJoint(
+                name: "performer_joint_\(joint.id)",
+                center: joint.position,
+                radius: joint.capRadius,
+                material: skin
+            ))
         }
+
+        // Rounded body masses (torso / hips / feet) as scaled spheres — the smooth, blobby silhouette.
+        for blob in plan.blobs {
+            performer.addChild(blobMass(
+                name: "performer_\(blob.id)",
+                center: blob.center,
+                radius: blob.radius,
+                scale: blob.scale,
+                material: skin
+            ))
+        }
+
+        // Big round head; its bottom overlaps the torso so there is no neck seam. Blank and featureless,
+        // matching the reference — and a procedural face would be the uncanny trap anyway.
+        performer.addChild(blobMass(
+            name: "performer_head",
+            center: plan.headCenter,
+            radius: plan.headRadius,
+            scale: Vector3Meters(x: 1, y: 1, z: 1),
+            material: skin
+        ))
+
+        root.addChild(performer)
+    }
+
+    /// `true` swaps the performer to a flat `SimpleMaterial` (consistent with the rest of the rig) for an
+    /// on-device A/B against the PBR look; `false` uses the smooth white material below.
+    private static let useMatteSimpleMaterialForPerformer = false
+
+    /// The performer's skin. A near-white smooth matte `PhysicallyBasedMaterial`, modelled on the
+    /// "Meccha Chameleon" character (a pure-white, paintable blob). It is the one object whose purpose is
+    /// to *show how coloured light lands on a body*, so it earns proper Lambert falloff and a soft sheen
+    /// (the beam gradient reads across the figure) — worth being the only non-`SimpleMaterial` surface in
+    /// the scene. White maximises colour pickup (a saturated front light tints it to a true hue) and
+    /// metallic 0 keeps it dielectric. (`UnlitMaterial` is avoided — it would ignore the cue lights.)
+    private static func mannequinMaterial() -> RealityKit.Material {
+        if useMatteSimpleMaterialForPerformer {
+            return material(hex: "#EDEDEA", intensity: 1.0)
+        }
+        var pbr = PhysicallyBasedMaterial()
+        pbr.baseColor = PhysicallyBasedMaterial.BaseColor(
+            tint: UIColor(red: 0.93, green: 0.93, blue: 0.93, alpha: 1.0)   // near-white, slight headroom
+        )
+        pbr.roughness = 0.62   // smooth matte, like the printed/game model
+        pbr.metallic = 0.0     // dielectric → coloured light reads as its true hue
+        pbr.specular = 0.40    // a little soft sheen on the rounded surface
+        return pbr
+    }
+
+    /// A rounded body mass: a sphere stretched per-axis into an ovoid. The torso/hips/feet/head are built
+    /// from these so the figure reads as smooth blobs rather than boxes. `scale` is dimensionless factors.
+    private static func blobMass(name: String, center: Vector3Meters, radius: Double, scale: Vector3Meters, material: RealityKit.Material) -> ModelEntity {
+        let entity = ModelEntity(
+            mesh: .generateSphere(radius: sceneLength(radius)),
+            materials: [material]
+        )
+        entity.name = name
+        entity.position = scenePoint(center)
+        entity.scale = SIMD3<Float>(Float(scale.x), Float(scale.y), Float(scale.z))
+        markShadowCaster(entity)
+        return entity
+    }
+
+    /// A sphere at a joint, wearing the supplied material and casting shadow. Mirrors the lattice-node
+    /// spheres; a sphere can't come from `strut`, so this is its companion.
+    private static func sphereJoint(name: String, center: Vector3Meters, radius: Double, material: RealityKit.Material) -> ModelEntity {
+        let entity = ModelEntity(
+            mesh: .generateSphere(radius: sceneLength(radius)),
+            materials: [material]
+        )
+        entity.name = name
+        entity.position = scenePoint(center)
+        markShadowCaster(entity)
+        return entity
+    }
+
+    /// `strut`'s twin for limbs: a cylinder spanning two model-space points, but carrying an injectable
+    /// material (the performer's PBR skin) instead of `strut`'s hardcoded metal finish. `strut` stays as
+    /// is for the metal stands.
+    private static func limbBone(name: String, from a: Vector3Meters, to b: Vector3Meters, radius: Double, material: RealityKit.Material) -> ModelEntity? {
+        let start = scenePoint(a)
+        let end = scenePoint(b)
+        let direction = end - start
+        let length = simd_length(direction)
+        guard length > 0.001 else {
+            return nil
+        }
+
+        let entity = ModelEntity(
+            mesh: .generateCylinder(height: length, radius: sceneLength(radius)),
+            materials: [material]
+        )
+        entity.name = name
+        entity.position = (start + end) / 2
+        entity.orientation = orientation(from: SIMD3<Float>(0, 1, 0), to: direction / length)
+        markShadowCaster(entity)
+        return entity
     }
 
     @discardableResult
@@ -405,7 +834,7 @@ struct ImmersiveView: View {
         let cone = SpotLightRenderMath.coneAngles(beamAngleDegrees: beamAngleDegrees)
         spot.light.innerAngleInDegrees = Float(cone.inner)
         spot.light.outerAngleInDegrees = Float(cone.outer)
-        spot.light.attenuationRadius = 18
+        spot.light.attenuationRadius = sceneLength(40)   // scene-metre reach; scales with the stage
         spot.shadow = SpotLightComponent.Shadow()
 
         // Opt this virtual spotlight into illuminating the real room in passthrough (room-spill)
@@ -427,89 +856,276 @@ struct ImmersiveView: View {
     }
 
     private static func addMovingHeadFixture(name: String, to root: Entity, position: Vector3Meters, color: String, lensColor: String) {
+        // DECORATION ONLY. The actual illumination comes from the separate `spot_backgroundWash_*`
+        // SpotLight entities; this rebuilds the visible "moving head beam" product that hangs under
+        // the truss clamp at `basePosition`, aimed down toward the stage. Proportions mirror the
+        // observatory's `addMovingHeadBeam`, scaled down to ~0.34m overall and oriented hanging /
+        // pointing down instead of standing. All sizes/offsets go through `sceneLength` so the
+        // fixture stays correct at any `stageScale`.
         let basePosition = scenePoint(position)
-        let yoke = box(name: "\(name)_yoke", width: 0.16, height: 0.08, depth: 0.08, hex: "#161A20", intensity: 0.85, position: basePosition)
-        yoke.model?.materials = [material(hex: color, intensity: 0.82, isMetallic: true)]
-        markShadowCaster(yoke)
-        root.addChild(yoke)
 
-        let head = box(name: "\(name)_head", width: 0.13, height: 0.10, depth: 0.16, hex: "#20242C", intensity: 0.9, position: basePosition + SIMD3<Float>(0, -0.075, 0.035))
-        head.orientation = simd_quatf(angle: -.pi / 10, axis: SIMD3<Float>(1, 0, 0))
-        head.model?.materials = [material(hex: color, intensity: 0.9, isMetallic: true)]
+        // Downward aim about X — matches the old fixture's ~-18°..-22° tilt toward the stage.
+        // Positive here tips the laid-horizontal head's front face down toward -Y (see headAxis).
+        let tilt: Float = .pi / 9   // 20° of downward pitch
+
+        // 1) Clamp/yoke block gripping the truss at the mount point.
+        let clamp = box(
+            name: "\(name)_clamp",
+            width: sceneLength(0.13),
+            height: sceneLength(0.055),
+            depth: sceneLength(0.12),
+            hex: color,
+            intensity: 0.82,
+            position: basePosition
+        )
+        clamp.model?.materials = [material(hex: color, intensity: 0.82, isMetallic: true)]
+        markShadowCaster(clamp)
+        root.addChild(clamp)
+
+        // 2) Heavy base body just below the clamp.
+        let base = box(
+            name: "\(name)_base",
+            width: sceneLength(0.165),
+            height: sceneLength(0.07),
+            depth: sceneLength(0.15),
+            hex: color,
+            intensity: 0.78,
+            position: basePosition + SIMD3<Float>(0, sceneLength(-0.06), 0)
+        )
+        base.model?.materials = [material(hex: color, intensity: 0.78, isMetallic: true)]
+        markShadowCaster(base)
+        root.addChild(base)
+
+        // 3) Two yoke side-arms dropping down to cradle the head.
+        let armY = sceneLength(-0.135)
+        for (suffix, dx) in [("left", sceneLength(-0.085)), ("right", sceneLength(0.085))] {
+            let arm = box(
+                name: "\(name)_arm_\(suffix)",
+                width: sceneLength(0.03),
+                height: sceneLength(0.155),
+                depth: sceneLength(0.065),
+                hex: color,
+                intensity: 0.8,
+                position: basePosition + SIMD3<Float>(dx, armY, 0)
+            )
+            arm.model?.materials = [material(hex: color, intensity: 0.8, isMetallic: true)]
+            markShadowCaster(arm)
+            root.addChild(arm)
+        }
+
+        // 4) Cylindrical HEAD between the arms. `generateCylinder`'s axis is Y, so rotate it to lay
+        // horizontal and tilt it down: a +pi/2 turn about X lays the length axis along +Z, and the
+        // extra `tilt` about X pitches that front face past horizontal so the lens points forward
+        // and down toward the stage (resulting headAxis ≈ (0, -0.34, 0.94)).
+        let headCenter = basePosition + SIMD3<Float>(0, sceneLength(-0.18), sceneLength(0.02))
+        let headOrientation = simd_quatf(angle: tilt, axis: SIMD3<Float>(1, 0, 0))
+            * simd_quatf(angle: .pi / 2, axis: SIMD3<Float>(1, 0, 0))
+        // Local +Y of the cylinder (its length axis) after the orientation above — the direction the
+        // lens face points — used to offset the rim / lens / rear cap along the barrel.
+        let headAxis = simd_act(headOrientation, SIMD3<Float>(0, 1, 0))
+
+        let head = ModelEntity(
+            mesh: .generateCylinder(height: sceneLength(0.17), radius: sceneLength(0.05)),
+            materials: [material(hex: color, intensity: 0.9, isMetallic: true)]
+        )
+        head.name = "\(name)_head"
+        head.position = headCenter
+        head.orientation = headOrientation
         markShadowCaster(head)
         root.addChild(head)
 
-        let lens = box(name: "\(name)_lens", width: 0.07, height: 0.038, depth: 0.012, hex: lensColor, intensity: 0.75, alpha: 0.92, position: basePosition + SIMD3<Float>(0, -0.09, 0.122))
+        // Front rim ring — a thin cylinder just ahead of the head's front face.
+        let rim = ModelEntity(
+            mesh: .generateCylinder(height: sceneLength(0.018), radius: sceneLength(0.057)),
+            materials: [material(hex: color, intensity: 0.7, isMetallic: true)]
+        )
+        rim.name = "\(name)_rim"
+        rim.position = headCenter + headAxis * sceneLength(0.088)
+        rim.orientation = headOrientation
+        markShadowCaster(rim)
+        root.addChild(rim)
+
+        // Glowing front lens (lensColor, translucent, high intensity).
+        let lens = ModelEntity(
+            mesh: .generateCylinder(height: sceneLength(0.012), radius: sceneLength(0.044)),
+            materials: [material(hex: lensColor, intensity: 0.95, alpha: 0.85)]
+        )
+        lens.name = "\(name)_lens"
+        lens.position = headCenter + headAxis * sceneLength(0.097)
+        lens.orientation = headOrientation
         root.addChild(lens)
+
+        // Rear cap closing the back of the head barrel.
+        let rearCap = ModelEntity(
+            mesh: .generateCylinder(height: sceneLength(0.022), radius: sceneLength(0.052)),
+            materials: [material(hex: color, intensity: 0.66, isMetallic: true)]
+        )
+        rearCap.name = "\(name)_rear_cap"
+        rearCap.position = headCenter - headAxis * sceneLength(0.086)
+        rearCap.orientation = headOrientation
+        markShadowCaster(rearCap)
+        root.addChild(rearCap)
     }
 
-    private static func apply(_ cue: LightingCue, to root: Entity) {
-        if let frontLight = try? cue.requireFixture(role: .frontLight) {
-            for index in 0..<2 {
-                updateSpotLight(
-                    named: "spot_frontLight_\(index)",
-                    in: root,
-                    role: .frontLight,
-                    color: frontLight.color.value,
-                    intensity: frontLight.intensity,
-                    beamAngleDegrees: frontLight.effectiveFineControl.beamAngleDegrees,
-                    gobo: frontLight.gobo,
-                    duration: cue.transition.duration
-                )
-            }
+    // MARK: - Laser projector (visible aerial beams)
+
+    /// Model-space throw of the laser fan: forward toward the audience (+Z) and angled down over the
+    /// stage. The fan spreads horizontally about vertical, so the beams read as a wall of light over
+    /// the crowd. `scenePoint` only scales+translates, so model axes == scene axes for this direction.
+    private static let laserBaseDirection = simd_normalize(SIMD3<Float>(0, -0.35, 1))
+    private static let laserFanHalfAngle: Float = 30 * .pi / 180
+    private static let laserBeamCount = 7
+
+    /// Builds a laser projector: a compact emitter head on the upstage truss plus a fan of razor-thin,
+    /// glowing aerial beams shooting out over the stage. The beams are `UnlitMaterial` rods so they
+    /// read as their own light source — a real laser beam doesn't depend on the room being lit — and
+    /// `apply` recolors / toggles them per cue via `updateLaserProjector`. This is the show-stopper
+    /// fixture: visible beams in the air, not just a cone landing on a surface.
+    private static func addLaserProjector(name: String, to rig: Entity, source: Vector3Meters, beamColorHex: String) {
+        let container = Entity()
+        container.name = name
+        let origin = scenePoint(source)
+        let throwOrientation = orientation(from: SIMD3<Float>(0, 1, 0), to: laserBaseDirection)
+
+        // Emitter head: a small dark box (physical gear that stays visible at any cue).
+        let body = box(name: "\(name)_body", width: sceneLength(0.26), height: sceneLength(0.18), depth: sceneLength(0.30), hex: "#15171C", intensity: 0.85, position: origin)
+        body.model?.materials = [material(hex: "#15171C", intensity: 0.85, isMetallic: true)]
+        markShadowCaster(body)
+        container.addChild(body)
+
+        // Glowing aperture disc the beams emit from.
+        let aperture = ModelEntity(
+            mesh: .generateCylinder(height: sceneLength(0.03), radius: sceneLength(0.075)),
+            materials: [UnlitMaterial(color: laserBeamUIColor(hex: beamColorHex, intensity: 1))]
+        )
+        aperture.name = "\(name)_aperture"
+        aperture.orientation = throwOrientation
+        aperture.position = origin + laserBaseDirection * sceneLength(0.18)
+        container.addChild(aperture)
+
+        // The beam fan: thin Unlit rods, each laid along the throw then yawed about vertical.
+        let beamLength = sceneLength(12)
+        let beamRadius = sceneLength(0.02)
+        for index in 0..<laserBeamCount {
+            let fraction = laserBeamCount <= 1 ? 0 : Float(index) / Float(laserBeamCount - 1) * 2 - 1   // -1...1
+            let yaw = fraction * laserFanHalfAngle
+            let beamOrientation = simd_quatf(angle: yaw, axis: SIMD3<Float>(0, 1, 0)) * throwOrientation
+            let direction = simd_act(beamOrientation, SIMD3<Float>(0, 1, 0))
+            let beam = ModelEntity(
+                mesh: .generateCylinder(height: beamLength, radius: beamRadius),
+                materials: [UnlitMaterial(color: laserBeamUIColor(hex: beamColorHex, intensity: 1))]
+            )
+            beam.name = "\(name)_beam_\(index)"
+            beam.orientation = beamOrientation
+            beam.position = origin + direction * (beamLength / 2)
+            container.addChild(beam)
         }
 
-        if let backgroundWash = try? cue.requireFixture(role: .backgroundWash) {
-            for index in 0..<2 {
-                updateSpotLight(
-                    named: "spot_backgroundWash_\(index)",
-                    in: root,
-                    role: .backgroundWash,
-                    color: backgroundWash.color.value,
-                    intensity: backgroundWash.intensity,
-                    beamAngleDegrees: backgroundWash.effectiveFineControl.beamAngleDegrees,
-                    gobo: backgroundWash.gobo,
-                    duration: cue.transition.duration
-                )
+        rig.addChild(container)
+    }
+
+    /// A laser beam's emissive colour: the cue's hex dimmed by intensity, kept slightly translucent so
+    /// overlapping beams build brightness like real laser haze.
+    private static func laserBeamUIColor(hex: String, intensity: Double) -> UIColor {
+        let rgb = (RGBComponents(hex: hex) ?? .white).dimmed(by: max(0, min(intensity, 1)))
+        return UIColor(red: rgb.red, green: rgb.green, blue: rgb.blue, alpha: 0.85)
+    }
+
+    /// Per-cue update for a laser: recolor the fan to the resolved cue colour and hide the beams when
+    /// the fixture is effectively off (the emitter body stays). The cone spilling colour onto surfaces
+    /// is still driven by the fixture's `spot_<id>` in `updateSpotLight`.
+    private static func updateLaserProjector(named name: String, in root: Entity, colorHex: String, intensity: Double) {
+        guard let container = root.findEntity(named: name) else {
+            return
+        }
+
+        let beamsVisible = intensity > 0.03
+        let beamColor = laserBeamUIColor(hex: colorHex, intensity: intensity)
+        let apertureColor = laserBeamUIColor(hex: colorHex, intensity: max(0.3, intensity))
+        for child in container.children {
+            guard let model = child as? ModelEntity else { continue }
+            if child.name.contains("_beam_") {
+                child.isEnabled = beamsVisible
+                model.model?.materials = [UnlitMaterial(color: beamColor)]
+            } else if child.name.hasSuffix("_aperture") {
+                child.isEnabled = beamsVisible
+                model.model?.materials = [UnlitMaterial(color: apertureColor)]
             }
+        }
+    }
+
+    /// Relights every fixture in the cue: each `FixtureGroup` drives its own `spot_<id>` spotlight
+    /// (built by `syncRig`). Dynamic over any number/type of fixtures. Per-light manual overrides
+    /// (keyed by the 1-based light number = cue order) are layered on top — "close the light 3"
+    /// fades that one fixture to 0 over the same transition.
+    private static func apply(_ cue: LightingCue, overrides: [Int: LightOverride], to root: Entity) {
+        for (index, fixture) in cue.fixtureGroups.enumerated() {
+            let override = overrides[index + 1] ?? LightOverride()
+            let resolved = override.resolved(cueColor: fixture.color.value, cueIntensity: fixture.intensity)
+            updateSpotLight(
+                named: "spot_\(fixture.id)",
+                in: root,
+                model: fixture.renderModel,
+                color: resolved.color,
+                intensity: resolved.intensity,
+                beamAngleDegrees: fixture.effectiveFineControl.beamAngleDegrees,
+                gobo: fixture.gobo,
+                transition: cue.transition
+            )
+
+            // Lasers also drive their visible beam fan (recolor + on/off) on top of the cone spill.
+            if fixture.renderModel == .laser {
+                updateLaserProjector(named: "laser_\(fixture.id)", in: root, colorHex: resolved.color, intensity: resolved.intensity)
+            }
+        }
+    }
+
+    /// Maps a cue transition's `easing` string to the SwiftUI animation that cross-fades the
+    /// spotlights. `linear` is the stage default — a steady fade with no ease-in/out ramp, which reads
+    /// as a real lighting console crossfade rather than a UI animation.
+    private static func animation(for transition: CueTransition) -> Animation {
+        switch transition.easing {
+        case "linear": return .linear(duration: transition.duration)
+        case "easeIn": return .easeIn(duration: transition.duration)
+        case "easeOut": return .easeOut(duration: transition.duration)
+        default: return .easeInOut(duration: transition.duration)
         }
     }
 
     // Drives a real RealityKit spotlight from a cue's fixture values. The mutation runs inside a
     // SwiftUI animation transaction so `SpotLightComponent` (an `_ImplicitlyAnimatableBuiltinComponent`
-    // on visionOS 27) cross-fades color/intensity/cone over the cue's transition duration instead of
-    // hard-cutting.
+    // on visionOS 27) cross-fades color/intensity/cone over the cue's transition instead of hard-cutting.
     private static func updateSpotLight(
         named name: String,
         in root: Entity,
-        role: FixtureRole,
+        model: LightingFixtureVisualModel,
         color: String,
         intensity: Double,
         beamAngleDegrees: Double,
         gobo: GoboPattern?,
-        duration: Double
+        transition: CueTransition
     ) {
         guard let spot = root.findEntity(named: name) as? SpotLight else {
             return
         }
 
         let rgb = RGBComponents(hex: color) ?? .white
-        let lumens = Float(SpotLightRenderMath.lumens(forIntensity: intensity, role: role))
+        let lumens = Float(SpotLightRenderMath.lumens(forIntensity: intensity, model: model)) * lumenScaleCompensation
         let cone = SpotLightRenderMath.coneAngles(beamAngleDegrees: beamAngleDegrees)
 
-        withAnimation(.easeInOut(duration: duration)) {
+        withAnimation(Self.animation(for: transition)) {
             spot.light.color = UIColor(red: rgb.red, green: rgb.green, blue: rgb.blue, alpha: 1)
             spot.light.intensity = lumens
             spot.light.innerAngleInDegrees = Float(cone.inner)
             spot.light.outerAngleInDegrees = Float(cone.outer)
         }
 
-        // Soft shadow: widen the penumbra with the beam, keyed brighter for the front key light.
+        // Soft shadow: widen the penumbra with the beam, keyed brighter for front-facing key lights.
         // Shadow isn't an _ImplicitlyAnimatableBuiltinComponent, so this is set outside the
         // animation (beam width rarely changes between cues anyway).
         var shadow = spot.shadow ?? SpotLightComponent.Shadow()
         shadow.lightSize = Float(SpotLightRenderMath.shadowLightSize(beamAngleDegrees: beamAngleDegrees))
-        shadow.quality = role == .frontLight ? .high : .medium
+        shadow.quality = model.isKeyLight ? .high : .medium
         spot.shadow = shadow
 
         // Digital gobo: project a pattern through the cone, or remove it for a plain beam.

@@ -75,15 +75,15 @@ enum StageAssetId: String, Codable, CaseIterable {
 
 enum StagePortalPreset: String, Codable, CaseIterable {
     case portal4x3 = "portal_4x3"
-    case portal6x3 = "portal_6x3"
+    case portal6x5 = "portal_6x5"
     case portal8x4 = "portal_8x4"
 
     var displayName: String {
         switch self {
         case .portal4x3:
             return "4m x 3m Portal Truss"
-        case .portal6x3:
-            return "6m x 3m Portal Truss"
+        case .portal6x5:
+            return "6m x 5m Portal Truss"
         case .portal8x4:
             return "8m x 4m Portal Truss"
         }
@@ -93,7 +93,7 @@ enum StagePortalPreset: String, Codable, CaseIterable {
         switch self {
         case .portal4x3:
             return 4
-        case .portal6x3:
+        case .portal6x5:
             return 6
         case .portal8x4:
             return 8
@@ -102,8 +102,10 @@ enum StagePortalPreset: String, Codable, CaseIterable {
 
     var height: Double {
         switch self {
-        case .portal4x3, .portal6x3:
+        case .portal4x3:
             return 3
+        case .portal6x5:
+            return 5
         case .portal8x4:
             return 4
         }
@@ -474,6 +476,69 @@ enum StageBuilderSelectionPolicy {
     }
 }
 
+/// Foundation-only editing operations for the tabletop stage editor: swapping the stage-platform
+/// and truss-portal presets, and reflecting which preset a layout currently matches so the editor's
+/// controls can show the active selection. Pure (each `applying…` returns a new `StageLayout`) so the
+/// smoke tests can pin the swap/reflect behavior without a RealityKit volume. The visionOS
+/// `TabletopStageEditorView` is the only consumer; results are persisted through
+/// `AppModel.saveStageLayout`, which runs `StageLayout.validate()`.
+enum TabletopStageEditing {
+    /// Replaces the layout's single stage base with one sized to `preset`, preserving the base's id
+    /// and x/z position (its y is reseated to `height / 2` by the stage-base factory). Adds a base at
+    /// the origin if the layout somehow has none.
+    static func applyingStagePlatformPreset(_ preset: StagePlatformPreset, to layout: StageLayout) -> StageLayout {
+        var layout = layout
+        let size = preset.stageBaseSize
+        if let index = layout.objects.firstIndex(where: { $0.type == .stageBase }) {
+            let existing = layout.objects[index]
+            layout.objects[index] = .stageBase(
+                id: existing.id,
+                displayName: existing.displayName,
+                position: Vector3Meters(x: existing.position.x, y: 0, z: existing.position.z),
+                size: size
+            )
+        } else {
+            layout.objects.append(.stageBase(id: "stage_base_default", position: .zero, size: size))
+        }
+        return layout
+    }
+
+    /// Replaces every truss segment with a fresh portal of `preset`, seated just behind the stage
+    /// base's upstage edge (matching `defaultStudentOutdoor`'s 0.25m stand-off).
+    static func applyingTrussPortalPreset(_ preset: StagePortalPreset, to layout: StageLayout) -> StageLayout {
+        var layout = layout
+        layout.objects.removeAll { $0.type == .trussSegment }
+        let stageDepth = layout.objects.first(where: { $0.type == .stageBase })?.size?.depth ?? 3
+        let upstageZ = -(stageDepth / 2) - 0.25
+        layout.objects.append(contentsOf: StageLayout.trussPortalPreset(preset, upstageZ: upstageZ))
+        return layout
+    }
+
+    /// The platform preset whose footprint matches the layout's stage base (by width × depth), if any.
+    static func currentStagePlatformPreset(of layout: StageLayout) -> StagePlatformPreset? {
+        guard let size = layout.objects.first(where: { $0.type == .stageBase })?.size else {
+            return nil
+        }
+        return StagePlatformPreset.allCases.first {
+            abs($0.stageBaseSize.width - size.width) < 0.01 && abs($0.stageBaseSize.depth - size.depth) < 0.01
+        }
+    }
+
+    /// The portal preset whose span matches the layout's truss endpoints (by width × height), if any.
+    static func currentTrussPortalPreset(of layout: StageLayout) -> StagePortalPreset? {
+        let endpoints = layout.objects.filter { $0.type == .trussSegment }.flatMap(\.trussEndpoints)
+        guard let minX = endpoints.map(\.x).min(),
+              let maxX = endpoints.map(\.x).max(),
+              let maxY = endpoints.map(\.y).max() else {
+            return nil
+        }
+        let width = maxX - minX
+        return StagePortalPreset.allCases.first {
+            abs($0.width - width) < 0.3 && abs($0.height - maxY) < 0.3
+        }
+    }
+}
+
 enum StageBuilderStageLibraryAssets {
     static let stageTab: [StageAssetId] = [.stageBase]
 }
@@ -483,6 +548,51 @@ enum StageBuilderObjectLayerHitTesting {
         switch type {
         case .stageBase, .stageDeck, .trussSegment:
             return false
+        }
+    }
+}
+
+/// A horizontal surface ARKit reported, reduced to the Foundation-only facts the tabletop editor needs to
+/// decide where to rest the diorama. `center` is the surface centre in world metres; `width`/`depth` are
+/// its extents (metres); `isTable` is true when ARKit classified it as a table (vs. floor/ceiling/seat/
+/// unknown); `facesUp` is true when the surface normal points up (a table/floor) rather than down (a
+/// ceiling).
+struct DetectedHorizontalSurface: Equatable {
+    var center: Vector3Meters
+    var width: Double
+    var depth: Double
+    var isTable: Bool
+    var facesUp: Bool
+
+    var area: Double { width * depth }
+}
+
+/// Decides which detected real-world surface the tabletop diorama should rest on. Pure (no ARKit), so the
+/// rule is smoke-tested without a device — `TabletopStageEditorView` feeds it the surfaces ARKit's
+/// `PlaneDetectionProvider` reports and rests the model on the winner, or keeps the model floating in front
+/// of the user when nothing qualifies.
+enum TabletopSurfaceSelection {
+    /// Minimum footprint (metres, each side) a surface must have to host the diorama — smaller surfaces
+    /// (shelves, a mug) are ignored so the model doesn't snap onto something it would overhang.
+    static let minimumExtent: Double = 0.3
+
+    /// Picks the **real table** to rest on (largest, then nearest to `viewer`). Only up-facing,
+    /// table-classified surfaces meeting the minimum footprint qualify — so the model never lands on the
+    /// floor, a down-facing ceiling, or any other horizontal plane. Returns `nil` when no table qualifies,
+    /// so the caller keeps the diorama floating in front of the user until a real table appears (the chosen
+    /// fallback). This is what stops `PlaneDetectionProvider`'s large horizontal ceiling/floor planes from
+    /// being picked.
+    static func bestSurface(from surfaces: [DetectedHorizontalSurface], viewer: Vector3Meters) -> DetectedHorizontalSurface? {
+        let eligible = surfaces.filter {
+            $0.isTable && $0.facesUp && $0.width >= minimumExtent && $0.depth >= minimumExtent
+        }
+        // `max(by:)` keeps the element for which the closure returns false against all others, i.e. the
+        // "greatest" under our preference order. The closure returns true when `lhs` is the lesser pick.
+        return eligible.max { lhs, rhs in
+            if abs(lhs.area - rhs.area) > 0.0001 {
+                return lhs.area < rhs.area // larger footprint wins
+            }
+            return lhs.center.distance(to: viewer) > rhs.center.distance(to: viewer) // nearer wins
         }
     }
 }
@@ -558,6 +668,14 @@ struct TrussConnectorBlock: Equatable, Identifiable {
     var size: Double
 }
 
+/// A live connector-node snap: where a dragged truss should sit (`position`) so one of its endpoints
+/// lands exactly on an existing truss endpoint (`node`). Surfaced from `StageLayout.trussNodeSnap` so the
+/// tabletop editor can both reposition the piece and mark the node it locked onto while the user drags.
+struct TrussNodeSnap: Equatable {
+    var position: Vector3Meters
+    var node: Vector3Meters
+}
+
 struct ImmersiveStageGeometryPlan: Equatable {
     var stageBases: [StageObject]
     var trussMembers: [TrussVisualMember]
@@ -619,6 +737,132 @@ struct ImmersiveStageGeometryPlan: Equatable {
         }
 
         return String(format: "%.4f", number)
+    }
+}
+
+/// Foundation-only skeleton + segment plan for the procedural performer mannequin. Given the feet
+/// point (on the deck), a total height in metres and a facing, it computes every joint position and
+/// the bone/slab list the immersive renderer builds from. Pure value type so the proportions stay
+/// pinned by a smoke test without RealityKit — `ImmersiveView.addPerformerStandIn` is the only consumer.
+///
+/// Coordinate convention: `+x` is stage-right of the stand point, `+y` is up from the deck, `+z` is
+/// downstage (toward the audience). Authored against a 1.75 m / 7.5-head canon and scaled uniformly to
+/// any `totalHeight`, so the head top lands at exactly `feet.y + totalHeight` (`headCenter.y + headRadius`).
+/// Foundation-only build plan for the performer figure, modelled on the **Meccha Chameleon** game
+/// character: a smooth, pure-white, friendly chunky biped (big round head, rounded egg torso, smooth
+/// thick limbs, rounded hand/foot stubs, blank face). Given the feet point on the deck it computes the
+/// rounded body masses (`blobs` — scaled spheres for head/torso/hips/feet) and the smooth limbs
+/// (`bones` — capsule-style cylinders) plus their rounding `joints`. Pure value type so the proportions
+/// stay pinned by a smoke test without RealityKit; `ImmersiveView.addPerformerStandIn` is the only consumer.
+///
+/// Coordinate convention: `+x` is stage-right of the stand point, `+y` is up from the deck, `+z` is
+/// downstage (toward the audience). Authored against a ~1.70 m, big-headed (~4.5-head) cartoon canon and
+/// scaled uniformly to any `totalHeight`, so the head top lands at exactly `feet.y + totalHeight`.
+struct HumanoidFigurePlan: Equatable {
+    enum BoneRole: String { case upperArm, forearm, thigh, shin }
+
+    /// A rounding sphere at a joint (or a rounded hand/foot stub). Its radius matches the adjoining limb
+    /// so the figure reads as one smooth surface, not a stack of beads.
+    struct Joint: Equatable {
+        var id: String
+        var position: Vector3Meters
+        var capRadius: Double
+    }
+
+    /// A smooth limb: a cylinder between two joints, rendered with rounded (sphere) end caps.
+    struct Bone: Equatable {
+        var role: BoneRole
+        var a: Vector3Meters
+        var b: Vector3Meters
+        var radius: Double
+    }
+
+    /// A rounded body mass: a unit sphere of `radius` stretched per-axis by `scale` (dimensionless
+    /// factors, not metres) into an ovoid — head, torso, hips, feet. This gives the character its
+    /// smooth, blobby silhouette instead of boxes.
+    struct Blob: Equatable {
+        var id: String
+        var center: Vector3Meters
+        var radius: Double
+        var scale: Vector3Meters
+    }
+
+    var totalHeight: Double
+    var headCenter: Vector3Meters
+    var headRadius: Double
+    var joints: [Joint]
+    var bones: [Bone]
+    var blobs: [Blob]
+
+    static func make(
+        feet: Vector3Meters,
+        totalHeight: Double = 1.70,
+        contrapposto: Double = 0
+    ) -> HumanoidFigurePlan {
+        // Author against the ~1.70 m, big-headed cartoon canon, then scale uniformly so the proportions
+        // hold at any height.
+        let s = totalHeight / 1.70
+        func p(_ dx: Double, _ dy: Double, _ dz: Double) -> Vector3Meters {
+            feet + Vector3Meters(x: dx * s, y: dy * s, z: dz * s)
+        }
+        func factors(_ x: Double, _ y: Double, _ z: Double) -> Vector3Meters {
+            Vector3Meters(x: x, y: y, z: z)   // per-axis sphere scale, dimensionless
+        }
+        // Optional weight shift: drop the left-side joints a few millimetres. Default 0 is a clean,
+        // symmetric stance (on-brand for the cheerful mascot); the smoke test exercises a non-zero value.
+        let cp = max(0, min(contrapposto, 1)) * 0.012 * s
+
+        // Big round head; its bottom overlaps the torso top so there is no neck gap.
+        let headRadius = 0.19 * s
+        let headCenter = p(0, 1.70 - 0.19, 0)
+
+        let shoulderR = Joint(id: "shoulder_r", position: p(0.205, 1.28 - cp, 0), capRadius: 0.085 * s)
+        let shoulderL = Joint(id: "shoulder_l", position: p(-0.205, 1.28, 0), capRadius: 0.085 * s)
+        let elbowR = Joint(id: "elbow_r", position: p(0.235, 0.99 - cp, 0.02), capRadius: 0.075 * s)
+        let elbowL = Joint(id: "elbow_l", position: p(-0.235, 0.99, 0.02), capRadius: 0.075 * s)
+        let handR = Joint(id: "hand_r", position: p(0.225, 0.74 - cp, 0.05), capRadius: 0.088 * s)
+        let handL = Joint(id: "hand_l", position: p(-0.225, 0.74, 0.05), capRadius: 0.088 * s)
+        let hipR = Joint(id: "hip_r", position: p(0.105, 0.72, 0), capRadius: 0.105 * s)
+        let hipL = Joint(id: "hip_l", position: p(-0.105, 0.72 - cp, 0), capRadius: 0.105 * s)
+        let kneeR = Joint(id: "knee_r", position: p(0.110, 0.40, 0.02), capRadius: 0.100 * s)
+        let kneeL = Joint(id: "knee_l", position: p(-0.110, 0.40 - cp, 0.02), capRadius: 0.100 * s)
+        // Feet stay planted (no weight shift) so both keep solid deck contact.
+        let ankleR = Joint(id: "ankle_r", position: p(0.105, 0.07, 0), capRadius: 0.095 * s)
+        let ankleL = Joint(id: "ankle_l", position: p(-0.105, 0.07, 0), capRadius: 0.095 * s)
+
+        let joints = [
+            shoulderR, shoulderL, elbowR, elbowL, handR, handL,
+            hipR, hipL, kneeR, kneeL, ankleR, ankleL
+        ]
+
+        let bones = [
+            Bone(role: .upperArm, a: shoulderR.position, b: elbowR.position, radius: 0.080 * s),
+            Bone(role: .upperArm, a: shoulderL.position, b: elbowL.position, radius: 0.080 * s),
+            Bone(role: .forearm, a: elbowR.position, b: handR.position, radius: 0.072 * s),
+            Bone(role: .forearm, a: elbowL.position, b: handL.position, radius: 0.072 * s),
+            Bone(role: .thigh, a: hipR.position, b: kneeR.position, radius: 0.100 * s),
+            Bone(role: .thigh, a: hipL.position, b: kneeL.position, radius: 0.100 * s),
+            Bone(role: .shin, a: kneeR.position, b: ankleR.position, radius: 0.092 * s),
+            Bone(role: .shin, a: kneeL.position, b: ankleL.position, radius: 0.092 * s)
+        ]
+
+        // Rounded masses. Torso is a smooth egg; hips a flattened sphere bridging torso and legs; feet
+        // are small, flattened, forward-stretched spheres giving a believable contact footprint.
+        let blobs = [
+            Blob(id: "torso", center: p(0, 1.05, 0), radius: 0.215 * s, scale: factors(1.0, 1.42, 0.85)),
+            Blob(id: "hips", center: p(0, 0.73, 0), radius: 0.190 * s, scale: factors(1.05, 0.72, 0.90)),
+            Blob(id: "foot_r", center: p(0.105, 0.04, 0.055), radius: 0.085 * s, scale: factors(1.05, 0.55, 1.70)),
+            Blob(id: "foot_l", center: p(-0.105, 0.04, 0.055), radius: 0.085 * s, scale: factors(1.05, 0.55, 1.70))
+        ]
+
+        return HumanoidFigurePlan(
+            totalHeight: totalHeight,
+            headCenter: headCenter,
+            headRadius: headRadius,
+            joints: joints,
+            bones: bones,
+            blobs: blobs
+        )
     }
 }
 
@@ -987,6 +1231,13 @@ struct StageLayout: Codable, Equatable, Identifiable {
     }
 
     static func defaultStudentOutdoor() -> StageLayout {
+        // A realistic mid-size student-event stage: a 6m x 3m deck under a 6m-wide, 5m-tall portal truss.
+        // Real vendor stages rig the upstage truss well above the performers, so the portal stands 5m
+        // high rather than hugging the deck.
+        let stageSize = StagePlatformPreset.medium6x3.stageBaseSize
+        // Sit the portal truss just behind the (now deeper) deck's back edge, keeping the original 0.25m
+        // stand-off so the upstage truss reads as standing behind the performers rather than on the deck.
+        let upstageZ = -(stageSize.depth / 2) - 0.25
         var layout = StageLayout(
             schemaVersion: "1.0",
             stageLayoutId: "layout_student_outdoor_001",
@@ -997,12 +1248,12 @@ struct StageLayout: Codable, Equatable, Identifiable {
                 .stageBase(
                     id: "stage_base_default",
                     position: Vector3Meters(x: 0, y: 0, z: 0),
-                    size: StagePlatformPreset.small4x2.stageBaseSize
+                    size: stageSize
                 )
             ],
-            metadata: StageLayoutMetadata(createdFromPreset: "portal_4x3", updatedAt: Self.timestamp())
+            metadata: StageLayoutMetadata(createdFromPreset: "portal_6x5", updatedAt: Self.timestamp())
         )
-        layout.objects.append(contentsOf: trussPortalPreset(.portal4x3))
+        layout.objects.append(contentsOf: trussPortalPreset(.portal6x5, upstageZ: upstageZ))
         return layout
     }
 
@@ -1017,31 +1268,30 @@ struct StageLayout: Codable, Equatable, Identifiable {
         ]
     }
 
-    static func trussPortalPreset(_ preset: StagePortalPreset) -> [StageObject] {
+    static func trussPortalPreset(_ preset: StagePortalPreset, upstageZ: Double = -1.25) -> [StageObject] {
         let halfWidth = preset.width / 2
-        let z = -1.25
+        let z = upstageZ
         var objects: [StageObject] = []
 
+        // Tile each vertical leg from the ground to the portal's full height with stacked 2m segments,
+        // capped by a 1m piece when the height is odd. This mirrors the horizontal-beam loop below and
+        // handles tall portals (e.g. the 5m student-stage truss) instead of topping out at one segment.
         for side in [("left", -halfWidth), ("right", halfWidth)] {
-            objects.append(
-                .trussSegment(
-                    id: "\(preset.rawValue)_\(side.0)_2m",
-                    assetId: .truss2m,
-                    position: Vector3Meters(x: side.1, y: 0, z: z),
-                    rotation: Vector3Degrees(x: 0, y: 0, z: 90)
-                )
-            )
-
-            let remainingHeight = preset.height - 2
-            if remainingHeight > 0 {
+            var currentY = 0.0
+            var legIndex = 1
+            while currentY < preset.height - 0.0001 {
+                let remainingHeight = preset.height - currentY
+                let assetId: StageAssetId = remainingHeight >= 2 ? .truss2m : .truss1m
                 objects.append(
                     .trussSegment(
-                        id: "\(preset.rawValue)_\(side.0)_top_\(Int(remainingHeight))m",
-                        assetId: remainingHeight == 1 ? .truss1m : .truss2m,
-                        position: Vector3Meters(x: side.1, y: 2, z: z),
+                        id: "\(preset.rawValue)_\(side.0)_leg_\(legIndex)",
+                        assetId: assetId,
+                        position: Vector3Meters(x: side.1, y: currentY, z: z),
                         rotation: Vector3Degrees(x: 0, y: 0, z: 90)
                     )
                 )
+                currentY += assetId.trussLength ?? 1
+                legIndex += 1
             }
         }
 
@@ -1108,27 +1358,46 @@ struct StageLayout: Codable, Equatable, Identifiable {
         return objects.first(where: { $0.id == id })
     }
 
-    func snappedObject(_ object: StageObject) -> StageObject {
+    /// The connector-node snap that engages for `object` at its current position: non-nil when any of its
+    /// truss endpoints sits within `connectorSnapThreshold` of another object's endpoint. Pure, so both the
+    /// committed snap (`snappedObject`) and the live tabletop drag preview share the exact same rule — the
+    /// dragged truss "clicks" onto a node the instant it comes within reach. Returns `nil` for non-truss
+    /// objects (no connector endpoints) and when no node is in range.
+    func trussNodeSnap(for object: StageObject) -> TrussNodeSnap? {
         guard object.type == .trussSegment else {
-            var snapped = gridSnapped(object)
-            if object.type == .stageBase, let height = object.size?.height {
-                snapped.position.y = height / 2
-            }
-            return snapped
+            return nil
         }
 
         let candidateEndpoints = object.trussEndpoints
-        let existingEndpoints = objects.flatMap(\.trussEndpoints)
+        // Exclude the object's OWN endpoints: when re-positioning an existing truss, its stale entry
+        // is still in `objects`, and snapping a small move back onto its own previous endpoint would
+        // silently cancel the move. New objects (not yet in `objects`) are unaffected by the filter.
+        let existingEndpoints = objects.filter { $0.id != object.id }.flatMap(\.trussEndpoints)
 
         for candidateEndpoint in candidateEndpoints {
             if let targetEndpoint = existingEndpoints.first(where: { $0.distance(to: candidateEndpoint) <= Self.connectorSnapThreshold }) {
-                var snapped = object
-                snapped.position = snapped.position + (targetEndpoint - candidateEndpoint)
-                return snapped
+                return TrussNodeSnap(
+                    position: object.position + (targetEndpoint - candidateEndpoint),
+                    node: targetEndpoint
+                )
             }
         }
 
-        return gridSnapped(object)
+        return nil
+    }
+
+    func snappedObject(_ object: StageObject) -> StageObject {
+        if let snap = trussNodeSnap(for: object) {
+            var snapped = object
+            snapped.position = snap.position
+            return snapped
+        }
+
+        var snapped = gridSnapped(object)
+        if object.type == .stageBase, let height = object.size?.height {
+            snapped.position.y = height / 2
+        }
+        return snapped
     }
 
     func stageSummary() -> StageSummary {
