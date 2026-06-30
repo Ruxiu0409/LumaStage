@@ -20,6 +20,9 @@ class AppModel {
     /// gets the system move bar and smooth, compositor-driven dragging instead of a hand-rolled
     /// RealityView-attachment drag.
     static let aiComposerWindowID = "AIComposer"
+    /// The selected-light control card's own native window (converted from a RealityKit attachment so it
+    /// gets the system move bar). Opened/dismissed by `ImmersiveView` (the view agent wires that).
+    static let lightControlWindowID = "light-control"
     /// The tabletop stage editor's dedicated **mixed (passthrough)** immersive space: a small editable
     /// stage model that ARKit rests on the user's real table. It *replaces* the 1:1 stage space while
     /// editing (only one immersive space can be open at a time); `ContentView` swaps between them via
@@ -919,6 +922,30 @@ class AppModel {
             return
         }
 
+        // A role-named recolor edits the selected cue's matching fixtures directly (no AI regeneration).
+        // Routed here rather than through the override layer so it persists into the saved look.
+        if case .setRoleColor(let role, let hex) = command {
+            let matchCount = selectedCue?.fixtureGroups.filter { $0.role == role }.count ?? 0
+            guard matchCount > 0 else {
+                fail("這個場景沒有\(role.displayName)燈具。")
+                return
+            }
+            do {
+                try stageState.patchSelectedCue(.roleColor(role: role, hexColor: hex))
+                persistCurrentProjectState()
+            } catch {
+                fail(error.localizedDescription)
+                return
+            }
+            let summary = Self.describe(command)
+            lastError = nil
+            aiUnderstoodCommand = summary
+            lastExplanation = lightingLook.explanation
+            conversationState = .explaining
+            narrateIfEnabled(summary)
+            return
+        }
+
         switch command {
         case .close(let number):
             lightOverrides[number, default: LightOverride()].isOff = true
@@ -937,6 +964,8 @@ class AppModel {
             }
         case .resetAll:
             lightOverrides.removeAll()
+        case .setRoleColor:
+            return   // handled above (targeted cue patch, returns early); unreachable here.
         }
 
         let summary = Self.describe(command)
@@ -1187,6 +1216,7 @@ class AppModel {
         case .open(let number): return "已重新開啟 \(StageLightLabel.displayName(number: number))"
         case .setColor(let number, let hex): return "已將 \(StageLightLabel.displayName(number: number)) 設為 \(hex)"
         case .setIntensity(let number, let fraction): return "已將 \(StageLightLabel.displayName(number: number)) 設為 \(Int((fraction * 100).rounded()))%"
+        case .setRoleColor(let role, let hex): return "已將目前場景的\(role.displayName)改為 \(hex)"
         case .allOff: return "已關閉所有燈光"
         case .resetAll: return "已將所有燈光重置為目前的燈光"
         }

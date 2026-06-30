@@ -54,7 +54,6 @@ swiftc \
   LumaStage/LightEffect.swift \
   LumaStage/MusicBeatClock.swift \
   LumaStage/StageLightAccessibility.swift \
-  LumaStage/LightControlCardPlacement.swift \
   LumaStage/FixtureGroups.swift \
   LumaStage/OpenAILightingService.swift \
   LumaStage/FallbackLightingService.swift \

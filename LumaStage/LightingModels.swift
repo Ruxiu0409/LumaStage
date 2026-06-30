@@ -30,6 +30,16 @@ enum FixtureRole: String, Codable, CaseIterable {
     var rendersProjectedGobo: Bool {
         isRenderedAsSpotlight
     }
+
+    /// User-facing 繁中 name for a role, shown in command feedback (e.g. "已將目前場景的前光改為紅色").
+    var displayName: String {
+        switch self {
+        case .wash: return "泛光"
+        case .spot: return "聚光"
+        case .frontLight: return "前光"
+        case .backgroundWash: return "背景光"
+        }
+    }
 }
 
 enum StageZone: String, Codable, CaseIterable {
@@ -448,6 +458,9 @@ enum LightCommand: Equatable {
     case open(Int)
     case setColor(Int, hex: String)
     case setIntensity(Int, fraction: Double)
+    /// Recolor every fixture of a named role in the SELECTED cue (e.g. "把 Front Light 改成紅色").
+    /// A targeted edit — never a full-look regeneration — so naming a role keeps the rig intact.
+    case setRoleColor(FixtureRole, hex: String)
     case allOff
     case resetAll
 
@@ -456,16 +469,39 @@ enum LightCommand: Equatable {
         switch self {
         case .close(let number), .open(let number): return number
         case .setColor(let number, _), .setIntensity(let number, _): return number
-        case .allOff, .resetAll: return nil
+        case .setRoleColor, .allOff, .resetAll: return nil
         }
     }
 
-    /// Common color names → hex, so "set light 1 to blue" resolves without the user typing a hex.
+    /// Common color names → hex, so "set light 1 to blue" / "把前光改成紅色" resolves without a hex.
+    /// English keys match spoken/typed English; CJK keys match Chinese input. The CJK scan in
+    /// `colorHex(in:)` does a direct `text.contains(key)` since CJK words don't tokenize as ASCII words.
     static let colorNames: [String: String] = [
         "red": "#FF0000", "green": "#00FF00", "blue": "#0000FF", "yellow": "#FFFF00",
         "orange": "#FF7A00", "purple": "#8A2BE2", "violet": "#8A2BE2", "magenta": "#FF00FF",
         "pink": "#FF6FB5", "cyan": "#00FFFF", "teal": "#1FBFB8", "white": "#FFFFFF",
-        "amber": "#FFBF00", "gold": "#FFD700", "lavender": "#B79CED", "warm": "#FFE4C2"
+        "amber": "#FFBF00", "gold": "#FFD700", "lavender": "#B79CED", "warm": "#FFE4C2",
+        // CJK colour words (full word before its single-char form, so "紅色" wins over "紅").
+        "紅色": "#FF0000", "紅": "#FF0000",
+        "藍色": "#0000FF", "藍": "#0000FF",
+        "綠色": "#00FF00", "綠": "#00FF00",
+        "白色": "#FFFFFF", "白": "#FFFFFF",
+        "黃色": "#FFFF00", "黃": "#FFFF00",
+        "紫色": "#800080", "紫": "#800080",
+        "橙色": "#FFA500", "橙": "#FFA500", "橘": "#FFA500",
+        "粉紅": "#FF69B4", "粉色": "#FF69B4",
+        "青色": "#00FFFF", "青": "#00FFFF"
+    ]
+
+    /// Role-name needles → `FixtureRole`, so "把 Front Light 改成紅色" / "背景光改藍色" targets a role.
+    /// Longer/more-specific needles are listed first so `setColor`-style phrases match the right role.
+    static let roleNames: [(needle: String, role: FixtureRole)] = [
+        ("front light", .frontLight), ("frontlight", .frontLight),
+        ("前光", .frontLight), ("主光", .frontLight), ("面光", .frontLight),
+        ("background wash", .backgroundWash), ("back wash", .backgroundWash), ("background", .backgroundWash),
+        ("背景泛光", .backgroundWash), ("背景光", .backgroundWash), ("背光", .backgroundWash),
+        ("wash", .wash), ("泛光", .wash),
+        ("spot", .spot), ("聚光", .spot), ("追光", .spot)
     ]
 
     static func parse(_ raw: String) -> LightCommand? {
@@ -482,6 +518,13 @@ enum LightCommand: Equatable {
         if text.contains("all on") || text.contains("lights on") || text.contains("turn on all")
             || text.contains("reset lights") || text.contains("reset all") || text.contains("clear lights") {
             return .resetAll
+        }
+
+        // Role-name + colour ("把 Front Light 改成紅色", "背景光改藍色") recolors only that role's fixtures
+        // in the selected cue — a targeted edit, NOT a full-look regeneration. Gated on a colour actually
+        // being present so a role-only phrase ("把前光調暗") doesn't false-match here.
+        if let role = roleNeedleMatch(in: text), let hex = colorHex(in: text, words: words) {
+            return .setRoleColor(role, hex: hex)
         }
 
         // Everything else targets one numbered light. The rig size is dynamic, so any number ≥ 1
@@ -540,6 +583,20 @@ enum LightCommand: Equatable {
         if text.contains("warm white") || text.contains("warm") { return colorNames["warm"] }
         for (name, hex) in colorNames where words.contains(name) {
             return hex
+        }
+        // CJK colour words ("紅色") don't tokenize into the ASCII `words` set, so scan them directly.
+        // Sort longest-key-first so "紅色" wins over its single-char "紅" substring.
+        for key in colorNames.keys.sorted(by: { $0.count > $1.count }) where !key.allSatisfy({ $0.isASCII }) {
+            if text.contains(key) { return colorNames[key] }
+        }
+        return nil
+    }
+
+    /// The first role whose needle appears in the text (longest/most-specific needles listed first in
+    /// `roleNames`), or nil if no role is named.
+    private static func roleNeedleMatch(in text: String) -> FixtureRole? {
+        for (needle, role) in roleNames where text.contains(needle) {
+            return role
         }
         return nil
     }
@@ -1061,6 +1118,8 @@ enum CuePatch: Equatable {
     case fixtureIntensity(fixtureId: String, intensity: Double)
     case fixtureColor(fixtureId: String, hexColor: String)
     case fixtureFineControl(fixtureId: String, control: FixtureFineControl)
+    /// Recolor EVERY fixture of `role` in the selected cue (a role-named voice/typed command).
+    case roleColor(role: FixtureRole, hexColor: String)
 }
 
 struct StageState: Equatable {
@@ -1164,6 +1223,20 @@ struct StageState: Equatable {
                 term: "燈具角度與位置",
                 plainText: "位置、水平旋轉、垂直俯仰、滾轉與光束角度會儲存在目前場景中所選的燈具上，用於同步的 MR 精細控制。",
                 actionSummary: "已更新所選燈具的位置、旋轉與光束角度。"
+            )
+
+        case .roleColor(let role, let hexColor):
+            guard let normalizedHex = FixtureColor.normalizedHex(hexColor) else {
+                throw ValidationError.invalidHexColor(hexColor)
+            }
+
+            try mutateFixtures(role: role, inCueAt: cueIndex) { fixture in
+                fixture.color.value = normalizedHex
+            }
+            lightingLook.explanation = LightingExplanation(
+                term: "\(role.displayName)顏色",
+                plainText: "依角色重新著色只會調整目前場景中所有「\(role.displayName)」角色的燈具，不會重新生成整個燈光，也不影響其他場景。",
+                actionSummary: "已將目前場景的\(role.displayName)改為 \(normalizedHex)。"
             )
         }
 
@@ -1278,6 +1351,24 @@ struct StageState: Equatable {
         }
 
         mutation(&lightingLook.cues[cueIndex].fixtureGroups[fixtureIndex])
+    }
+
+    /// Applies `mutation` to EVERY fixture of `role` in the cue (the plural sibling of the single-role
+    /// mutator), for role-named commands that recolor a whole role at once. Throws if none match.
+    private mutating func mutateFixtures(
+        role: FixtureRole,
+        inCueAt cueIndex: Int,
+        mutation: (inout FixtureGroup) -> Void
+    ) throws {
+        let indices = lightingLook.cues[cueIndex].fixtureGroups.indices.filter {
+            lightingLook.cues[cueIndex].fixtureGroups[$0].role == role
+        }
+        guard !indices.isEmpty else {
+            throw ValidationError.missingFixture(role.rawValue)
+        }
+        for index in indices {
+            mutation(&lightingLook.cues[cueIndex].fixtureGroups[index])
+        }
     }
 
     private mutating func mutateFixture(

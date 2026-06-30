@@ -42,6 +42,14 @@ struct LightEffect: Codable, Equatable {
     /// A sensible default movement for a fixture type, scaled by whether the cue reads as high-energy.
     /// Lets a generated/demo rig move without the AI authoring per-fixture effect parameters; `slot`
     /// (the fixture's index in the rig) staggers the per-fixture phase so chases/sweeps ripple across it.
+    ///
+    /// IMPORTANT: auto-effects no longer DRIVE INTENSITY on the static/wash/strobe fixtures. An
+    /// intensity-driving default (`colorChase` on PARs/wash, `strobe` on strobe bars/blinders) made the
+    /// pale cyclorama wash pulse every frame on any high-energy cue — it read as flicker ("一閃一閃"), not
+    /// design. So those fixtures are now `.none` by default; their movement/strobe is OPT-IN via an
+    /// authored `fixture.effect` (e.g. `MusicShowBuilder` authors it explicitly on high-energy sections).
+    /// Only the moving head keeps an auto-effect (`panSweep`): it RE-AIMS the beam, never touching
+    /// intensity, so it animates without flicker.
     static func suggested(for model: LightingFixtureVisualModel, highEnergy: Bool, slot: Int) -> LightEffect {
         let phase = (Double(slot) * 0.2).truncatingRemainder(dividingBy: 1)
         switch model {
@@ -51,12 +59,12 @@ struct LightEffect: Codable, Equatable {
             // No movement: the laser's visible aerial beam fan is static geometry the effects system does
             // not animate, so sweeping only its cone spill would look broken (cone swings, fan frozen).
             return .none
-        case .ledStrobeBar:
-            return highEnergy ? LightEffect(kind: .strobe, speedHz: 8, sizeDegrees: 0, phase: phase) : .none
-        case .audienceBlinder:
-            return highEnergy ? LightEffect(kind: .strobe, speedHz: 4, sizeDegrees: 0, phase: phase) : .none
+        case .ledStrobeBar, .audienceBlinder:
+            // Authored-only: an auto-strobe rewrites intensity every frame → flicker on the static rig.
+            return .none
         case .ledPar, .washBar, .backgroundBatten:
-            return highEnergy ? LightEffect(kind: .colorChase, speedHz: 0.7, sizeDegrees: 0, phase: phase) : .none
+            // Authored-only: an auto-chase rewrites intensity every frame → the cyc/wash pulses (flicker).
+            return .none
         case .frontFresnel, .ledFresnel, .spotBarrel:
             return .none   // steady key/spot light — movement here would just look unstable
         }

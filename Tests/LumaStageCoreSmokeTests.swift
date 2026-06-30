@@ -49,6 +49,7 @@ struct LumaStageCoreSmokeTests {
         try fineControlPatchesOnlySelectedFixtureInSelectedCue()
         try resetsOnlySelectedCue()
         try rejectsInvalidPatchValues()
+        try roleColorPatchRecolorsEveryMatchingFixtureInSelectedCueOnly()
         try lightingLookDraftBuildsValidatedLook()
         lightingLookDraftRejectsInvalidValues()
         normalizedHexToleratesModelNoise()
@@ -78,7 +79,6 @@ struct LumaStageCoreSmokeTests {
         try humanoidFigurePlanIsAnatomicallyOrdered()
         aiComposerPlacementClampsWithinReach()
         await unavailableLightingServiceReportsUnavailable()
-        lightControlCardPlacementStaysReachable()
         try await openAIServiceDecodesAndValidates()
         await openAIServiceSurfacesRefusal()
         await openAIServiceRejectsOutOfRangeViaValidator()
@@ -89,6 +89,7 @@ struct LumaStageCoreSmokeTests {
         showPlanMergesShortSectionsAndPadsEmpty()
         try rigConstraintClampsRemapsAndIsIdempotent()
         try musicShowBuilderBuildsValidatedSymmetricShow()
+        try musicShowLasersAreMirroredLeftAndRight()
         try legacyProjectJSONDecodesToUnconstrainedRig()
         print("LumaStageCoreSmokeTests passed")
     }
@@ -820,6 +821,40 @@ struct LumaStageCoreSmokeTests {
         }
     }
 
+    // BUG 6: a role-named recolor (CuePatch.roleColor) recolors EVERY matching-role fixture in the
+    // SELECTED cue only — never the other cue, never a regeneration — and bad hex throws.
+    private static func roleColorPatchRecolorsEveryMatchingFixtureInSelectedCueOnly() throws {
+        // showcaseDemo has TWO frontLight fixtures (key_l, key_r), so a plural recolor is observable.
+        var state = StageState(lightingLook: .showcaseDemo())
+        state.selectedCueId = "cue_opening"
+
+        let frontCountOpening = try state.lightingLook.requireCue(id: "cue_opening").fixtureGroups.filter { $0.role == .frontLight }.count
+        expect(frontCountOpening >= 2, "showcaseDemo opening should have ≥2 front lights for a meaningful plural recolor")
+
+        try state.patchSelectedCue(.roleColor(role: .frontLight, hexColor: "#FF0000"))
+
+        let opening = try state.lightingLook.requireCue(id: "cue_opening")
+        let openingFronts = opening.fixtureGroups.filter { $0.role == .frontLight }
+        expect(openingFronts.allSatisfy { $0.color.value == "#FF0000" }, "every front light in the selected cue must be recolored")
+        // Non-front fixtures in the selected cue are untouched.
+        expect(opening.fixtureGroups.contains { $0.role != .frontLight && $0.color.value != "#FF0000" },
+               "non-matching roles in the selected cue must be untouched")
+
+        // The OTHER cue's front lights must NOT change (single-cue invariant).
+        let highlight = try state.lightingLook.requireCue(id: "cue_highlight")
+        expect(highlight.fixtureGroups.contains { $0.role == .frontLight && $0.color.value != "#FF0000" },
+               "the unselected cue's front lights must be untouched")
+
+        // Bad hex throws.
+        expectThrows(ValidationError.invalidHexColor("notacolor")) {
+            try state.patchSelectedCue(.roleColor(role: .frontLight, hexColor: "notacolor"))
+        }
+
+        // FixtureRole.displayName is the 繁中 name the command feedback uses.
+        expect(FixtureRole.frontLight.displayName == "前光", "FixtureRole.frontLight.displayName should be 前光")
+        expect(FixtureRole.backgroundWash.displayName == "背景光", "FixtureRole.backgroundWash.displayName should be 背景光")
+    }
+
     // The on-device FoundationModels service cannot run headlessly, but the AI → domain
     // boundary it relies on (assembling + validating a LightingLook from model-produced
     // primitives) is Foundation-only and fully testable here.
@@ -1136,6 +1171,20 @@ struct LumaStageCoreSmokeTests {
         // The rig is dynamic, so parse accepts any light number ≥ 1; AppModel validates it against the
         // actual fixture count (and reports "there's no Light 9" if the scene is smaller).
         expect(LightCommand.parse("close the light 9") == .close(9), "any light number ≥ 1 parses; range is checked at apply time")
+
+        // BUG 6: role-name + colour recolors that role's fixtures (targeted), NOT a full-look regeneration.
+        // English role token + CJK colour, CJK role + CJK colour, and a numberless English phrase all map.
+        expect(LightCommand.parse("把 Front Light 改成紅色") == .setRoleColor(.frontLight, hex: "#FF0000"),
+               "English role token + CJK colour should map to .setRoleColor(.frontLight, red)")
+        expect(LightCommand.parse("背景光改藍色") == .setRoleColor(.backgroundWash, hex: "#0000FF"),
+               "CJK background role + CJK colour should map to .setRoleColor(.backgroundWash, blue)")
+        expect(LightCommand.parse("前光改成綠色") == .setRoleColor(.frontLight, hex: "#00FF00"),
+               "CJK front role + CJK colour should map to .setRoleColor(.frontLight, green)")
+        expect(LightCommand.parse("change the front light to red") == .setRoleColor(.frontLight, hex: "#FF0000"),
+               "numberless English role + colour should map to .setRoleColor, not fall through to AI")
+        // Role-only phrase (no colour) must NOT false-match — it falls through to the AI/other paths.
+        expect(LightCommand.parse("把前光調暗一點") == nil,
+               "a role phrase with no colour must not parse as a role recolor")
     }
 
     private static func resolvesLightOverridesOntoCueValues() {
@@ -1774,11 +1823,16 @@ struct LumaStageCoreSmokeTests {
         expect((0...1).contains(a), "chase pulse stays in 0...1")
         expect(abs(a - b) > 1e-6, "a phase offset staggers fixtures so the chase runs across the rig")
 
-        // Suggested defaults: moving heads sweep, steady key lights don't, energy widens the swing.
+        // Suggested defaults (BUG 4): the moving head re-aims (panSweep, no flicker) — the only auto-effect.
+        // Wash/PAR/strobe/blinder are now AUTHORED-ONLY (.none) because an auto intensity-driving default
+        // pulsed the static rig every frame and read as flicker; movement/strobe is opt-in via fixture.effect.
         expect(LightEffect.suggested(for: .movingHeadBeam, highEnergy: true, slot: 0).kind == .panSweep, "moving heads sweep")
         expect(LightEffect.suggested(for: .frontFresnel, highEnergy: true, slot: 0).kind == .none, "front fresnels stay steady")
-        expect(LightEffect.suggested(for: .ledStrobeBar, highEnergy: true, slot: 0).kind == .strobe, "strobe bars strobe when high-energy")
-        expect(!LightEffect.suggested(for: .ledStrobeBar, highEnergy: false, slot: 0).isAnimated, "a calm cue leaves the strobe off")
+        expect(LightEffect.suggested(for: .washBar, highEnergy: true, slot: 0).kind == .none, "wash bars are authored-only (no auto chase → no flicker)")
+        expect(LightEffect.suggested(for: .ledPar, highEnergy: true, slot: 0).kind == .none, "PARs are authored-only (no auto chase → no flicker)")
+        expect(LightEffect.suggested(for: .backgroundBatten, highEnergy: true, slot: 0).kind == .none, "background battens are authored-only (no auto chase → no flicker)")
+        expect(LightEffect.suggested(for: .ledStrobeBar, highEnergy: true, slot: 0).kind == .none, "strobe bars are authored-only now (no auto strobe)")
+        expect(LightEffect.suggested(for: .audienceBlinder, highEnergy: true, slot: 0).kind == .none, "blinders are authored-only now (no auto strobe)")
         expect(LightEffect.suggested(for: .movingHeadBeam, highEnergy: true, slot: 0).sizeDegrees
                > LightEffect.suggested(for: .movingHeadBeam, highEnergy: false, slot: 0).sizeDegrees,
                "high energy widens the moving-head swing")
@@ -1868,31 +1922,6 @@ struct LumaStageCoreSmokeTests {
         let before = MusicBeatSync.output(pan, clock: clock, at: 0.5 - dt).panOffsetDegrees
         let after = MusicBeatSync.output(pan, clock: clock, at: 0.5 + dt).panOffsetDegrees
         expect(abs(before - after) < 0.1, "the sweep does not jump across a beat boundary")
-    }
-
-    // The per-light control card's placement rule (SPEC 09): appears near the selected light but pulled
-    // toward the viewer and clamped to a reachable height, so a 5m-high fixture's card never floats out
-    // of reach and a floor light's card never sinks to the deck.
-    private static func lightControlCardPlacementStaysReachable() {
-        let viewer = SIMD3<Float>(0, 1.2, 0)
-
-        // A high-hung light (5m): card clamps into the reachable 0.9...1.6 band and sits between the
-        // light and the viewer on z.
-        let high = LightControlCardPlacement.position(lightWorld: SIMD3<Float>(2, 5, -3), viewer: viewer)
-        expect(high.y <= 1.6 + 1e-6 && high.y >= 0.9 - 1e-6, "card y must clamp into 0.9...1.6 even for a 5m light")
-        expect(high.z > -3 && high.z < 0, "card should sit between the light and the viewer on z")
-
-        // A floor-level light lifts to the minimum reachable height.
-        let low = LightControlCardPlacement.position(lightWorld: SIMD3<Float>(0, 0.2, -1), viewer: viewer)
-        expect(abs(low.y - 0.9) < 1e-6, "a low light should lift the card to the 0.9m minimum")
-
-        // The side offset keeps the card off the beam centre.
-        let centered = LightControlCardPlacement.position(
-            lightWorld: SIMD3<Float>(0, 1.2, -2), viewer: viewer, sideOffset: 0.18)
-        expect(abs(centered.x - 0.18) < 1e-5, "x should carry the side offset so the card doesn't block the beam")
-
-        // Pulling toward the viewer brings the card horizontally closer than the light itself.
-        expect(abs(high.z) < 3, "pullToViewer must move the card closer than the light on z")
     }
 
     // MARK: - SPEC 10: OpenAI cloud backend + fallback composer
@@ -2371,6 +2400,46 @@ struct LumaStageCoreSmokeTests {
             }
         }
         try lockedLook.validate()
+    }
+
+    // BUG 5: the music show's two lasers must land MIRRORED (one far left, one far right), not both on the
+    // right. Resolve placements through RigPlacement exactly as the renderer does (per-zone slot in
+    // fixtureGroups order) and assert laser_l.x < centerX < laser_r.x.
+    private static func musicShowLasersAreMirroredLeftAndRight() throws {
+        let sections = [
+            SongSection(start: 0, end: 40, kind: .verse, pace: 0.2, loudness: 0.2, keyMode: .minor, dominantInstruments: []),
+            SongSection(start: 40, end: 90, kind: .chorus, pace: 0.95, loudness: 0.95, keyMode: .major, dominantInstruments: ["drums"])
+        ]
+        let analysis = SongAnalysis(title: "S", duration: 90, bpm: 128, beatTimes: [0], barTimes: [], sections: sections)
+        let plan = ShowPlan.make(from: analysis)
+        let unconstrained = RigConstraint(fixtureCount: nil, allowedModels: [])
+        // Default rig (maxFixtures 8) keeps the full palindromic back zone, so both lasers stay mirrored.
+        let look = try MusicShowBuilder.buildLook(plan: plan, rig: unconstrained, lookName: "音樂秀", maxFixtures: 8)
+
+        let layout = StageLayout.defaultStudentOutdoor()
+        let cue = look.cues[0]
+        let centerX = layout.objects.first { $0.type == .stageBase }?.position.x ?? 0
+
+        // Reproduce the renderer's per-zone slot assignment (ImmersiveView.syncRig).
+        var zoneTotals: [StageZone: Int] = [:]
+        for fixture in cue.fixtureGroups { zoneTotals[fixture.zone, default: 0] += 1 }
+        var zoneSlots: [StageZone: Int] = [:]
+        var laserX: [String: Double] = [:]
+        for fixture in cue.fixtureGroups {
+            let slot = zoneSlots[fixture.zone, default: 0]
+            zoneSlots[fixture.zone] = slot + 1
+            let placement = RigPlacement.resolvedPlacement(
+                fixture: fixture, slot: slot, count: zoneTotals[fixture.zone] ?? 1, layout: layout)
+            if fixture.id == "laser_l" || fixture.id == "laser_r" {
+                laserX[fixture.id] = placement.position.x
+            }
+        }
+
+        let lx = try expectUnwrapped(laserX["laser_l"], "laser_l must be present in the default rig")
+        let rx = try expectUnwrapped(laserX["laser_r"], "laser_r must be present in the default rig")
+        expect(lx < centerX, "laser_l must sit left of center (got \(lx) vs center \(centerX))")
+        expect(rx > centerX, "laser_r must sit right of center (got \(rx) vs center \(centerX))")
+        expect(lx < rx, "laser_l must be left of laser_r — the pair must be mirrored, not both on one side")
     }
 
     private static func legacyProjectJSONDecodesToUnconstrainedRig() throws {

@@ -24,7 +24,7 @@
     LumaStage/LightingFixtureCatalog.swift LumaStage/LumaSyncProtocol.swift LumaStage/LumaSyncTransport.swift \
     LumaStage/LumaStageDesign.swift LumaStage/StageVoiceCommand.swift LumaStage/LightingPatchSheet.swift \
     LumaStage/LightEffect.swift LumaStage/MusicBeatClock.swift LumaStage/StageLightAccessibility.swift \
-    LumaStage/LightControlCardPlacement.swift LumaStage/FixtureGroups.swift \
+    LumaStage/FixtureGroups.swift \
     LumaStage/OpenAILightingService.swift LumaStage/FallbackLightingService.swift LumaStage/OpenAIKeychain.swift \
     LumaStage/SongAnalysis.swift LumaStage/ShowPlan.swift LumaStage/RigConstraint.swift LumaStage/MusicShowBuilder.swift \
     -o /tmp/smoke && /tmp/smoke    # 印出 "LumaStageCoreSmokeTests passed" 即過

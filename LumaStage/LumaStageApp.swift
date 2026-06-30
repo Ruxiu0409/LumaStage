@@ -53,6 +53,23 @@ struct LumaStageApp: App {
             WindowPlacement(.utilityPanel)
         }
 
+        // The per-light manual control card is a real native window (not a RealityView attachment),
+        // mirroring the AI composer above: it gets the system move bar (the built-in panel-move
+        // affordance the user asked for) AND owns its own position across content updates, so changing
+        // a light's colour/brightness no longer re-seats the card to a generated spot (the attachment-
+        // re-resolve "jump" bug). `.environment(appModel)` is required — `openWindow` does NOT inherit
+        // the opener's environment. Opened/dismissed reactively by `ImmersiveView` as the selected
+        // light changes (and dismissed when the stage space closes).
+        WindowGroup(id: AppModel.lightControlWindowID) {
+            SelectedLightControlView()
+                .environment(appModel)
+        }
+        .windowStyle(.plain)
+        .windowResizability(.contentSize)
+        .defaultWindowPlacement { _, _ in
+            WindowPlacement(.utilityPanel)
+        }
+
         // Spatial fixture observatory, opened from the Fixture Guide as two independent, separately
         // movable objects sharing `appModel.fixtureCarousel`: a volumetric window holding the 3D
         // model, and a plain window holding the info card (with its own paging + back controls).

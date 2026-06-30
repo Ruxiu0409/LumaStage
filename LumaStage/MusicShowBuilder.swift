@@ -52,19 +52,31 @@ enum MusicShowBuilder {
     }
 
     /// A left/right-symmetric rig, largest meaningful set first, trimmed to `maxFixtures`. Listed so that
-    /// truncating the tail still leaves symmetric pairs at the front (key pair → movers → PARs → lasers).
+    /// truncating the tail still leaves symmetric pairs at the front (key pair → back zone → PARs).
+    ///
+    /// CRITICAL: members SHARING A ZONE must be listed PALINDROMICALLY (mirror partners at the ends),
+    /// because `RigPlacement` spreads a zone's fixtures across slots in list order, so slot→X is
+    /// `slot/(count-1)*2-1`. The `.stageBack` zone here is `laser_l · mh_l · mh_r · laser_r`, so the
+    /// lasers land at slots 0 and 3 → x = -1 (far left) and +1 (far right), the proven `showcaseDemo()`
+    /// pattern. A naive `…mh_l, mh_r, laser_l, laser_r` order would put BOTH lasers in the right half.
+    /// Any `prefix(count)` truncation MUST keep each zone's members palindromic — never cut one of a
+    /// mirror pair; the even-count clamp below trims whole pairs from the tail.
     private static func symmetricRig(maxFixtures: Int) -> [RigSpec] {
         let full: [RigSpec] = [
             RigSpec(id: "key_l", name: "主光柔光燈（左）", model: .frontFresnel, zone: .stageFront),
             RigSpec(id: "key_r", name: "主光柔光燈（右）", model: .frontFresnel, zone: .stageFront),
+            // Upstage truss, palindromic: laser · moving head · moving head · laser → lasers at the ends.
+            RigSpec(id: "laser_l", name: "雷射燈（左）", model: .laser, zone: .stageBack),
             RigSpec(id: "mh_l", name: "搖頭光束燈（左）", model: .movingHeadBeam, zone: .stageBack),
             RigSpec(id: "mh_r", name: "搖頭光束燈（右）", model: .movingHeadBeam, zone: .stageBack),
+            RigSpec(id: "laser_r", name: "雷射燈（右）", model: .laser, zone: .stageBack),
             RigSpec(id: "par_l", name: "LED PAR（左）", model: .ledPar, zone: .stageLeft),
-            RigSpec(id: "par_r", name: "LED PAR（右）", model: .ledPar, zone: .stageRight),
-            RigSpec(id: "laser_l", name: "雷射燈（左）", model: .laser, zone: .stageBack),
-            RigSpec(id: "laser_r", name: "雷射燈（右）", model: .laser, zone: .stageBack)
+            RigSpec(id: "par_r", name: "LED PAR（右）", model: .ledPar, zone: .stageRight)
         ]
         // Keep an even count so no fixture (especially the laser) is left without a mirror partner.
+        // NOTE: trimming the tail here can split a zone's palindrome (e.g. count 6 keeps laser_l · mh_l ·
+        // mh_r but drops laser_r). The default rig (maxFixtures 8) keeps the full palindromic back zone,
+        // so both lasers stay mirrored. If a smaller rig must be produced, trim in whole mirror pairs.
         var count = max(2, min(maxFixtures, full.count))
         if count % 2 != 0 { count -= 1 }
         return Array(full.prefix(count))
@@ -75,9 +87,12 @@ enum MusicShowBuilder {
     private static func fixture(for spec: RigSpec, brief: CueBrief, slot: Int) -> LightingLookDraft.Fixture {
         let role = spec.model.derivedRole
         let (hex, intensity) = lookValues(for: spec, brief: brief)
-        let effect = brief.highEnergy
-            ? LightEffect.suggested(for: spec.model, highEnergy: true, slot: slot)
-            : LightEffect.none
+        // High-energy sections come alive with EXPLICITLY AUTHORED effects. We author them here (rather
+        // than relying on `LightEffect.suggested`) because `suggested` deliberately returns `.none` for
+        // the static/wash/strobe fixtures now (an auto intensity-driving effect read as flicker on the
+        // 1:1 rig — see BUG 4 in LightEffect.suggested). In the music show the strobe/chase IS the design,
+        // and `MusicBeatSync` locks these to the beat, so authoring them here keeps the show dynamic.
+        let effect = brief.highEnergy ? highEnergyEffect(for: spec.model, slot: slot) : LightEffect.none
 
         return LightingLookDraft.Fixture(
             id: spec.id,
@@ -92,6 +107,25 @@ enum MusicShowBuilder {
             // A `.none` effect is inert; store it only when animated so calm cues read as steady.
             effect: effect.isAnimated ? effect : nil
         )
+    }
+
+    /// The explicit high-energy effect the music show authors per fixture model. Strobe bars / blinders
+    /// punch, PARs / wash chase colour, movers sweep — driven on the beat by `MusicBeatSync`. The static
+    /// key/spot fixtures stay steady. `slot` staggers the phase so chases ripple across the rig.
+    private static func highEnergyEffect(for model: LightingFixtureVisualModel, slot: Int) -> LightEffect {
+        let phase = (Double(slot) * 0.2).truncatingRemainder(dividingBy: 1)
+        switch model {
+        case .movingHeadBeam:
+            return LightEffect(kind: .panSweep, speedHz: 0.5, sizeDegrees: 26, phase: phase)
+        case .ledStrobeBar:
+            return LightEffect(kind: .strobe, speedHz: 8, sizeDegrees: 0, phase: phase)
+        case .audienceBlinder:
+            return LightEffect(kind: .strobe, speedHz: 4, sizeDegrees: 0, phase: phase)
+        case .ledPar, .washBar, .backgroundBatten:
+            return LightEffect(kind: .colorChase, speedHz: 0.7, sizeDegrees: 0, phase: phase)
+        case .laser, .frontFresnel, .ledFresnel, .spotBarrel:
+            return .none
+        }
     }
 
     /// The (hex, intensity) for one fixture in one cue, from the brief's energy + keyMode and the fixture's role.

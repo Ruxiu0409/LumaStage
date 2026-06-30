@@ -20,12 +20,6 @@ struct ImmersiveView: View {
     // a stable origin (not the running value) for the duration of the gesture. nil between drags.
     @State private var dragBaseIntensity: Double?
 
-    // The light number the control card is currently placed for. Placement (and the card's
-    // ManipulationComponent re-arm) runs ONCE when the selection becomes a *new* number — so the card
-    // appears beside the just-picked light, then stays where the user drags it instead of being reset
-    // every frame. nil = no light selected / card hidden.
-    @State private var cardPlacedForLight: Int?
-
     var body: some View {
         // Establish a body-level Observation dependency on the lighting look so a generation-
         // or cue-driven look change re-evaluates this body, which re-runs the RealityView
@@ -39,14 +33,15 @@ struct ImmersiveView: View {
         // Also depend on the per-light overrides so "close the light 3" re-runs the update closure.
         let _ = appModel.lightOverrides
         // And on the manually selected light so a pinch-to-select re-runs the update closure below,
-        // which toggles the highlight ring and the floating control card. Same Observation footgun as
-        // the reads above: the `update:` closure registers no dependencies of its own.
+        // which toggles the on-stage highlight ring (the floating control card is now a native
+        // `WindowGroup` driven by the `.onChange` below, not the update closure). Same Observation
+        // footgun as the reads above: the `update:` closure registers no dependencies of its own.
         let _ = appModel.selectedLightNumber
         // And on the group submasters (SPEC 08) so an iPad fader ride re-runs the update closure and
         // folds the new master into the relight. Same Observation footgun as the reads above.
         let _ = appModel.groupMasters
 
-        RealityView { content, attachments in
+        RealityView { content in
             let root = Self.makeStageRoot(layout: appModel.stageLayout)
             // Build the dynamic rig (fixtures + spotlights + labels) from the look's fixtures, then light it.
             Self.syncRig(cue: appModel.selectedCue, layout: appModel.stageLayout, in: root)
@@ -59,15 +54,8 @@ struct ImmersiveView: View {
                     manualLightNumber: appModel.selectedLightNumber
                 )
             }
-            // The manual per-light control card rides as a SwiftUI attachment under a small grab bar (so it
-            // can be moved without its collision eating the controls' taps); the `update:` closure places it
-            // beside the selected light and toggles visibility. It is NOT anchored to a (possibly 5m-high) fixture.
-            if let card = attachments.entity(for: Self.lightControlCardID) {
-                card.name = Self.lightControlCardName
-                Self.installedCardHandle(for: card, in: root).isEnabled = false   // hidden until a light is selected
-            }
             content.add(root)
-        } update: { content, attachments in
+        } update: { content in
             guard let root = content.entities.first(where: { $0.name == "LumaStageRoot" }) else {
                 return
             }
@@ -88,25 +76,13 @@ struct ImmersiveView: View {
             }
 
             // Highlight the pick proxy of the currently selected light (and clear any stale ring).
+            // (The manual control CARD itself is now a native `WindowGroup`, opened/dismissed by the
+            // `.onChange(of: appModel.selectedLightNumber)` below — only the on-stage ring stays here.)
             Self.syncSelectionHighlight(selectedLightNumber: appModel.selectedLightNumber, in: root)
-
-            // Show the control card only while a light is selected, placing it beside the just-picked
-            // light (re-parented here as a fallback in case the make closure ran before the attachment
-            // resolved). Placement happens ONCE per selection change so dragging the card sticks.
-            if let card = attachments.entity(for: Self.lightControlCardID) {
-                card.name = Self.lightControlCardName
-                let handle = Self.installedCardHandle(for: card, in: root)
-                placeLightControlCardIfSelectionChanged(handle, in: root, selectedLightNumber: appModel.selectedLightNumber)
-            }
 
             // Room-spill mode hides the opaque venue so the real room shows through passthrough.
             if let venue = root.findEntity(named: Self.opaqueVenueName) {
                 venue.isEnabled = SurroundingsLightPolicy.includesOpaqueVenue(in: appModel.stageImmersionMode)
-            }
-        } attachments: {
-            Attachment(id: Self.lightControlCardID) {
-                SelectedLightControlView()
-                    .environment(appModel)
             }
         }
         // Pinch a light's pick proxy to select it for manual control. Mirrors `TabletopStageEditorView`'s
@@ -146,6 +122,19 @@ struct ImmersiveView: View {
                 }
         )
         .preferredSurroundingsEffect(appModel.stageImmersionMode == .roomSpill ? .dim(intensity: 0.45) : nil)
+        // The per-light manual control card is a native `WindowGroup` (declared in LumaStageApp) — it
+        // gets the system move bar and keeps its own position across content updates (no more "jump back
+        // to a generated spot" when the user recolours a light). Open it whenever a light becomes
+        // selected and dismiss it when the selection clears. `selectedLightNumber` is already read at
+        // body level (above) so this `.onChange` observes it. The card's own X button calls
+        // `appModel.selectLight(number: nil)`, which flows back through here to dismiss the window.
+        .onChange(of: appModel.selectedLightNumber, initial: true) { _, newValue in
+            if newValue == nil {
+                dismissWindow(id: AppModel.lightControlWindowID)
+            } else {
+                openWindow(id: AppModel.lightControlWindowID)
+            }
+        }
         // The AI composer is a native `WindowGroup` (declared in LumaStageApp) so it gets the
         // system move bar and smooth, compositor-driven dragging instead of a hand-rolled entity
         // drag. The system does NOT auto-hide an app's own windows when an immersive space opens,
@@ -163,6 +152,8 @@ struct ImmersiveView: View {
         .onDisappear {
             appModel.immersiveSpaceState = .closed
             dismissWindow(id: AppModel.aiComposerWindowID)
+            // Also dismiss the per-light control window so it doesn't leak when leaving the stage.
+            dismissWindow(id: AppModel.lightControlWindowID)
             openWindow(id: AppModel.mainWindowID)
         }
     }
@@ -676,12 +667,24 @@ struct ImmersiveView: View {
     private static let lightPickPrefix = "lightpick_"
     private static let lightPickRingPrefix = "lightpick_ring_"
 
-    /// A near-invisible, hit-testable proxy sphere at the floating label spot so the user can pinch a
-    /// (physically tiny, possibly high) fixture to select it for manual control. It carries a faint
-    /// `UnlitMaterial` (essentially transparent), a sphere collider, an `InputTargetComponent`, and a
-    /// `HoverEffectComponent` so it lights up on gaze. A disabled "selected" ring lives inside it,
-    /// toggled by `syncSelectionHighlight` when this light is the selected one. Named
-    /// `lightpick_<number>` so the tap gesture can parse the number off the tapped ancestor.
+    /// A near-invisible, hit-testable proxy sphere at the fixture so the user can pinch a (physically
+    /// tiny, possibly high) fixture to select it for manual control. It carries a faint `UnlitMaterial`
+    /// (essentially transparent), a small sphere collider, and an `InputTargetComponent`. A disabled
+    /// "selected" ring lives inside it, toggled by `syncSelectionHighlight` when this light is the
+    /// selected one. Named `lightpick_<number>` so the tap/drag gestures can parse the number off the
+    /// tapped ancestor.
+    ///
+    /// **BUG 1 fix — chosen approach: shrink the proxy + drop its `HoverEffectComponent`.** Before SPEC 02
+    /// this proxy was a 0.16 m-radius (~0.32 m diameter) sphere carrying a `HoverEffectComponent`; once
+    /// real ~0.4 m fixture geometry (`model_<id>`) landed at the same spot, the system gaze highlight
+    /// painted this oversized invisible sphere as a glowing orb engulfing the fixture. We keep the input
+    /// target on THIS proxy (not on `model_<id>`) because every existing path — gaze/pinch selection,
+    /// pinch-to-dim, VoiceOver, and the selection ring — keys off the `lightpick_<n>` name and hierarchy;
+    /// moving the input target onto the sibling `model_<id>` would break `lightNumber(forPickTarget:)`'s
+    /// walk-up (the model is not a `lightpick_` ancestor). Instead we (a) shrink the collider drastically
+    /// to `sceneLength(0.06)` so it hugs the fixture rather than ballooning past it, and (b) remove the
+    /// `HoverEffectComponent` entirely so it never renders as an orb. The fixture still gaze-selects and
+    /// pinch-drags exactly as before; it just no longer glows a bubble over the gear.
     ///
     /// It is ALSO the light's VoiceOver element: an `AccessibilityComponent` gives it a fixed identity
     /// label ("第 N 盞燈，<燈具名>") and an initial state value ("藍色，亮度 60%" / "已關閉") from the
@@ -696,18 +699,19 @@ struct ImmersiveView: View {
         to rig: Entity
     ) {
         let pick = ModelEntity(
-            mesh: .generateSphere(radius: sceneLength(0.16)),
+            mesh: .generateSphere(radius: sceneLength(0.06)),
             // Alpha kept just above zero: essentially invisible, but the mesh still hit-tests.
             materials: [UnlitMaterial(color: UIColor(white: 1, alpha: 0.02))]
         )
         pick.name = "\(lightPickPrefix)\(number)"
         // Sit the pick proxy ON THE FIXTURE itself (not at the label's +0.34 spot) so the floating
-        // "Light N" label is no longer trapped inside this 16cm sphere / its selection ring — you pinch
+        // "Light N" label is no longer trapped inside this sphere / its selection ring — you pinch
         // the light, the ring haloes the light, and the label reads clearly in the clear space above it.
         pick.position = scenePoint(position)
         pick.generateCollisionShapes(recursive: false)
         pick.components.set(InputTargetComponent())
-        pick.components.set(HoverEffectComponent())
+        // NOTE: deliberately NO HoverEffectComponent — see the doc comment above. The system hover
+        // highlight on this invisible sphere is exactly the glowing-orb bug (BUG 1).
 
         // VoiceOver: make the proxy a focusable element that announces the light's identity + live state.
         // `label` is fixed (identity); `value` is the current colour/brightness and is re-set per relight
@@ -803,95 +807,7 @@ struct ImmersiveView: View {
         }
     }
 
-    private static let lightControlCardID = "lightControl"
-    private static let lightControlCardName = "light_control_card"
-
     private static let dragIntensityPerPoint = 1.0 / 400.0 // vertical points → 0...1 intensity; tune on device
-
-    /// Approx viewer position used to pull the card within reach (origin at standing eye level). A fixed
-    /// origin is simpler than an ARKit deviceAnchor and is good enough since the stage sits in front of
-    /// the seated/standing user; switch to deviceAnchor later if "beside what I'm looking at" needs it.
-    private static let cardViewerPosition = SIMD3<Float>(0, 1.2, 0)
-
-    /// Repositions the manual control card ONLY when the selection becomes a *different* light number
-    /// (compared to `cardPlacedForLight`) — so the card appears beside the just-picked light, then stays
-    /// wherever the user drags it instead of being snapped back every `update:` frame (the old per-frame
-    /// `card.position = …` was exactly that bug, fighting the drag).
-    ///
-    /// - nil selection → hide the card and clear the placed-for marker.
-    /// - new number → find that light's pick proxy (`lightpick_<n>`), take its root-space position, run
-    ///   `LightControlCardPlacement.position` to get a reachable spot beside it, place + show the card,
-    ///   (re)arm its move gesture, and record the number.
-    /// - unchanged selection → leave `card.position` untouched (the whole point).
-    /// `handle` is the grab bar (movability already configured in `installedCardHandle`); positioning /
-    /// showing it carries its child card. Disabling it hides the card too (RealityKit `isEnabled` cascades).
-    private func placeLightControlCardIfSelectionChanged(_ handle: Entity, in root: Entity, selectedLightNumber: Int?) {
-        guard selectedLightNumber != cardPlacedForLight else { return }
-
-        guard let number = selectedLightNumber else {
-            handle.isEnabled = false
-            cardPlacedForLight = nil
-            return
-        }
-
-        // Place beside the just-picked light. If the proxy isn't found yet (rig still building), leave the
-        // card hidden and don't record the number, so a later frame retries placement for this selection.
-        guard let proxy = root.findEntity(named: "\(Self.lightPickPrefix)\(number)") else {
-            handle.isEnabled = false
-            return
-        }
-
-        let lightWorld = proxy.position(relativeTo: root)
-        handle.position = LightControlCardPlacement.position(lightWorld: lightWorld, viewer: Self.cardViewerPosition)
-        handle.isEnabled = true
-        cardPlacedForLight = number
-    }
-
-    /// Lets the user grab and reposition the card, mirroring `FixtureObservatoryView`: RealityKit's system
-    /// `ManipulationComponent` (one-hand translate) on the attachment entity, with `releaseBehavior = .stay`
-    /// so it stays where it's left rather than snapping back. Scale + rotate are LOCKED (`dynamics`) — a flat
-    /// control card should only be slid around, not resized or spun. `configureEntity` adds the input target /
-    /// hover / collision; the card is not a `lightpick_<n>`, so the dim-drag gesture early-returns for it and
-    /// the select-tap can't parse a number off it — neither existing gesture is disturbed. Re-armed on each
-    /// (re)placement so the collision box tracks the attachment's current visual bounds.
-    private static let lightControlHandleName = "light_control_handle"
-
-    /// Wraps the control card under a small **visible grab bar** so the user moves the card by dragging the
-    /// BAR. The bar carries the `ManipulationComponent` + its own (small, mesh-derived) collision; the card
-    /// stays a pure SwiftUI attachment with **no** input/collision component, so its slider & buttons remain
-    /// fully tappable. (Putting `ManipulationComponent`/`InputTargetComponent` on the card itself captured
-    /// every pinch and made the controls dead — the "點不了" regression.) Moving the bar moves its child card.
-    /// Idempotent: returns the existing bar (re-parenting the card under it if needed). The bar is the entity
-    /// placement positions and shows/hides; the card follows as its child.
-    @discardableResult
-    private static func installedCardHandle(for card: Entity, in root: Entity) -> Entity {
-        if let existing = root.findEntity(named: lightControlHandleName) {
-            if card.parent !== existing { existing.addChild(card) }
-            return existing
-        }
-
-        let bar = ModelEntity(
-            mesh: .generateBox(size: SIMD3<Float>(0.16, 0.018, 0.02), cornerRadius: 0.008),
-            materials: [SimpleMaterial(color: UIColor(white: 0.95, alpha: 0.9), isMetallic: false)]
-        )
-        bar.name = lightControlHandleName
-        // The card hangs below the bar (its pivot is its centre); offset is approximate — tune on device.
-        card.position = SIMD3<Float>(0, -0.24, 0)
-        bar.addChild(card)
-
-        // Manipulation lives on the BAR; `configureEntity` (no explicit shapes) derives the collision from the
-        // bar's own small mesh, so ONLY the bar is grabbable. Slide-only (lock scale + rotate); stays put.
-        ManipulationComponent.configureEntity(bar)
-        if var manipulation = bar.components[ManipulationComponent.self] {
-            manipulation.releaseBehavior = .stay
-            manipulation.dynamics.scalingBehavior = .none
-            manipulation.dynamics.primaryRotationBehavior = .none
-            manipulation.dynamics.secondaryRotationBehavior = .none
-            bar.components.set(manipulation)
-        }
-        root.addChild(bar)
-        return bar
-    }
 
     /// Walks a tapped entity up to the nearest `lightpick_<n>` ancestor and parses its 1-based light
     /// number, or `nil` if the tap didn't land on a pick proxy (→ deselect).
