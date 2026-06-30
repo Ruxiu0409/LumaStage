@@ -881,6 +881,45 @@ struct LumaStageProject: Codable, Equatable, Identifiable {
     var lastEditedDescription: String
     var stageLayout: StageLayout
     var lightingLook: LightingLook
+    /// The locked rig (鎖定燈具) generation must obey (SPEC 05). Additive + back-compat: defaults to
+    /// unconstrained, and old project JSON without the key decodes to unconstrained via `decodeIfPresent`.
+    var rigConstraint: RigConstraint = RigConstraint(fixtureCount: nil, allowedModels: [])
+
+    init(
+        id: String,
+        name: String,
+        venueDescription: String,
+        eventType: String,
+        lastEditedDescription: String,
+        stageLayout: StageLayout,
+        lightingLook: LightingLook,
+        rigConstraint: RigConstraint = RigConstraint(fixtureCount: nil, allowedModels: [])
+    ) {
+        self.id = id
+        self.name = name
+        self.venueDescription = venueDescription
+        self.eventType = eventType
+        self.lastEditedDescription = lastEditedDescription
+        self.stageLayout = stageLayout
+        self.lightingLook = lightingLook
+        self.rigConstraint = rigConstraint
+    }
+
+    // Custom decoding so old project JSON without a `rigConstraint` key decodes to unconstrained — a
+    // synthesized memberwise decoder would otherwise reject the missing key even though it's defaulted
+    // (same idiom as `LightingExplanation.init(from:)`).
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        venueDescription = try container.decode(String.self, forKey: .venueDescription)
+        eventType = try container.decode(String.self, forKey: .eventType)
+        lastEditedDescription = try container.decode(String.self, forKey: .lastEditedDescription)
+        stageLayout = try container.decode(StageLayout.self, forKey: .stageLayout)
+        lightingLook = try container.decode(LightingLook.self, forKey: .lightingLook)
+        rigConstraint = try container.decodeIfPresent(RigConstraint.self, forKey: .rigConstraint)
+            ?? RigConstraint(fixtureCount: nil, allowedModels: [])
+    }
 
     static func defaultProjects() -> [LumaStageProject] {
         // Open the app on a complete, ready-to-play design instead of an empty home: the 9-fixture

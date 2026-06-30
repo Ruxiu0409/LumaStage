@@ -59,6 +59,10 @@ swiftc \
   LumaStage/OpenAILightingService.swift \
   LumaStage/FallbackLightingService.swift \
   LumaStage/OpenAIKeychain.swift \
+  LumaStage/SongAnalysis.swift \
+  LumaStage/ShowPlan.swift \
+  LumaStage/RigConstraint.swift \
+  LumaStage/MusicShowBuilder.swift \
   -o /tmp/LumaStageCoreSmokeTests && /tmp/LumaStageCoreSmokeTests
 # prints "LumaStageCoreSmokeTests passed" and exits 0 on success
 ```

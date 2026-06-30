@@ -26,6 +26,7 @@
     LumaStage/LightEffect.swift LumaStage/MusicBeatClock.swift LumaStage/StageLightAccessibility.swift \
     LumaStage/LightControlCardPlacement.swift LumaStage/FixtureGroups.swift \
     LumaStage/OpenAILightingService.swift LumaStage/FallbackLightingService.swift LumaStage/OpenAIKeychain.swift \
+    LumaStage/SongAnalysis.swift LumaStage/ShowPlan.swift LumaStage/RigConstraint.swift LumaStage/MusicShowBuilder.swift \
     -o /tmp/smoke && /tmp/smoke    # 印出 "LumaStageCoreSmokeTests passed" 即過
   ```
   新增 Foundation-only 檔時,把它加進這個指令(並更新根 `CLAUDE.md` 的測試段)。
@@ -55,6 +56,8 @@
 
 - **SPEC 11 壓縮裝置端生成（讓 on-device FM 不爆 context window）**：on-device FM 固定 **4096-token 視窗（輸入+輸出共用、由輸出主導）**,原 `@Generable`（最壞 8 fixtures × 4 cues × 6 欄位/state + 無上限教學文字）會撐爆丟 `contextSizeExceeded`、連基本提示都跑不動。輕量壓縮把**輸出**砍到約 1/3,**只動 `FoundationModelsLightingService.swift`**:A 縮短 `GeneratedExplanation.plainText`/`rationale` 為單句;B 降上限(`cues 2...4→2...3`、`fixtures 4...8→4...6`、`states 2...4→2...3` + 同步 `@Guide`/`instructions` 數字);C 從 `GeneratedFixtureState` 砍掉 `beamAngleDegrees`/`gobo`/`movement`(只留 enabled/intensity/colorHex)、刪 `GeneratedMovement`/`GeneratedGobo` enum 與其映射,`draftFixture` 停止傳這三值——全吃 `LightingLookDraft.Fixture` 的 nil 預設(gobo→plain、beam→role/zone 預設、effect→`LightEffectPlan.suggested` 確定性動態);D 加 `#if DEBUG` 用 OS 27 `SystemLanguageModel.contextSize`/`tokenCount(for:)` 印輸入預算(非阻擋)。**SPEC 01 取捨**:裝置端 AI 不再逐 cue 指定 movement/gobo/beam,改吃確定性 fallback(motion 仍播);SPEC 01 的 Foundation-only 管線、templates/手動/雲端後端全不受影響。draft/domain 側零改動,既有 smoke 不回歸。——已實作、**完整 build 綠**、smoke 綠(spec 已封存至 `archive/`)。**壓縮後實機是否真不爆、4–6 盞/2–3 cue 觀感需實機驗;不夠可再降到 `fixtures 3...6`/`cues 2...2`。`LightingModels.swift:45` 有一條現已過時的 `GeneratedGobo` 註解(spec 禁改該檔,僅註解、不影響編譯)。**
 
+- **SPEC 05 音樂理解→自動生成整場演出 + 鎖定燈具（B1，旗艦）**：丟一首歌 → **裝置端離線**用 WWDC26 `MusicUnderstanding` 框架（`MusicUnderstandingSession(asset:).analyze()`，visionOS 27，全 Codable）分析 → 自動生成「屬於那首歌」的多 cue 演出（依段落/調性/pace/響度/樂器）→ 真實節拍鎖相播放、cue 隨段落自動走場。外加**鎖定燈具**（數量/種類，專案級設備檔 + 可臨時覆寫）。**純邏輯全進 Foundation + smoke**：`MusicBeatClock`+`MusicBeatSync`（節拍格 + strobe 落拍/chase 每拍/sweep 每拍一圈的鎖相數學）、`SongAnalysis`（框架結果的平台無關 Codable 鏡像 + `SongAnalyzing` 協定 + `makeBeatClock`）、`ShowPlan`（段落→`CueBrief`，energy=0.6·pace+0.4·loudness，合併短段、上限 maxCues、≥2 cue）、`RigConstraint`（`enforce(on:)` 裁量/按 role 改寫非白名單型號/冪等）、`MusicShowBuilder`（**確定性、AI-free** 分析→多 cue look，經 `validate()` 保證可渲染，L/R 對稱 rig）、`LumaStageProject.rigConstraint`（additive，`decodeIfPresent` 容錯）。**平台薄層**：`MusicUnderstandingService`（包框架→`SongAnalysis`，對真實 SDK 強型別讀取 `SessionResult`(巢狀)/`RangedValue<Double>`/`TimedValue<Float>`/`KeySignature.mode`/`Instrument.rawValue`，每維度容錯給中性預設；`CachedSongAnalyzer` 內建曲 JSON 零失敗 + `PreviewSongAnalyzer`）、`MusicSyncEngine`+`MusicSyncClockSource`（`AVAudioPlayer` 播放、`CACurrentMediaTime()` 錨點、`OSAllocatedUnfairLock` 保護、render-thread `snapshot()`、30Hz tick 段落邊界單次觸發）。`LightEffectSystem` 每幀讀 clock source 改走 `MusicBeatSync.output(...)`（沒開音樂不回歸自累加時間）；`AppModel` 加 `importSong`/`useBuiltInDemoSong`/`playMusicShow`/`stopMusicShow`/`setRigConstraint`/`clearMusicShow`（`generate` 末端套 `rigConstraint.enforce` 讓設備檔對 AI 生成也生效；openProject/closeProject/generate reset）；`VisionAIComposerBox` 加「音樂」按鈕 + `MusicShowSheet`（匯入/內建曲/播放狀態/BPM）+ `RigConstraintEditorView`（數量 stepper + 型號多選）。owner A 的 `MusicBeatClock` 重用。新 smoke 7 條（makeBeatClock 三路徑 / ShowPlan 邊界 / RigConstraint 裁量+改寫+冪等 / MusicShowBuilder 對稱可驗 / 舊 project JSON→unconstrained 等），4 個新 Foundation 檔納入 smoke 集。——已實作、**完整 build 綠**、smoke 綠（spec 已封存至 `archive/`）。**真曲段落 kind 目前落 `.unknown`（框架 `StructureResult.sections` 無標籤，pace/key/loudness 仍逐段分化）；內建示範曲無音檔 → clock-only 鎖拍但 cue 不自動走場（手動 GO），真曲匯入才自動走場；真曲分析品質、節拍視覺鎖相與效能、長曲漂移、設備檔 enforce 觀感需實機驗。**
+
 ## Spec 生命週期
 
 - 每份 spec **完成後(實作 + build 綠 + smoke 過)就移到 `docs/specs/archive/` 或直接刪除**——完成的 spec 不留在待辦清單裡(完成內容反映在「現況基線」與程式碼/git)。
@@ -63,8 +66,6 @@
 
 ## 優先序
 
-| 序 | Spec | 對應 | 工作量 | 風險 |
-|---|---|---|---|---|
-| P3 | `05-music-sync.md` | B1 · 依賴 A1 | L | 高(分析準度→降級內建曲) |
+_(目前無待辦 spec——已全數完成並封存至 `archive/`。)_
 
 > 風險高/實機相依者,先在實機把 A1 + 房間溢光驗過再排(見根 `docs/demo-runbook.md`)。

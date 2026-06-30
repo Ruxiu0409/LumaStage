@@ -7,6 +7,7 @@
 
 import SwiftUI
 import Observation
+import QuartzCore
 
 /// Maintains app-wide state
 @MainActor
@@ -141,15 +142,61 @@ class AppModel {
     @ObservationIgnored
     private let aiClient: any LightingLookGenerating
 
+    // MARK: - Music sync (SPEC 05 owner C)
+    //
+    // The deterministic "song → multi-cue show" surface owner D's UI drives. `songAnalyzer` is the
+    // injectable analysis boundary (same pattern as `aiClient`); `musicSyncEngine` owns playback + the
+    // cross-thread beat clock the `LightEffectSystem` reads. The last analysis/plan are kept so the show
+    // can be rebuilt (e.g. when the rig constraint changes) without re-analyzing.
+
+    /// Injectable song-analysis boundary. Default is the on-device `MusicUnderstandingService`; tests /
+    /// previews inject `PreviewSongAnalyzer` / `CachedSongAnalyzer` / a mock.
+    @ObservationIgnored
+    private let songAnalyzer: any SongAnalyzing
+
+    /// Playback + render-thread beat clock for music-synced shows.
+    @ObservationIgnored
+    let musicSyncEngine = MusicSyncEngine()
+
+    /// The most recent analysis + plan, retained so `setRigConstraint` can rebuild the show in place.
+    @ObservationIgnored
+    private var lastAnalysis: SongAnalysis?
+    @ObservationIgnored
+    private var lastPlan: ShowPlan?
+    /// The beat clock for the loaded show, kept so the clock-only demo path (no playable audio) can still
+    /// anchor `MusicSyncClockSource` and beat-lock the visuals from `playMusicShow()`.
+    @ObservationIgnored
+    private var lastClock: MusicBeatClock?
+    /// True when the loaded show has no playable audio (the built-in demo): `playMusicShow` then anchors the
+    /// beat clock directly so the visuals still lock, since the audio engine can't `play()` without a player.
+    @ObservationIgnored
+    private var musicShowIsClockOnly = false
+
+    /// Whether a music-driven show is loaded (analysis present + a show built from it).
+    var isMusicShowActive = false
+    /// Mirrors `musicSyncEngine.isPlaying` so the UI can observe it on `AppModel`.
+    var isMusicPlaying = false
+    /// The analyzed tempo of the loaded song (nil when no tempo could be derived / no song loaded).
+    var musicBPM: Double?
+    /// Title of the loaded song (for the music status row).
+    var currentSongTitle: String?
+    /// The locked-rig constraint, mirroring the open project's. `setRigConstraint` writes it back to the
+    /// project and re-enforces it on the current look. Defaults to unconstrained.
+    var rigConstraint = RigConstraint(fixtureCount: nil, allowedModels: [])
+
     /// Host-side link to the iPad control panel (advertises over Multipeer, mirrors host state, and
     /// applies the panel's edits). Created lazily by `startIPadSync()` so previews/tests that build an
     /// `AppModel` never start networking.
     @ObservationIgnored
     private var syncCoordinator: LumaSyncCoordinator?
 
-    init(aiClient: (any LightingLookGenerating)? = nil) {
+    init(
+        aiClient: (any LightingLookGenerating)? = nil,
+        songAnalyzer: (any SongAnalyzing)? = nil
+    ) {
         let resolvedClient = aiClient ?? Self.makeDefaultLightingClient()
         self.aiClient = resolvedClient
+        self.songAnalyzer = songAnalyzer ?? MusicUnderstandingService()
         modelAvailability = resolvedClient.availability
     }
 
@@ -546,6 +593,9 @@ class AppModel {
         // A different project is a different rig; drop any stale per-light selection so the control card
         // can't index a fixture that no longer exists. Mirrors generate's reset.
         selectedLightNumber = nil
+        // Mirror the opened project's locked-rig constraint, and drop any music show from the prior project.
+        rigConstraint = project.rigConstraint
+        clearMusicShow()
         transcript = ""
         typedPrompt = ""
         aiUnderstoodCommand = "已開啟 \(project.name)"
@@ -572,12 +622,184 @@ class AppModel {
         // No project → no immersive space. Also end any tabletop editing session (its layout no longer
         // has a home once the project closes); `ContentView` then opens nothing.
         clearTabletopEditingState()
+        clearMusicShow()
         desiredImmersiveScene = .none
         transcript = ""
         typedPrompt = ""
         aiUnderstoodCommand = "等待選擇專案"
         lastError = nil
         conversationState = .idle
+    }
+
+    // MARK: - Music sync show (SPEC 05 owner C)
+
+    /// Analyzes a song file → builds a deterministic multi-cue show from it → applies the look, loads it
+    /// into the playback engine, and arms cue-by-section advance. The deterministic backbone (analysis →
+    /// `ShowPlan` → `MusicShowBuilder`) never needs the AI, so the show is built even if generation is
+    /// unavailable. Any failure surfaces through the existing `fail(...)`.
+    func importSong(url: URL) async {
+        // A file-picker URL is usually security-scoped; bracket the access so analysis can read it.
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+
+        let title = url.deletingPathExtension().lastPathComponent
+        do {
+            let analysis = try await songAnalyzer.analyze(url: url, title: title)
+            try buildAndLoadShow(from: analysis, audioURL: url)
+        } catch {
+            fail(error.localizedDescription)
+        }
+    }
+
+    /// Same pipeline as `importSong`, but using the built-in pre-analyzed demo song — the zero-fail stage
+    /// path. The demo analyzer ships its analysis as bundled JSON (no live framework run), so the show is
+    /// always built. The demo has no playable audio file, so this loads the engine clock-only: the look is
+    /// applied and the beat grid + cue advance still drive the visuals, just without audio playback.
+    func useBuiltInDemoSong() async {
+        do {
+            let analysis = try await CachedSongAnalyzer().analyze(url: URL(fileURLWithPath: ""), title: "")
+            try buildAndLoadShow(from: analysis, audioURL: nil)
+        } catch {
+            fail(error.localizedDescription)
+        }
+    }
+
+    /// Shared backbone for `importSong` / `useBuiltInDemoSong`: builds the show from an analysis, applies it,
+    /// and arms the engine. With audio, `play()` runs the player, beat-locks the visuals, and auto-advances
+    /// cues on the section boundaries. With `audioURL == nil` (the demo), there is no player to tick, so
+    /// `playMusicShow` anchors the beat clock directly (visuals still beat-lock) but cues do not auto-advance
+    /// — the show holds its first cue and the user GOes manually. Throws on look-build / validation failure
+    /// (caught by the callers → `fail`).
+    private func buildAndLoadShow(from analysis: SongAnalysis, audioURL: URL?) throws {
+        let plan = ShowPlan.make(from: analysis)
+        let look = try MusicShowBuilder.buildLook(
+            plan: plan,
+            rig: rigConstraint,
+            lookName: analysis.title
+        )
+
+        try stageState.replaceLightingLook(look)
+        // A freshly built show is a brand-new dynamic rig — reset the manual layers, mirroring generate().
+        lightOverrides = [:]
+        selectedFixtureId = nil
+        resetGroups()
+        selectedLightNumber = nil
+        lastExplanation = look.explanation
+        generationSource = .foundationModels
+        persistCurrentProjectState()
+
+        // Retain so `setRigConstraint` can rebuild the show in place and `playMusicShow` can anchor the
+        // clock-only demo path.
+        lastAnalysis = analysis
+        lastPlan = plan
+        let clock = analysis.makeBeatClock()
+        lastClock = clock
+        musicShowIsClockOnly = (audioURL == nil)
+
+        if let audioURL {
+            musicSyncEngine.load(url: audioURL, clock: clock)
+        } else {
+            // No playable audio (built-in demo). Load with an empty URL: the player creation fails and the
+            // engine settles into a safe non-playing state. `playMusicShow` then anchors the beat clock
+            // directly so the visuals still beat-lock; cue auto-advance needs the audio tick, so for the
+            // demo the show holds its first cue (the user can still GO through cues manually).
+            musicSyncEngine.load(url: URL(fileURLWithPath: ""), clock: clock)
+        }
+        musicSyncEngine.setSectionStarts(plan.cues.map(\.startTime))
+        musicSyncEngine.onSectionBoundary = { [weak self] index in
+            self?.selectCueAtSectionIndex(index)
+        }
+
+        isMusicShowActive = true
+        isMusicPlaying = musicSyncEngine.isPlaying
+        musicBPM = analysis.bpm
+        currentSongTitle = analysis.title
+        lastError = nil
+        aiUnderstoodCommand = "已依「\(analysis.title)」生成 \(look.cues.count) 個場景的整場演出。"
+        conversationState = .explaining
+        narrateIfEnabled(aiUnderstoodCommand)
+    }
+
+    /// Starts music-synced playback: audio (if any) + the beat clock anchor + cue auto-advance. No-op when
+    /// no show is loaded. For the clock-only demo (no playable audio), anchors `MusicSyncClockSource`
+    /// directly so the render-thread effect system still beat-locks even though no audio plays.
+    func playMusicShow() {
+        guard isMusicShowActive else { return }
+        musicSyncEngine.play()
+        if musicShowIsClockOnly, let clock = lastClock {
+            // The audio engine has no player to start; anchor the shared beat clock ourselves so the visuals
+            // lock to tempo from "now". (CACurrentMediaTime is the same time base the engine uses.)
+            MusicSyncClockSource.shared.setActive(startMediaTime: CACurrentMediaTime(), clock: clock)
+        }
+        isMusicPlaying = musicSyncEngine.isPlaying || musicShowIsClockOnly
+    }
+
+    /// Stops playback and clears the beat clock; the look stays applied so the stage holds its last cue.
+    func stopMusicShow() {
+        musicSyncEngine.stop()
+        // The engine clears the source on a real-audio stop, but for the clock-only demo we anchored it
+        // ourselves, so clear it here too.
+        if musicShowIsClockOnly {
+            MusicSyncClockSource.shared.clear()
+        }
+        isMusicPlaying = musicSyncEngine.isPlaying
+    }
+
+    /// Maps a section boundary index → the cue at that index in the stack and selects it (bounds-guarded).
+    /// Wired as `musicSyncEngine.onSectionBoundary`, so cues auto-advance as the song crosses each section.
+    private func selectCueAtSectionIndex(_ index: Int) {
+        let stack = cues
+        guard index >= 0, index < stack.count else { return }
+        selectCue(id: stack[index].id)
+    }
+
+    /// Updates the locked-rig constraint: stores it on the model, persists it to the current project, and
+    /// re-enforces it on the current look immediately so the user sees the effect at once.
+    func setRigConstraint(_ constraint: RigConstraint) {
+        rigConstraint = constraint
+
+        if let selectedProjectId,
+           let projectIndex = projects.firstIndex(where: { $0.id == selectedProjectId }) {
+            projects[projectIndex].rigConstraint = constraint
+        }
+
+        // Re-enforce on the current look right now (idempotent, so re-applying a compliant look is a no-op).
+        let enforced = constraint.enforce(on: stageState.lightingLook)
+        do {
+            try stageState.replaceLightingLook(enforced)
+            lightOverrides = [:]
+            selectedFixtureId = nil
+            resetGroups()
+            selectedLightNumber = nil
+            persistCurrentProjectState()
+            aiUnderstoodCommand = constraint.isUnconstrained
+                ? "已解除設備鎖定，燈光不再受設備檔限制。"
+                : "已套用設備檔，燈光已對齊你的現有設備。"
+            lastError = nil
+            conversationState = .explaining
+        } catch {
+            fail(error.localizedDescription)
+        }
+    }
+
+    /// Tears down a music show: stops playback, clears the beat clock, drops the analysis/plan, and resets
+    /// the observable music state. Called on project open/close and before a manual generation so a stale
+    /// show never lingers. The applied look is left untouched (the next caller replaces it).
+    func clearMusicShow() {
+        musicSyncEngine.stop()
+        musicSyncEngine.onSectionBoundary = nil
+        // Clock-only demo anchors the source itself, so make sure it's cleared on teardown.
+        if musicShowIsClockOnly {
+            MusicSyncClockSource.shared.clear()
+        }
+        lastAnalysis = nil
+        lastPlan = nil
+        lastClock = nil
+        musicShowIsClockOnly = false
+        isMusicShowActive = false
+        isMusicPlaying = false
+        musicBPM = nil
+        currentSongTitle = nil
     }
 
     func toggleSpeechInput() async {
@@ -658,7 +880,12 @@ class AppModel {
         do {
             let result = try await aiClient.generateLook(from: prompt)
             conversationState = .applying
-            try stageState.replaceLightingLook(result.look)
+            // The locked-rig constraint applies to AI generation too (idempotent / no-op when
+            // unconstrained), so a manual design still obeys the user's declared equipment profile.
+            let constrained = rigConstraint.enforce(on: result.look)
+            try stageState.replaceLightingLook(constrained)
+            // A manual generation replaces any music-synced show that was loaded.
+            clearMusicShow()
             // A freshly generated look is a brand-new dynamic rig — drop stale per-light overrides so a
             // prior "close the light 3" doesn't silently reattach to a different physical fixture (overrides
             // are keyed by cue order, not fixture id). Mirrors openProject's reset.

@@ -64,6 +64,8 @@ struct LumaStageCoreSmokeTests {
         try stageStateSupportsCueStackAndGo()
         try disabledFixtureAssemblesDark()
         lightEffectEngineModulatesMovementAndIntensity()
+        musicBeatClockGridIsCorrect()
+        musicBeatSyncLocksEffectsToBeat()
         try patchPlannerAssignsSequentialDMXAndBuildsSheet()
         parsesStageVoiceCommands()
         stageLightAccessibilityLabelsAreLocalized()
@@ -81,6 +83,13 @@ struct LumaStageCoreSmokeTests {
         await openAIServiceSurfacesRefusal()
         await openAIServiceRejectsOutOfRangeViaValidator()
         try await fallbackServiceFallsBackWhenPrimaryThrows()
+        songAnalysisMakeBeatClockCoversThreePaths()
+        try songAnalysisRoundTripsAndMeasuresSectionDuration()
+        showPlanProducesBoundedCuesWithRanges()
+        showPlanMergesShortSectionsAndPadsEmpty()
+        try rigConstraintClampsRemapsAndIsIdempotent()
+        try musicShowBuilderBuildsValidatedSymmetricShow()
+        try legacyProjectJSONDecodesToUnconstrainedRig()
         print("LumaStageCoreSmokeTests passed")
     }
 
@@ -1775,6 +1784,92 @@ struct LumaStageCoreSmokeTests {
                "high energy widens the moving-head swing")
     }
 
+    // SPEC 05 (owner A): the pure beat grid. Phase stays in [0,1), hits ~0 on each beat boundary, beatHz is
+    // bpm/60, startOffset shifts the grid, beatIndex increments per beat, and bpm <= 0 is guarded.
+    private static func musicBeatClockGridIsCorrect() {
+        let clock = MusicBeatClock(bpm: 120, startOffset: 0)   // 120 bpm → one beat every 0.5s
+        expect(abs(clock.beatHz - 2) < 1e-12, "beatHz must be bpm/60 (120 → 2 Hz)")
+
+        // Phase is ~0 exactly on each beat boundary and stays in [0,1) everywhere.
+        for k in 0..<6 {
+            let boundary = clock.startOffset + Double(k) / clock.beatHz   // 0, 0.5, 1.0, ...
+            expect(clock.beatPhase(at: boundary) < 1e-9, "phase returns to ~0 on each beat boundary")
+            expect(clock.beatIndex(at: boundary) == k, "beatIndex increments per beat")
+        }
+        for t in stride(from: -1.0, to: 4.0, by: 0.013) {
+            let p = clock.beatPhase(at: t)
+            expect(p >= 0 && p < 1, "beatPhase stays in [0,1)")
+        }
+
+        // Mid-beat is phase ~0.5.
+        expect(abs(clock.beatPhase(at: 0.25) - 0.5) < 1e-9, "a quarter second into a 0.5s beat is mid-beat")
+
+        // startOffset shifts the whole grid: with offset 0.2, the first beat boundary moves to t=0.2.
+        let shifted = MusicBeatClock(bpm: 120, startOffset: 0.2)
+        expect(shifted.beatPhase(at: 0.2) < 1e-9, "startOffset moves the first beat boundary")
+        expect(shifted.beatIndex(at: 0.1) == -1, "beatIndex is negative before startOffset")
+        expect(shifted.beatIndex(at: 0.2) == 0, "first beat starts at startOffset")
+        // The shifted grid's phase at the unshifted boundary equals the offset fraction of a beat.
+        expect(abs(shifted.beatPhase(at: 0.0) - 0.6) < 1e-9, "offset 0.2 of a 0.5s beat reads phase 0.6 at t=0")
+
+        // bpm <= 0 is guarded (no divide-by-zero).
+        let dead = MusicBeatClock(bpm: 0, startOffset: 0)
+        expect(dead.beatPhase(at: 3.7) == 0, "bpm <= 0 returns 0 phase")
+        expect(dead.beatIndex(at: 3.7) == 0, "bpm <= 0 returns beat 0")
+    }
+
+    // SPEC 05 (owner A): the beat-locked effect mapping. Strobe punches on the leading edge of each beat,
+    // colorChase peaks once per beat, sweeps delegate to the A1 engine on a continuous beat clock, and
+    // inert/none effects are identity.
+    private static func musicBeatSyncLocksEffectsToBeat() {
+        let clock = MusicBeatClock(bpm: 120, startOffset: 0)   // beat = 0.5s; strobe lit for first ~30%
+
+        // Inert effects are identity regardless of the clock.
+        expect(MusicBeatSync.output(.none, clock: clock, at: 1.3) == .identity, "none is identity under beat sync")
+        let stillStrobe = LightEffect(kind: .strobe, speedHz: 0, sizeDegrees: 0, phase: 0)
+        expect(MusicBeatSync.output(stillStrobe, clock: clock, at: 1.3) == .identity, "a zero-speed effect is inert")
+
+        // Strobe: ON just after a beat boundary, OFF mid-beat.
+        let strobe = LightEffect(kind: .strobe, speedHz: 8, sizeDegrees: 0, phase: 0)
+        expect(MusicBeatSync.output(strobe, clock: clock, at: 0.01).intensityScale == 1, "strobe is ON just after the beat")
+        expect(MusicBeatSync.output(strobe, clock: clock, at: 0.51).intensityScale == 1, "strobe re-fires on the next beat")
+        expect(MusicBeatSync.output(strobe, clock: clock, at: 0.30).intensityScale == 0, "strobe is OFF mid-beat")
+        // It only ever returns a hard 0 or 1 and actually visits both states across a beat.
+        let strobeScales = stride(from: 0.0, to: 1.0, by: 0.01).map { MusicBeatSync.output(strobe, clock: clock, at: $0).intensityScale }
+        expect(strobeScales.allSatisfy { $0 == 0 || $0 == 1 }, "beat strobe is a hard on/off")
+        expect(strobeScales.contains(0) && strobeScales.contains(1), "beat strobe visits both states each beat")
+
+        // Color chase: a smooth pulse that peaks once per beat (mid-beat) and returns to ~0 on the boundary.
+        let chase = LightEffect(kind: .colorChase, speedHz: 1, sizeDegrees: 0, phase: 0)
+        expect(MusicBeatSync.output(chase, clock: clock, at: 0.0).intensityScale < 1e-9, "chase is dark on the beat boundary")
+        expect(abs(MusicBeatSync.output(chase, clock: clock, at: 0.25).intensityScale - 1) < 1e-9, "chase peaks once mid-beat")
+        let chaseScales = stride(from: 0.0, to: 1.0, by: 0.01).map { MusicBeatSync.output(chase, clock: clock, at: $0).intensityScale }
+        expect(chaseScales.allSatisfy { (0...1).contains($0) }, "chase pulse stays in 0...1")
+        // Phase stagger makes two fixtures differ at the same instant (the pulse runs across the rig).
+        let chaseB = LightEffect(kind: .colorChase, speedHz: 1, sizeDegrees: 0, phase: 0.5)
+        expect(abs(MusicBeatSync.output(chase, clock: clock, at: 0.1).intensityScale
+                   - MusicBeatSync.output(chaseB, clock: clock, at: 0.1).intensityScale) > 1e-6,
+               "a phase offset staggers fixtures so the chase runs across the rig")
+
+        // Sweep: delegates to the A1 engine on the beat clock — stays within ±sizeDegrees and is continuous
+        // across beat boundaries (no jump from just-before to just-after a beat).
+        let pan = LightEffect(kind: .panSweep, speedHz: 0.4, sizeDegrees: 30, phase: 0)
+        for t in stride(from: 0.0, to: 2.0, by: 0.01) {
+            let out = MusicBeatSync.output(pan, clock: clock, at: t)
+            expect(abs(out.panOffsetDegrees) <= 30 + 1e-9, "beat-synced pan stays within sizeDegrees")
+            expect(out.tiltOffsetDegrees == 0 && out.intensityScale == 1, "a beat-synced sweep leaves intensity to the cue")
+        }
+        // Continuity at a beat boundary: pan just before 0.5 ≈ pan just after.
+        // beatTime = beatIndex + beatPhase is continuous, so the engine's sin(2π·beatTime) is too — the
+        // tiny step here reflects only the curve's slope, not a discontinuity. Use a small symmetric step
+        // and a tolerance comfortably above slope·step (≈ 2π·30·dt) yet far below any jump (which would be
+        // O(size)).
+        let dt = 1e-4
+        let before = MusicBeatSync.output(pan, clock: clock, at: 0.5 - dt).panOffsetDegrees
+        let after = MusicBeatSync.output(pan, clock: clock, at: 0.5 + dt).panOffsetDegrees
+        expect(abs(before - after) < 0.1, "the sweep does not jump across a beat boundary")
+    }
+
     // The per-light control card's placement rule (SPEC 09): appears near the selected light but pulled
     // toward the viewer and clamped to a reachable height, so a 5m-high fixture's card never floats out
     // of reach and a floor light's card never sinks to the deck.
@@ -2082,6 +2177,229 @@ struct LumaStageCoreSmokeTests {
         let happyResult = try await happyPath.generateLook(from: "做一個暖色開場")
         expect(happyResult.source == .openAI, "On the primary-success path the result must be the primary's")
         expect(untouchedSecondary.callCount == 0, "The secondary must NOT be invoked when the primary succeeds")
+    }
+
+    // MARK: - SPEC 05 P1: music → show + rig constraint
+
+    private static func songAnalysisMakeBeatClockCoversThreePaths() {
+        // Path 1: explicit bpm → uses it directly with the first beat as the offset.
+        let withBpm = SongAnalysis(title: "A", duration: 60, bpm: 120, beatTimes: [0.5, 1.0, 1.5],
+                                   barTimes: [], sections: [])
+        let clock1 = withBpm.makeBeatClock()
+        expect(clock1?.bpm == 120, "Explicit bpm must drive the clock directly")
+        expect(clock1?.startOffset == 0.5, "First beat is the downbeat offset")
+
+        // Path 2: nil bpm but ≥2 beats → estimate from the median inter-beat interval (0.5s → 120bpm).
+        let estimated = SongAnalysis(title: "B", duration: 60, bpm: nil,
+                                     beatTimes: [1.0, 1.5, 2.0, 2.5], barTimes: [], sections: [])
+        let clock2 = estimated.makeBeatClock()
+        let estBpm = clock2?.bpm ?? 0
+        expect(abs(estBpm - 120) < 0.001, "0.5s median gap must estimate 120 bpm, got \(estBpm)")
+        expect(clock2?.startOffset == 1.0, "Estimated clock still anchors on the first beat")
+
+        // Path 3: no usable tempo (nil bpm, <2 beats) → nil.
+        let none = SongAnalysis(title: "C", duration: 60, bpm: nil, beatTimes: [], barTimes: [], sections: [])
+        expect(none.makeBeatClock() == nil, "No bpm and no beats must yield no clock")
+        let oneBeat = SongAnalysis(title: "D", duration: 60, bpm: nil, beatTimes: [2.0], barTimes: [], sections: [])
+        expect(oneBeat.makeBeatClock() == nil, "A single beat is not enough to estimate tempo")
+    }
+
+    private static func songAnalysisRoundTripsAndMeasuresSectionDuration() throws {
+        let section = SongSection(start: 10, end: 28, kind: .chorus, pace: 0.8, loudness: 0.7,
+                                  keyMode: .major, dominantInstruments: ["drums", "vocals"])
+        expect(section.duration == 18, "Section duration is end - start")
+
+        let analysis = SongAnalysis(
+            title: "Demo", duration: 150, bpm: 128, beatTimes: [0, 0.47, 0.94],
+            barTimes: [0, 1.88], sections: [section]
+        )
+        let data = try JSONEncoder().encode(analysis)
+        let decoded = try JSONDecoder().decode(SongAnalysis.self, from: data)
+        expect(decoded == analysis, "SongAnalysis must round-trip through Codable unchanged")
+    }
+
+    private static func showPlanProducesBoundedCuesWithRanges() {
+        // Six distinct sections; with maxCues 4 the plan keeps the four longest as boundaries.
+        let sections = [
+            SongSection(start: 0, end: 12, kind: .intro, pace: 0.2, loudness: 0.2, keyMode: .minor, dominantInstruments: []),
+            SongSection(start: 12, end: 40, kind: .verse, pace: 0.4, loudness: 0.4, keyMode: .minor, dominantInstruments: ["vocals"]),
+            SongSection(start: 40, end: 80, kind: .chorus, pace: 0.9, loudness: 0.9, keyMode: .major, dominantInstruments: ["drums"]),
+            SongSection(start: 80, end: 100, kind: .bridge, pace: 0.5, loudness: 0.5, keyMode: .minor, dominantInstruments: []),
+            SongSection(start: 100, end: 140, kind: .drop, pace: 1.0, loudness: 0.95, keyMode: .major, dominantInstruments: ["drums"]),
+            SongSection(start: 140, end: 150, kind: .outro, pace: 0.15, loudness: 0.2, keyMode: .minor, dominantInstruments: [])
+        ]
+        let analysis = SongAnalysis(title: "T", duration: 150, bpm: 120, beatTimes: [0], barTimes: [], sections: sections)
+        let plan = ShowPlan.make(from: analysis, maxCues: 4, minCueSeconds: 8)
+
+        expect(plan.cues.count >= 2 && plan.cues.count <= 4, "Cue count must land in [2, maxCues], got \(plan.cues.count)")
+        for cue in plan.cues {
+            expect((0...1).contains(cue.energy), "energy in 0...1")
+            expect((0...1).contains(cue.suggestedIntensity), "suggestedIntensity in 0...1")
+            // suggestedIntensity = clamp(0.35 + 0.6*energy)
+            let expected = min(max(0.35 + 0.6 * cue.energy, 0), 1)
+            expect(abs(cue.suggestedIntensity - expected) < 1e-9, "suggestedIntensity must follow the formula")
+            expect(cue.highEnergy == (cue.energy >= LightEffectPlan.highEnergyThreshold),
+                   "highEnergy must align to LightEffectPlan.highEnergyThreshold")
+        }
+
+        // A high-energy section (pace 0.9, loud 0.9) → energy 0.9 ≥ 0.6 → highEnergy.
+        let chorusEnergy = CueBrief.energy(pace: 0.9, loudness: 0.9)
+        expect(chorusEnergy >= 0.6, "A loud, fast chorus must read as high energy")
+    }
+
+    private static func showPlanMergesShortSectionsAndPadsEmpty() {
+        // A sub-minimum section folds into the previous cue, so two adjacent sections collapse to one.
+        let sections = [
+            SongSection(start: 0, end: 30, kind: .verse, pace: 0.4, loudness: 0.4, keyMode: .minor, dominantInstruments: []),
+            SongSection(start: 30, end: 33, kind: .breakdown, pace: 0.5, loudness: 0.5, keyMode: .minor, dominantInstruments: []),
+            SongSection(start: 33, end: 70, kind: .chorus, pace: 0.8, loudness: 0.8, keyMode: .major, dominantInstruments: [])
+        ]
+        let analysis = SongAnalysis(title: "M", duration: 70, bpm: 120, beatTimes: [0], barTimes: [], sections: sections)
+        let plan = ShowPlan.make(from: analysis, maxCues: 6, minCueSeconds: 8)
+        // The 3s breakdown folds into the verse → 2 resulting cues (verse-merged + chorus).
+        expect(plan.cues.count == 2, "A 3s section under minCueSeconds must fold into the previous cue, got \(plan.cues.count)")
+
+        // Empty analysis → padded to exactly 2 neutral cues.
+        let empty = SongAnalysis(title: "E", duration: 0, bpm: nil, beatTimes: [], barTimes: [], sections: [])
+        let emptyPlan = ShowPlan.make(from: empty)
+        expect(emptyPlan.cues.count == 2, "An empty analysis must pad to 2 neutral cues, got \(emptyPlan.cues.count)")
+    }
+
+    private static func rigConstraintClampsRemapsAndIsIdempotent() throws {
+        // A look with 4 fixtures of mixed models across two cues (rig identity: same ids/order per cue).
+        func cue(id: String, name: String) -> LightingCue {
+            LightingCue(id: id, name: name, transition: .mvpDefault, fixtureGroups: [
+                FixtureGroup(id: "f1", name: "1", role: .frontLight, zone: .stageFront, enabled: true,
+                             intensity: 0.6, color: FixtureColor(mode: .rgb, value: "#FFFFFF"), model: .frontFresnel),
+                FixtureGroup(id: "f2", name: "2", role: .spot, zone: .stageBack, enabled: true,
+                             intensity: 0.6, color: FixtureColor(mode: .rgb, value: "#00FF00"), model: .laser),
+                FixtureGroup(id: "f3", name: "3", role: .wash, zone: .fullStage, enabled: true,
+                             intensity: 0.6, color: FixtureColor(mode: .rgb, value: "#0000FF"), model: .ledPar),
+                FixtureGroup(id: "f4", name: "4", role: .spot, zone: .stageBack, enabled: true,
+                             intensity: 0.6, color: FixtureColor(mode: .rgb, value: "#FF0000"), model: .movingHeadBeam)
+            ])
+        }
+        let look = LightingLook(
+            schemaVersion: "1.0", intent: .generateLook, lookName: "L", mood: "m",
+            ambient: AmbientState(preset: .standardNight, level: 0.35, colorTemperature: 4200),
+            selectedCueId: "cA",
+            cues: [cue(id: "cA", name: "Opening"), cue(id: "cB", name: "Highlight")],
+            explanation: LightingExplanation(term: "t", plainText: "p", actionSummary: "a")
+        )
+        try look.validate()
+
+        // isUnconstrained → passthrough unchanged.
+        let unconstrained = RigConstraint(fixtureCount: nil, allowedModels: [])
+        expect(unconstrained.enforce(on: look) == look, "An unconstrained rig must return the look unchanged")
+
+        // Over-count clamp to 2 (tail dropped in rig order), plus a model whitelist that doesn't include
+        // the laser (.movingHeadBeam shares the spot role → laser remaps to it).
+        let constraint = RigConstraint(fixtureCount: 2, allowedModels: [.frontFresnel, .movingHeadBeam])
+        let enforced = constraint.enforce(on: look)
+
+        for c in enforced.cues {
+            expect(c.fixtureGroups.count == 2, "Count must clamp to fixtureCount=2, got \(c.fixtureGroups.count)")
+            for fixture in c.fixtureGroups {
+                expect([.frontFresnel, .movingHeadBeam].contains(fixture.renderModel),
+                       "Every kept fixture must use a whitelisted model, got \(fixture.renderModel)")
+            }
+        }
+        // Per-cue fixtureId consistency (rig identity preserved across cues).
+        let idsA = enforced.cues[0].fixtureGroups.map(\.id)
+        let idsB = enforced.cues[1].fixtureGroups.map(\.id)
+        expect(idsA == idsB, "Every cue must keep the same fixtureId set/order after enforce")
+        expect(idsA == ["f1", "f2"], "Tail fixtures must be dropped in rig order")
+        // f2 was a laser (spot role) not in the whitelist → remapped to .movingHeadBeam (the spot-role allowed model).
+        let f2 = enforced.cues[0].fixtureGroups.first { $0.id == "f2" }
+        expect(f2?.renderModel == .movingHeadBeam, "A non-allowed laser must remap to the same-role allowed model")
+        try enforced.validate()
+
+        // Idempotence: enforcing again changes nothing.
+        let twice = constraint.enforce(on: enforced)
+        expect(twice == enforced, "enforce must be idempotent on an already-compliant look")
+    }
+
+    private static func musicShowBuilderBuildsValidatedSymmetricShow() throws {
+        // Major, high-energy chorus + minor, low-energy verse → decidable warm/cool + effect/none.
+        let sections = [
+            SongSection(start: 0, end: 40, kind: .verse, pace: 0.2, loudness: 0.2, keyMode: .minor, dominantInstruments: []),
+            SongSection(start: 40, end: 90, kind: .chorus, pace: 0.95, loudness: 0.95, keyMode: .major, dominantInstruments: ["drums"])
+        ]
+        let analysis = SongAnalysis(title: "S", duration: 90, bpm: 128, beatTimes: [0], barTimes: [], sections: sections)
+        let plan = ShowPlan.make(from: analysis)
+        expect(plan.cues.count == 2, "Two distinct long sections → two cues")
+
+        let unconstrained = RigConstraint(fixtureCount: nil, allowedModels: [])
+        let look = try MusicShowBuilder.buildLook(plan: plan, rig: unconstrained, lookName: "音樂秀")
+
+        // One cue per CueBrief; every cue validates (makeValidatedLook already ran validate()).
+        expect(look.cues.count == plan.cues.count, "Cue count must equal plan.cues count")
+        try look.validate()
+
+        // Rig is even-sized and ≤ 8 (symmetric pairs, no lone laser).
+        let rigSize = look.cues[0].fixtureGroups.count
+        expect(rigSize <= 8 && rigSize % 2 == 0, "Rig must be symmetric (even) and ≤ 8, got \(rigSize)")
+
+        // Identify the verse (low energy, minor) and chorus (high energy, major) cues by name.
+        let verseCue = try expectUnwrapped(look.cues.first { $0.name == CueBrief.displayName(for: .verse) }, "verse cue present")
+        let chorusCue = try expectUnwrapped(look.cues.first { $0.name == CueBrief.displayName(for: .chorus) }, "chorus cue present")
+
+        // Major/minor color-temp is decidable on a non-front accent fixture: major redder than minor bluer.
+        func accent(_ cue: LightingCue) -> RGBComponents {
+            let fixture = cue.fixtureGroups.first { $0.role != .frontLight } ?? cue.fixtureGroups[0]
+            return fixture.color.rgbComponents
+        }
+        let majorRGB = accent(chorusCue)
+        let minorRGB = accent(verseCue)
+        expect(majorRGB.red > majorRGB.blue, "Major (chorus) accent must skew warm (red > blue)")
+        expect(minorRGB.blue > minorRGB.red, "Minor (verse) accent must skew cool (blue > red)")
+
+        // High-energy chorus gives a mover/strobe a dynamic effect; low-energy verse runs none.
+        let chorusEffects = LightEffectPlan.effects(for: chorusCue)
+        expect(chorusEffects.contains { $0.isAnimated }, "A high-energy cue must drive at least one dynamic effect")
+        let verseHasAuthored = verseCue.fixtureGroups.contains { ($0.effect?.isAnimated ?? false) }
+        expect(!verseHasAuthored, "A low-energy cue must author no dynamic effect")
+
+        // Post-enforce compliance: a count+model lock yields a compliant look.
+        let constrained = RigConstraint(fixtureCount: 4, allowedModels: [.frontFresnel, .movingHeadBeam])
+        let lockedLook = try MusicShowBuilder.buildLook(plan: plan, rig: constrained, lookName: "鎖定秀")
+        for c in lockedLook.cues {
+            expect(c.fixtureGroups.count <= 4, "Locked rig must respect fixtureCount")
+            for fixture in c.fixtureGroups {
+                expect([.frontFresnel, .movingHeadBeam].contains(fixture.renderModel),
+                       "Locked rig must only use whitelisted models")
+            }
+        }
+        try lockedLook.validate()
+    }
+
+    private static func legacyProjectJSONDecodesToUnconstrainedRig() throws {
+        // A project encoded WITHOUT the rigConstraint key (old save) must decode to unconstrained.
+        let layout = StageLayout.defaultStudentOutdoor()
+        let layoutData = try JSONEncoder().encode(layout)
+        let layoutJSON = try expectUnwrapped(
+            JSONSerialization.jsonObject(with: layoutData) as? [String: Any],
+            "stage layout must encode to a JSON object"
+        )
+        let lookData = try JSONEncoder().encode(LightingLook.mvpDemo())
+        let lookJSON = try expectUnwrapped(
+            JSONSerialization.jsonObject(with: lookData) as? [String: Any],
+            "lighting look must encode to a JSON object"
+        )
+        let legacy: [String: Any] = [
+            "id": "legacy_1",
+            "name": "舊專案",
+            "venueDescription": "戶外",
+            "eventType": "展演",
+            "lastEditedDescription": "舊存檔",
+            "stageLayout": layoutJSON,
+            "lightingLook": lookJSON
+            // no rigConstraint key
+        ]
+        let data = try JSONSerialization.data(withJSONObject: legacy)
+        let project = try JSONDecoder().decode(LumaStageProject.self, from: data)
+        expect(project.rigConstraint.isUnconstrained,
+               "A legacy project JSON without rigConstraint must decode to an unconstrained rig")
     }
 
     private static func expect(_ condition: @autoclosure () -> Bool, _ message: String) {

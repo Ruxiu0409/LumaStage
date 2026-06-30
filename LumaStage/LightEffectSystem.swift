@@ -30,12 +30,27 @@ final class LightEffectSystem: System {
     required init(scene: Scene) {}
 
     func update(context: SceneUpdateContext) {
+        // Free-run time keeps advancing every frame regardless of music, so disabling music sync never
+        // regresses (effects fall straight back onto their authored per-frame motion).
         time += context.deltaTime
+
+        // SPEC 05 owner C: beat-lock to the music clock when active. Sampled ONCE per frame off the
+        // render-thread-safe shared source (lock-guarded snapshot). A System isn't a SwiftUI body, so the
+        // Observation footgun doesn't apply — we read `.shared` directly. `nil` ⇒ no music ⇒ free-run.
+        let beatSnapshot = MusicSyncClockSource.shared.snapshot()
+
         for entity in context.entities(matching: Self.query, updatingSystemWhen: .rendering) {
             guard let component = entity.components[LightEffectComponent.self],
                   let spot = entity as? SpotLight else { continue }
 
-            let out = LightEffectEngine.output(component.effect, at: time)
+            let out: LightEffectOutput
+            if let beatSnapshot {
+                // Music sync on: same effect, but fired on the beat grid instead of wall-clock seconds.
+                out = MusicBeatSync.output(component.effect, clock: beatSnapshot.clock, at: beatSnapshot.time)
+            } else {
+                // No music: the effect free-runs on its authored `speedHz`.
+                out = LightEffectEngine.output(component.effect, at: time)
+            }
 
             // Re-aim around the resting direction. Offsets are zero for a steady/none effect, so a calm
             // cue holds the beam at rest (and a cue change back to steady eases it home next frame).

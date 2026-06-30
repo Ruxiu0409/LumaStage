@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 #if os(visionOS)
 struct VisionAIComposerBox: View {
@@ -6,6 +7,7 @@ struct VisionAIComposerBox: View {
     @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isShowingPatchSheet = false
+    @State private var isShowingMusicSheet = false
 
     var body: some View {
         @Bindable var appModel = appModel
@@ -36,6 +38,10 @@ struct VisionAIComposerBox: View {
             PatchSheetExportView()
                 .environment(appModel)
         }
+        .sheet(isPresented: $isShowingMusicSheet) {
+            MusicShowSheet()
+                .environment(appModel)
+        }
         .padding(24)
         // A fixed width gives this native window (`.windowResizability(.contentSize)`) a definite
         // content size — the rows use `Spacer()`/`maxWidth: .infinity` internally, which would be
@@ -61,6 +67,17 @@ struct VisionAIComposerBox: View {
             .buttonBorderShape(.capsule)
             .help("檢視並匯出 DMX 配接表 / 燈位表 — 交給真實場地的燈光技師")
             .accessibilityLabel("檢視 DMX 配接表")
+
+            Button("音樂", systemImage: "music.note") {
+                isShowingMusicSheet = true
+            }
+            .buttonStyle(.bordered)
+            .buttonBorderShape(.capsule)
+            .lumaGazeTarget()
+            .tint(appModel.isMusicShowActive ? LumaStageDesign.coolBlue : nil)
+            .help("匯入歌曲，裝置端離線分析後自動生成整場節拍同步演出；也能鎖定設備檔")
+            .accessibilityLabel(appModel.isMusicShowActive ? "音樂演出（已載入）" : "音樂演出")
+            .accessibilityValue(musicAccessibilityValue)
 
             Spacer()
 
@@ -220,8 +237,23 @@ struct VisionAIComposerBox: View {
             LumaStatusChip(title: appModel.selectedCue?.localizedDisplayName ?? "開場", tint: LumaStageDesign.warmAmber)
             LumaStatusChip(title: "標準夜景", tint: LumaStageDesign.softGreen)
 
+            if appModel.isMusicShowActive {
+                LumaStatusChip(title: musicStatusChipTitle, tint: LumaStageDesign.coolBlue)
+                    .accessibilityLabel("音樂演出狀態")
+                    .accessibilityValue(musicAccessibilityValue)
+            }
+
             Spacer()
         }
+    }
+
+    /// Compact "playing/stopped · BPM" label for the live music chip in `statusRow`.
+    private var musicStatusChipTitle: String {
+        let state = appModel.isMusicPlaying ? "播放中" : "已停止"
+        if let bpm = appModel.musicBPM {
+            return "\(state) · BPM \(Int(bpm.rounded()))"
+        }
+        return state
     }
 
     private var controlRow: some View {
@@ -529,6 +561,16 @@ struct VisionAIComposerBox: View {
             && !appModel.typedPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    /// VoiceOver value for the topBar music button — the live show status read aloud after the label.
+    private var musicAccessibilityValue: String {
+        guard appModel.isMusicShowActive else { return "尚未載入歌曲" }
+        var parts: [String] = []
+        if let title = appModel.currentSongTitle { parts.append(title) }
+        if let bpm = appModel.musicBPM { parts.append("每分鐘 \(Int(bpm.rounded())) 拍") }
+        parts.append(appModel.isMusicPlaying ? "播放中" : "已停止")
+        return parts.joined(separator: "，")
+    }
+
     private var spillTitle: String {
         appModel.stageImmersionMode == .roomSpill
             ? "停止將燈光投射到你的房間"
@@ -624,6 +666,345 @@ struct VisionAIComposerBox: View {
                 await dismissImmersiveSpace()
             }
         }
+    }
+}
+
+// MARK: - Music show sheet
+
+/// The music surface reached from the topBar "音樂" button. Import an audio file (or use the bundled
+/// demo song), then — once the on-device analysis has produced a show — see the song / BPM and a
+/// play / stop toggle. Also the entry point to the rig-constraint ("設備檔") editor. All generation +
+/// analysis happens in `AppModel`; this view only drives that contract.
+private struct MusicShowSheet: View {
+    @Environment(AppModel.self) private var appModel
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isImportingSong = false
+    @State private var isShowingRigEditor = false
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    sourceSection
+                    if appModel.isMusicShowActive {
+                        statusSection
+                    }
+                    rigSection
+                }
+                .padding(24)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .navigationTitle("音樂演出")
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") { dismiss() }
+                        .lumaGazeTarget()
+                }
+            }
+            .sheet(isPresented: $isShowingRigEditor) {
+                RigConstraintEditorView()
+                    .environment(appModel)
+            }
+            .fileImporter(
+                isPresented: $isImportingSong,
+                allowedContentTypes: [.audio],
+                allowsMultipleSelection: false
+            ) { result in
+                switch result {
+                case .success(let urls):
+                    guard let url = urls.first else { return }
+                    Task { await appModel.importSong(url: url) }
+                case .failure:
+                    break
+                }
+            }
+        }
+        .frame(minWidth: 460, minHeight: 480)
+    }
+
+    // MARK: Pick a song
+
+    private var sourceSection: some View {
+        LumaControlSection(
+            title: "選擇歌曲",
+            subtitle: "裝置端離線分析節拍與段落，自動生成整場節拍同步演出。",
+            systemImage: "waveform"
+        ) {
+            VStack(alignment: .leading, spacing: 12) {
+                Button("匯入音檔", systemImage: "square.and.arrow.down") {
+                    isImportingSong = true
+                }
+                .buttonStyle(.borderedProminent)
+                .buttonBorderShape(.capsule)
+                .tint(LumaStageDesign.coolBlue)
+                .lumaGazeTarget()
+                .frame(maxWidth: .infinity)
+                .help("從檔案選擇一首歌（裝置端分析，不會上傳）")
+                .accessibilityLabel("匯入音檔")
+                .accessibilityHint("選擇一首歌曲，裝置端離線分析後自動生成演出")
+
+                Button("使用內建示範曲", systemImage: "music.note.list") {
+                    Task { await appModel.useBuiltInDemoSong() }
+                }
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.capsule)
+                .lumaGazeTarget()
+                .frame(maxWidth: .infinity)
+                .help("使用預先分析好的內建示範曲 — 現場零失敗")
+                .accessibilityLabel("使用內建示範曲")
+                .accessibilityHint("載入預先分析的示範曲，現場零失敗")
+            }
+        }
+    }
+
+    // MARK: Live show status
+
+    private var statusSection: some View {
+        LumaControlSection(
+            title: "演出狀態",
+            subtitle: "依段落自動走場，視覺鎖定真實節拍。",
+            systemImage: "music.note"
+        ) {
+            VStack(alignment: .leading, spacing: 12) {
+                LumaMetricRow(
+                    title: "歌曲",
+                    value: appModel.currentSongTitle ?? "—",
+                    tint: LumaStageDesign.textPrimary
+                )
+                LumaMetricRow(
+                    title: "節拍",
+                    value: appModel.musicBPM.map { "BPM \(Int($0.rounded()))" } ?? "—",
+                    tint: LumaStageDesign.coolBlue
+                )
+
+                Button(
+                    appModel.isMusicPlaying ? "停止演出" : "播放演出",
+                    systemImage: appModel.isMusicPlaying ? "stop.fill" : "play.fill"
+                ) {
+                    if appModel.isMusicPlaying {
+                        appModel.stopMusicShow()
+                    } else {
+                        appModel.playMusicShow()
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .buttonBorderShape(.capsule)
+                .tint(appModel.isMusicPlaying ? LumaStageDesign.warmAmber : LumaStageDesign.softGreen)
+                .lumaGazeTarget()
+                .frame(maxWidth: .infinity)
+                .help(appModel.isMusicPlaying ? "停止播放，停止節拍同步走場" : "開始播放，cue 隨段落自動走")
+                .accessibilityLabel(appModel.isMusicPlaying ? "停止演出" : "播放演出")
+                .accessibilityValue(appModel.isMusicPlaying ? "播放中" : "已停止")
+                .accessibilityAddTraits(.isButton)
+            }
+        }
+    }
+
+    // MARK: Rig constraint entry
+
+    private var rigSection: some View {
+        LumaControlSection(
+            title: "設備檔",
+            subtitle: "鎖定你實際擁有的燈具數量與型號，生成一律遵守。",
+            systemImage: "lightbulb.2"
+        ) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(rigSummary)
+                    .font(.callout)
+                    .foregroundStyle(LumaStageDesign.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Button("編輯設備檔", systemImage: "slider.horizontal.3") {
+                    isShowingRigEditor = true
+                }
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.capsule)
+                .lumaGazeTarget()
+                .frame(maxWidth: .infinity)
+                .help("設定燈具數量與允許的型號 — 套用後對音樂演出與 AI 生成都生效")
+                .accessibilityLabel("編輯設備檔")
+                .accessibilityValue(rigSummary)
+            }
+        }
+    }
+
+    private var rigSummary: String {
+        let constraint = appModel.rigConstraint
+        if constraint.isUnconstrained {
+            return "目前不限數量、不限型號。"
+        }
+        let countText = constraint.fixtureCount.map { "\($0) 盞燈" } ?? "不限數量"
+        let modelText: String
+        if constraint.allowedModels.isEmpty {
+            modelText = "不限型號"
+        } else {
+            modelText = constraint.allowedModels
+                .map { RigConstraintEditorView.displayName(for: $0) }
+                .joined(separator: "、")
+        }
+        return "\(countText)；\(modelText)。"
+    }
+}
+
+// MARK: - Rig constraint editor
+
+/// Edits a local copy of `appModel.rigConstraint` — a fixture-count limit (or 不限) plus an allowed
+/// model whitelist (empty = 不限型號) — and commits it via `appModel.setRigConstraint(_:)`. Selection
+/// uses a checkmark (non-color) indicator for accessibility.
+private struct RigConstraintEditorView: View {
+    @Environment(AppModel.self) private var appModel
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var limitCount: Bool = false
+    @State private var fixtureCount: Int = 8
+    @State private var allowedModels: Set<LightingFixtureVisualModel> = []
+
+    private static let countRange = 1...12
+
+    /// Chinese display name for a fixture model, reusing the catalog's `displayName` (falls back to the
+    /// raw case name for any model not in the catalog).
+    static func displayName(for model: LightingFixtureVisualModel) -> String {
+        LightingFixtureCatalog.item(for: model)?.displayName ?? model.rawValue
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    countSection
+                    modelSection
+                }
+                .padding(24)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .navigationTitle("設備檔")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { dismiss() }
+                        .lumaGazeTarget()
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("套用") {
+                        appModel.setRigConstraint(
+                            RigConstraint(
+                                fixtureCount: limitCount ? fixtureCount : nil,
+                                allowedModels: Array(allowedModels)
+                            )
+                        )
+                        dismiss()
+                    }
+                    .lumaGazeTarget()
+                    .accessibilityHint("套用設備檔，對音樂演出與 AI 生成都生效")
+                }
+            }
+        }
+        .frame(minWidth: 460, minHeight: 520)
+        .onAppear(perform: loadFromModel)
+    }
+
+    private func loadFromModel() {
+        let constraint = appModel.rigConstraint
+        if let count = constraint.fixtureCount {
+            limitCount = true
+            fixtureCount = min(max(count, Self.countRange.lowerBound), Self.countRange.upperBound)
+        } else {
+            limitCount = false
+        }
+        allowedModels = Set(constraint.allowedModels)
+    }
+
+    // MARK: Fixture count
+
+    private var countSection: some View {
+        LumaControlSection(
+            title: "燈具數量",
+            subtitle: "生成的燈數不會超過此上限；關閉表示不限。",
+            systemImage: "number"
+        ) {
+            VStack(alignment: .leading, spacing: 12) {
+                Toggle(isOn: $limitCount.animation(nil)) {
+                    Text("限制數量")
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(LumaStageDesign.textPrimary)
+                }
+                .toggleStyle(.switch)
+                .lumaGazeTarget()
+                .accessibilityHint("開啟以設定燈具數量上限，關閉表示不限")
+
+                if limitCount {
+                    Stepper(value: $fixtureCount, in: Self.countRange) {
+                        HStack {
+                            Text("數量")
+                                .font(.callout)
+                                .foregroundStyle(LumaStageDesign.textSecondary)
+                            Spacer()
+                            Text("\(fixtureCount) 盞")
+                                .font(.callout.weight(.semibold))
+                                .monospacedDigit()
+                                .foregroundStyle(LumaStageDesign.textPrimary)
+                        }
+                    }
+                    .lumaGazeTarget()
+                    .accessibilityLabel("燈具數量")
+                    .accessibilityValue("\(fixtureCount) 盞")
+                } else {
+                    Text("目前不限數量")
+                        .font(.callout)
+                        .foregroundStyle(LumaStageDesign.textSecondary)
+                }
+            }
+        }
+    }
+
+    // MARK: Allowed models
+
+    private var modelSection: some View {
+        LumaControlSection(
+            title: "允許的型號",
+            subtitle: allowedModels.isEmpty ? "未選擇任何型號 — 代表不限型號。" : "生成只會用到勾選的型號。",
+            systemImage: "lightbulb.2"
+        ) {
+            VStack(spacing: 0) {
+                ForEach(LightingFixtureVisualModel.allCases, id: \.self) { model in
+                    modelRow(model)
+                    if model != LightingFixtureVisualModel.allCases.last {
+                        Divider().overlay(LumaStageDesign.hairline)
+                    }
+                }
+            }
+        }
+    }
+
+    private func modelRow(_ model: LightingFixtureVisualModel) -> some View {
+        let isSelected = allowedModels.contains(model)
+        return Button {
+            if isSelected {
+                allowedModels.remove(model)
+            } else {
+                allowedModels.insert(model)
+            }
+        } label: {
+            HStack(spacing: 12) {
+                // Non-color selection indicator: a filled checkmark when chosen, an empty circle
+                // otherwise — legible under Differentiate Without Color, not only via tint.
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.title3)
+                    .foregroundStyle(isSelected ? LumaStageDesign.coolBlue : LumaStageDesign.textSecondary)
+                Text(Self.displayName(for: model))
+                    .font(.callout.weight(isSelected ? .bold : .regular))
+                    .foregroundStyle(LumaStageDesign.textPrimary)
+                Spacer()
+            }
+            .contentShape(Rectangle())
+            .padding(.vertical, 10)
+        }
+        .buttonStyle(.plain)
+        .lumaGazeTarget()
+        .accessibilityLabel(Self.displayName(for: model))
+        .accessibilityValue(isSelected ? "已選擇" : "未選擇")
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+        .accessibilityHint("點兩下\(isSelected ? "取消選擇" : "選擇")此型號")
     }
 }
 
