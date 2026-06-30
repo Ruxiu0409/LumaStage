@@ -157,6 +157,11 @@ class AppModel {
     @ObservationIgnored
     private let songAnalyzer: any SongAnalyzing
 
+    /// Injectable 音樂資料庫瀏覽邊界（SPEC 12）。預設為平台實作 `MusicKitSongLibrary`；測試 / 預覽注入
+    /// `LoopbackSongLibrary`。讓使用者從裝置資料庫挑曲，解析到可讀檔案 URL 後餵進既有的 `importSong` 管線。
+    @ObservationIgnored
+    private let songLibrary: any SongLibraryBrowsing
+
     /// Playback + render-thread beat clock for music-synced shows.
     @ObservationIgnored
     let musicSyncEngine = MusicSyncEngine()
@@ -195,11 +200,13 @@ class AppModel {
 
     init(
         aiClient: (any LightingLookGenerating)? = nil,
-        songAnalyzer: (any SongAnalyzing)? = nil
+        songAnalyzer: (any SongAnalyzing)? = nil,
+        songLibrary: (any SongLibraryBrowsing)? = nil
     ) {
         let resolvedClient = aiClient ?? Self.makeDefaultLightingClient()
         self.aiClient = resolvedClient
         self.songAnalyzer = songAnalyzer ?? MusicUnderstandingService()
+        self.songLibrary = songLibrary ?? MusicKitSongLibrary()
         modelAvailability = resolvedClient.availability
     }
 
@@ -640,18 +647,50 @@ class AppModel {
     /// into the playback engine, and arms cue-by-section advance. The deterministic backbone (analysis →
     /// `ShowPlan` → `MusicShowBuilder`) never needs the AI, so the show is built even if generation is
     /// unavailable. Any failure surfaces through the existing `fail(...)`.
-    func importSong(url: URL) async {
+    func importSong(url: URL, title overrideTitle: String? = nil) async {
         // A file-picker URL is usually security-scoped; bracket the access so analysis can read it.
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
 
-        let title = url.deletingPathExtension().lastPathComponent
+        // 資料庫項目的 assetURL（`ipod-library://…`）檔名無意義，所以選曲路徑會傳真實 title 進來；
+        // 檔案瀏覽器路徑沒傳，就沿用既有的「去副檔名取檔名」行為。
+        let title = overrideTitle ?? url.deletingPathExtension().lastPathComponent
         do {
             let analysis = try await songAnalyzer.analyze(url: url, title: title)
             try buildAndLoadShow(from: analysis, audioURL: url)
         } catch {
             fail(error.localizedDescription)
         }
+    }
+
+    /// SPEC 12 — 從裝置音樂資料庫挑一首歌：解析其可讀取檔案 URL，再餵進既有的 `importSong` 管線
+    /// （帶上資料庫的真實 title）。受 DRM 保護 / 未下載的串流曲目沒有可讀 URL，會以繁中說明優雅拒絕。
+    func pickLibrarySong(_ item: SongLibraryItem) async {
+        do {
+            let url = try await songLibrary.resolvePlayableURL(for: item)
+            await importSong(url: url, title: item.title)
+        } catch SongSourceError.protected {
+            fail("此曲受保護，無法在裝置端分析；請改用未受保護的本機檔案。")
+        } catch SongSourceError.unauthorized {
+            fail("沒有音樂資料庫存取權限，請在設定中開啟。")
+        } catch {
+            fail("無法讀取這首歌：\(error.localizedDescription)")
+        }
+    }
+
+    /// 薄包裝，讓選曲 view 透過 `AppModel` 取用資料庫，而不直接持有 `MusicKitSongLibrary`（注入慣例）。
+    func authorizeMusicLibrary() async -> Bool {
+        await songLibrary.authorize()
+    }
+
+    /// 列出資料庫近期曲目（給選曲 view 的初始清單）。
+    func browseLibrary(limit: Int = 50) async -> [SongLibraryItem] {
+        await songLibrary.recentSongs(limit: limit)
+    }
+
+    /// 依關鍵字搜尋資料庫曲目（給選曲 view 的搜尋框）。
+    func searchLibrary(_ query: String) async -> [SongLibraryItem] {
+        await songLibrary.search(query)
     }
 
     /// Same pipeline as `importSong`, but using the built-in pre-analyzed demo song — the zero-fail stage

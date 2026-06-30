@@ -329,6 +329,7 @@
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "LumaStage 使用本機網路，將 iPad 控制面板與 Apple Vision Pro 連結。";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "LumaStage 使用麥克風，將口說的燈光需求轉換為燈光提示。";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "LumaStage 使用語音辨識，讓你可以用語音描述舞台燈光的變化。";
+				INFOPLIST_KEY_NSAppleMusicUsageDescription = "LumaStage 讀取你的音樂資料庫，讓你挑一首本機歌曲在裝置端離線分析、自動生成節拍同步演出。";
 				INFOPLIST_KEY_NSWorldSensingUsageDescription = "LumaStage 偵測你周遭的水平桌面，把編輯用的小型舞台模型穩穩放在真實桌面上。";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -362,6 +363,7 @@
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "LumaStage 使用本機網路，將 iPad 控制面板與 Apple Vision Pro 連結。";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "LumaStage 使用麥克風，將口說的燈光需求轉換為燈光提示。";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "LumaStage 使用語音辨識，讓你可以用語音描述舞台燈光的變化。";
+				INFOPLIST_KEY_NSAppleMusicUsageDescription = "LumaStage 讀取你的音樂資料庫，讓你挑一首本機歌曲在裝置端離線分析、自動生成節拍同步演出。";
 				INFOPLIST_KEY_NSWorldSensingUsageDescription = "LumaStage 偵測你周遭的水平桌面，把編輯用的小型舞台模型穩穩放在真實桌面上。";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

@@ -483,9 +483,21 @@ struct VisionAIComposerBox: View {
                         .font(.caption.weight(.medium))
                         .foregroundStyle(snapshot.isHighEnergy ? LumaStageDesign.softGreen : LumaStageDesign.textSecondary)
 
-                    ForEach(snapshot.rows) { row in
-                        debugFixtureRow(row)
+                    // Same content-size-window guard as ProjectSelectionView's project list: a large
+                    // dynamic rig (up to ~12 fixtures) can push these rows past the composer window's
+                    // max height and compress them together, so cap the height and scroll. Order is
+                    // load-bearing — `.frame(maxHeight:)` before `.fixedSize(vertical:)` keeps the panel
+                    // compact for small rigs while scrolling a tall one.
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 10) {
+                            ForEach(snapshot.rows) { row in
+                                debugFixtureRow(row)
+                            }
+                        }
                     }
+                    .frame(maxHeight: 220)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .scrollBounceBehavior(.basedOnSize)
                 } else {
                     Text("未選擇場景")
                         .font(.caption)
@@ -673,14 +685,22 @@ struct VisionAIComposerBox: View {
 
 /// The music surface reached from the topBar "音樂" button. Import an audio file (or use the bundled
 /// demo song), then — once the on-device analysis has produced a show — see the song / BPM and a
-/// play / stop toggle. Also the entry point to the rig-constraint ("設備檔") editor. All generation +
-/// analysis happens in `AppModel`; this view only drives that contract.
+/// play / stop toggle. It also *holds* the rig-constraint ("設備檔") editor entry (`rigSection` →
+/// `RigConstraintEditorView`), but that entry is currently hidden behind `showsRigConstraintEntry`
+/// (off) — the logic stays wired, just not surfaced. All generation + analysis happens in `AppModel`;
+/// this view only drives that contract.
 private struct MusicShowSheet: View {
     @Environment(AppModel.self) private var appModel
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isImportingSong = false
     @State private var isShowingRigEditor = false
+    @State private var isShowingLibraryPicker = false
+
+    /// Hides the "設備檔" (rig-constraint) entry point without removing any logic. The section view,
+    /// `RigConstraintEditorView`, `AppModel.rigConstraint`/`setRigConstraint`, and their smoke tests all
+    /// stay intact — flip this back to `true` to resurface the entry. (Kept off the demo UI for now.)
+    private let showsRigConstraintEntry = false
 
     var body: some View {
         NavigationStack {
@@ -690,7 +710,9 @@ private struct MusicShowSheet: View {
                     if appModel.isMusicShowActive {
                         statusSection
                     }
-                    rigSection
+                    if showsRigConstraintEntry {
+                        rigSection
+                    }
                 }
                 .padding(24)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -704,6 +726,10 @@ private struct MusicShowSheet: View {
             }
             .sheet(isPresented: $isShowingRigEditor) {
                 RigConstraintEditorView()
+                    .environment(appModel)
+            }
+            .sheet(isPresented: $isShowingLibraryPicker) {
+                SongLibraryPickerView()
                     .environment(appModel)
             }
             .fileImporter(
@@ -754,6 +780,17 @@ private struct MusicShowSheet: View {
                 .help("使用預先分析好的內建示範曲 — 現場零失敗")
                 .accessibilityLabel("使用內建示範曲")
                 .accessibilityHint("載入預先分析的示範曲，現場零失敗")
+
+                Button("從音樂資料庫選曲", systemImage: "music.note.list") {
+                    isShowingLibraryPicker = true
+                }
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.capsule)
+                .lumaGazeTarget()
+                .frame(maxWidth: .infinity)
+                .help("從你的本機音樂資料庫挑一首歌（裝置端分析，受保護的串流曲目無法分析）")
+                .accessibilityLabel("從音樂資料庫選曲")
+                .accessibilityHint("瀏覽本機音樂資料庫並選擇一首歌曲，裝置端離線分析後自動生成演出")
             }
         }
     }
@@ -844,6 +881,163 @@ private struct MusicShowSheet: View {
                 .joined(separator: "、")
         }
         return "\(countText)；\(modelText)。"
+    }
+}
+
+// MARK: - Music library picker
+
+/// Pick a song from the device's local music library (SPEC 12). Drives the injectable
+/// `SongLibraryBrowsing` seam through `AppModel`. Authorizes, browses/searches, and lets the user
+/// pick a *non-protected* local track — `pickLibrarySong` resolves a playable file URL and feeds the
+/// existing import → analysis → show pipeline. DRM-protected / undownloaded Apple Music items have no
+/// readable `assetURL`, so their rows are disabled and honestly labelled "受保護，無法分析"; they can
+/// never be analysed (a platform limit, not a bug). When authorization is denied (or the platform
+/// can't browse), the view explains why and points the user at "匯入音檔" instead.
+private struct SongLibraryPickerView: View {
+    @Environment(AppModel.self) private var appModel
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    @State private var items: [SongLibraryItem] = []
+    @State private var query = ""
+    @State private var isAuthorized = true
+    @State private var didLoad = false
+
+    var body: some View {
+        NavigationStack {
+            content
+                .navigationTitle("音樂資料庫")
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("完成") { dismiss() }
+                            .lumaGazeTarget()
+                    }
+                }
+                .searchable(text: $query, prompt: "搜尋歌曲或演出者")
+                .onSubmit(of: .search) { reload() }
+                .onChange(of: query) { reload() }
+                .task {
+                    let ok = await appModel.authorizeMusicLibrary()
+                    isAuthorized = ok
+                    if ok {
+                        items = await appModel.browseLibrary()
+                    }
+                    didLoad = true
+                }
+        }
+        .frame(minWidth: 460, minHeight: 480)
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if didLoad && !isAuthorized {
+            unauthorizedState
+        } else if didLoad && items.isEmpty {
+            emptyState
+        } else {
+            songList
+        }
+    }
+
+    private var songList: some View {
+        List {
+            ForEach(items, id: \.id) { item in
+                row(for: item)
+            }
+        }
+        .animation(reduceMotion ? nil : .default, value: items)
+    }
+
+    @ViewBuilder
+    private func row(for item: SongLibraryItem) -> some View {
+        if item.isProtected {
+            HStack(spacing: 12) {
+                songInfo(for: item)
+                Spacer(minLength: 8)
+                Label("受保護，無法分析", systemImage: "lock.fill")
+                    .labelStyle(.titleAndIcon)
+                    .font(.footnote)
+                    .foregroundStyle(LumaStageDesign.textSecondary)
+            }
+            .padding(.vertical, 4)
+            .frame(minHeight: LumaStageDesign.minGazeTarget)
+            .disabled(true)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(item.title)，\(item.artist)，\(durationText(item.duration))，受保護，無法分析")
+        } else {
+            Button {
+                Task {
+                    await appModel.pickLibrarySong(item)
+                    dismiss()
+                }
+            } label: {
+                HStack(spacing: 12) {
+                    songInfo(for: item)
+                    Spacer(minLength: 8)
+                    Image(systemName: "chevron.right")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(LumaStageDesign.textSecondary)
+                }
+                .padding(.vertical, 4)
+                .frame(minHeight: LumaStageDesign.minGazeTarget)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .lumaGazeTarget()
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(item.title)，\(item.artist)，\(durationText(item.duration))")
+            .accessibilityHint("選擇這首歌，裝置端離線分析後自動生成演出")
+            .accessibilityAddTraits(.isButton)
+        }
+    }
+
+    private func songInfo(for item: SongLibraryItem) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(item.title)
+                .font(.body)
+                .foregroundStyle(LumaStageDesign.textPrimary)
+                .lineLimit(1)
+            Text("\(item.artist)・\(durationText(item.duration))")
+                .font(.footnote)
+                .foregroundStyle(LumaStageDesign.textSecondary)
+                .lineLimit(1)
+        }
+    }
+
+    private var unauthorizedState: some View {
+        ContentUnavailableView {
+            Label("沒有音樂資料庫存取權限", systemImage: "music.note.list")
+        } description: {
+            Text("LumaStage 需要存取你的音樂資料庫才能列出本機歌曲。你可以到「設定」開啟權限，或改用「匯入音檔」從檔案選擇一首歌。")
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var emptyState: some View {
+        ContentUnavailableView {
+            Label("資料庫沒有可用的本機歌曲", systemImage: "music.note")
+        } description: {
+            Text("找不到可分析的本機歌曲。受保護的 Apple Music 串流曲目無法分析；請改用「匯入音檔」從檔案選擇一首歌。")
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func reload() {
+        Task {
+            let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty {
+                items = await appModel.browseLibrary()
+            } else {
+                items = await appModel.searchLibrary(trimmed)
+            }
+        }
+    }
+
+    /// Lightweight `mm:ss` duration formatter (avoids pulling in a heavy formatter).
+    private func durationText(_ seconds: Double) -> String {
+        guard seconds > 0, seconds.isFinite else { return "—:—" }
+        let total = Int(seconds.rounded())
+        return String(format: "%d:%02d", total / 60, total % 60)
     }
 }
 

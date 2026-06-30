@@ -91,6 +91,7 @@ struct LumaStageCoreSmokeTests {
         try musicShowBuilderBuildsValidatedSymmetricShow()
         try musicShowLasersAreMirroredLeftAndRight()
         try legacyProjectJSONDecodesToUnconstrainedRig()
+        await songLibraryLoopbackBrowsesAndResolves()
         print("LumaStageCoreSmokeTests passed")
     }
 
@@ -2469,6 +2470,48 @@ struct LumaStageCoreSmokeTests {
         let project = try JSONDecoder().decode(LumaStageProject.self, from: data)
         expect(project.rigConstraint.isUnconstrained,
                "A legacy project JSON without rigConstraint must decode to an unconstrained rig")
+    }
+
+    // SPEC 12 WI-2: the Foundation-only selection seam. Pins the loopback's browse/search/resolve
+    // behaviour so the platform `MusicKitSongLibrary` and the UI can be written against this contract.
+    private static func songLibraryLoopbackBrowsesAndResolves() async {
+        let resolved = URL(fileURLWithPath: "/tmp/luma-loopback-song.m4a")
+        let items = [
+            SongLibraryItem(id: "1", title: "Neon Skyline", artist: "Aurora", duration: 211, isProtected: false),
+            SongLibraryItem(id: "2", title: "Midnight Drive", artist: "Aurora", duration: 184, isProtected: false),
+            SongLibraryItem(id: "3", title: "Quiet Harbor", artist: "Lumen", duration: 0, isProtected: true)
+        ]
+        let library = LoopbackSongLibrary(items: items, resolvedURL: resolved)
+
+        // search filters by title (case-insensitive) and by artist.
+        let byTitle = await library.search("neon")
+        expect(byTitle.map(\.id) == ["1"], "search must match title case-insensitively")
+        let byArtist = await library.search("AURORA")
+        expect(byArtist.map(\.id) == ["1", "2"], "search must match artist case-insensitively")
+        let none = await library.search("nope")
+        expect(none.isEmpty, "search with no match must return empty")
+
+        // recentSongs respects the limit.
+        let recent = await library.recentSongs(limit: 2)
+        expect(recent.map(\.id) == ["1", "2"], "recentSongs must return the first `limit` items")
+
+        // a non-protected item resolves to the injected URL.
+        do {
+            let url = try await library.resolvePlayableURL(for: items[0])
+            expect(url == resolved, "resolvePlayableURL must return the injected URL for a non-protected item")
+        } catch {
+            fatalError("resolvePlayableURL should not throw for a non-protected item, got \(error)")
+        }
+
+        // a protected item throws .protected.
+        do {
+            _ = try await library.resolvePlayableURL(for: items[2])
+            fatalError("resolvePlayableURL must throw for a protected item")
+        } catch let error as SongSourceError {
+            expect(error == .protected, "protected item must throw .protected, got \(error)")
+        } catch {
+            fatalError("protected item must throw SongSourceError.protected, got \(error)")
+        }
     }
 
     private static func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
