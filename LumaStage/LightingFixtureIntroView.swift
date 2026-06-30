@@ -28,8 +28,13 @@ struct LightingFixtureIntroView: View {
                         ForEach(fixtures) { fixture in
                             Button {
                                 appModel.startFixtureInspection(model: fixture.visualModel)
+                                // Open ONLY the model window here; it opens the info card from its own
+                                // onAppear (see `FixtureObservatoryView`). Opening both back-to-back here
+                                // raced the card's `.trailing(observatory)` placement before the model
+                                // window was registered, so the card fell back to the default spot and
+                                // stacked on top of the model — you saw only the card. Deferring the card
+                                // open until the model window is on screen fixes the side-by-side layout.
                                 openWindow(id: AppModel.fixtureObservatoryWindowID)
-                                openWindow(id: AppModel.fixtureInfoCardWindowID)
                                 dismiss()
                             } label: {
                                 LightingFixtureIntroCard(fixture: fixture)

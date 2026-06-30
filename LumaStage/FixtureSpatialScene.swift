@@ -45,7 +45,9 @@ enum FixtureRealityModel {
         // volume with margin. A slight yaw/pitch matches the SceneKit thumbnail's three-quarter view.
         let bounds = assembly.visualBounds(relativeTo: nil)
         let maxExtent = max(bounds.extents.x, max(bounds.extents.y, bounds.extents.z))
-        let fitTarget: Float = 0.52
+        // Longest-axis target size (metres) inside the 0.7m volume. Kept comfortably below the volume so
+        // the fixture opens compact rather than filling the window; the user can pinch to scale it up.
+        let fitTarget: Float = 0.40
         let scale = maxExtent > 0.0001 ? fitTarget / maxExtent : 1
         assembly.position = -bounds.center
 

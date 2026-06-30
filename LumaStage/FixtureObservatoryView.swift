@@ -38,7 +38,7 @@ struct FixtureObservatoryView: View {
         .accessibilityElement()
         .accessibilityLabel(fixtureName)
         .accessibilityValue("3D 燈具模型")
-        .accessibilityHint("用雙手可旋轉與縮放，單手可移動")
+        .accessibilityHint("用雙手可旋轉與縮放")
         // Each fixture is re-presented centered: drop any move/scale/rotate from the previous one.
         .onChange(of: appModel.fixtureCarousel.index) {
             stage.transform = Transform()
@@ -47,6 +47,11 @@ struct FixtureObservatoryView: View {
             // Dismiss the launch/project window while inspecting; it's otherwise left behind as
             // nothing but its empty, draggable system bar. Reopened at the teardown sites below.
             dismissWindow(id: AppModel.mainWindowID)
+            // Open the info card now that THIS volumetric window is on screen and registered in the
+            // scene's window list, so the card's `.defaultWindowPlacement` finds it and seats the card
+            // trailing (side by side) instead of stacking on top of the model. (Opening both windows
+            // together from the Fixture Guide raced this lookup and overlapped them.)
+            openWindow(id: AppModel.fixtureInfoCardWindowID)
         }
         .onDisappear {
             // Closing the model window (via system chrome) tears down the whole observatory.
@@ -77,14 +82,16 @@ struct FixtureObservatoryView: View {
         // than three competing SwiftUI gestures — the two pinch-based ones (scale and rotate) fought
         // each other so only one ever took effect. `configureEntity` adds the input target, a hover
         // highlight, the `ManipulationComponent`, and a collision refit to this model's bounds (so the
-        // whole fixture is grabbable). It enables one-hand translate plus two-hand scale + rotate
-        // simultaneously by default. `.stay` leaves the fixture where the user releases it instead of
+        // whole fixture is grabbable). `.stay` leaves the fixture where the user releases it instead of
         // snapping back — paging to another fixture re-centers it via the `onChange` above.
         let bounds = model.visualBounds(relativeTo: stage)
         let shape = ShapeResource.generateBox(size: bounds.extents).offsetBy(translation: bounds.center)
         ManipulationComponent.configureEntity(stage, collisionShapes: [shape])
         if var manipulation = stage.components[ManipulationComponent.self] {
             manipulation.releaseBehavior = .stay
+            // Observatory behaves like a turntable: keep two-hand scale + rotate, but LOCK translation so
+            // the fixture can't be dragged off-centre / out of reach — it only spins and resizes in place.
+            manipulation.dynamics.translationBehavior = .none
             stage.components.set(manipulation)
         }
     }

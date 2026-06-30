@@ -71,8 +71,9 @@ struct LumaStageApp: App {
         .defaultSize(width: 480, height: 460)
         // Open the info card to the RIGHT of the volumetric model window, so each fixture is
         // presented with its 3D model on the left and its info card on the right. The model window
-        // is opened first (see `LightingFixtureIntroView`), so it's already in `context.windows`
-        // when this placement runs; if it isn't found, fall back to the system's default placement.
+        // opens the card from its own onAppear (see `FixtureObservatoryView`), so the model window is
+        // already registered in `context.windows` when this placement runs; if it isn't found, fall
+        // back to the system's default placement.
         .defaultWindowPlacement { _, context in
             if let observatory = context.windows.first(where: { $0.id == AppModel.fixtureObservatoryWindowID }) {
                 return WindowPlacement(.trailing(observatory))
