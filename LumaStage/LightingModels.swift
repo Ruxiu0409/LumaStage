@@ -310,6 +310,14 @@ struct FixtureGroup: Codable, Equatable, Identifiable {
     /// `LightEffectPlan.effects(for:)`; when nil, the renderer falls back to `LightEffect.suggested(...)`.
     var effect: LightEffect? = nil
 
+    /// A user-authored manual stage position (model metres) that OVERRIDES the zone-derived placement.
+    /// Set when the user drags this fixture on the tabletop editor's diorama. Optional + back-compat: old
+    /// JSON without the key decodes nil (the synthesized decoder defaults optionals to nil), and nil means
+    /// "follow the zone-derived placement" — only a non-nil value counts as a manual placement.
+    /// Resolved through `RigPlacement.resolvedPlacement(fixture:slot:count:layout:)` by the renderer and
+    /// the tabletop editor; the same `id` carries the same `manualPosition` across every cue (rig identity).
+    var manualPosition: FixturePosition? = nil
+
     var effectiveFineControl: FixtureFineControl {
         fineControl ?? .default(role: role, zone: zone)
     }
@@ -1440,6 +1448,19 @@ enum RigPlacement {
             let aim = Vector3Meters(x: centerX, y: topY + 0.4, z: centerZ)
             return (position, aim)
         }
+    }
+
+    /// Zone-derived `(position, aim)` for a fixture, with the position replaced by the fixture's
+    /// `manualPosition` if it carries one (the aim stays zone-derived). The renderer (`ImmersiveView.syncRig`)
+    /// and the tabletop editor both resolve placement through this single entry point so a user-dragged
+    /// fixture lands at the same spot on the 1:1 stage and on the diorama.
+    static func resolvedPlacement(fixture: FixtureGroup, slot: Int, count: Int, layout: StageLayout)
+        -> (position: Vector3Meters, aim: Vector3Meters) {
+        let zonePlacement = placement(zone: fixture.zone, slot: slot, count: count, layout: layout)
+        guard let manual = fixture.manualPosition else {
+            return zonePlacement
+        }
+        return (Vector3Meters(x: manual.x, y: manual.y, z: manual.z), zonePlacement.aim)
     }
 }
 

@@ -71,6 +71,7 @@ struct LumaStageCoreSmokeTests {
         parsesSingleLightCommands()
         resolvesLightOverridesOntoCueValues()
         rigPlacementSpreadsFixturesAcrossZone()
+        try fixtureManualPositionOverridesZonePlacement()
         try surroundingsLightPolicyGatesOpaqueVenue()
         try humanoidFigurePlanIsAnatomicallyOrdered()
         aiComposerPlacementClampsWithinReach()
@@ -1165,6 +1166,45 @@ struct LumaStageCoreSmokeTests {
         expect(upstage.position.z < foh0.position.z, "Upstage fixtures should sit behind the FOH line")
         expect(upstage.position.y > 0, "Upstage fixtures should hang above the floor")
         expect(upstage.aim.z < foh0.aim.z, "Upstage fixtures aim upstage; FOH fixtures aim at the performer area")
+    }
+
+    private static func fixtureManualPositionOverridesZonePlacement() throws {
+        let layout = StageLayout.defaultStudentOutdoor()
+        let zonePlacement = RigPlacement.placement(zone: .stageFront, slot: 1, count: 4, layout: layout)
+
+        // (a) No manualPosition → resolvedPlacement equals the zone-derived placement (position AND aim).
+        let unplaced = FixtureGroup(
+            id: "f1", name: "燈具 1", role: .frontLight, zone: .stageFront,
+            enabled: true, intensity: 0.6, color: FixtureColor(mode: .rgb, value: "#FFFFFF")
+        )
+        let resolvedUnplaced = RigPlacement.resolvedPlacement(fixture: unplaced, slot: 1, count: 4, layout: layout)
+        expect(resolvedUnplaced.position == zonePlacement.position,
+               "Without a manualPosition, resolved position must equal the zone-derived position")
+        expect(resolvedUnplaced.aim == zonePlacement.aim,
+               "Without a manualPosition, resolved aim must equal the zone-derived aim")
+
+        // (b) With a manualPosition → position is replaced by it while aim stays zone-derived.
+        var placed = unplaced
+        let manual = FixturePosition(x: -1.25, y: 2.4, z: 0.9)
+        placed.manualPosition = manual
+        let resolvedPlaced = RigPlacement.resolvedPlacement(fixture: placed, slot: 1, count: 4, layout: layout)
+        expect(resolvedPlaced.position == Vector3Meters(x: manual.x, y: manual.y, z: manual.z),
+               "A manualPosition must replace the resolved position")
+        expect(resolvedPlaced.aim == zonePlacement.aim,
+               "A manualPosition must NOT change the zone-derived aim")
+
+        // (c) Old JSON with no `manualPosition` key decodes to nil (synthesized decoder defaults optionals).
+        let legacyJSON = """
+        {"id":"f1","name":"燈具 1","role":"frontLight","zone":"stageFront",
+         "enabled":true,"intensity":0.6,"color":{"mode":"rgb","value":"#FFFFFF"}}
+        """
+        let decoded = try JSONDecoder().decode(FixtureGroup.self, from: Data(legacyJSON.utf8))
+        expect(decoded.manualPosition == nil,
+               "A FixtureGroup decoded from JSON without a manualPosition key must yield nil")
+
+        // Round-trip: a set manualPosition survives encode/decode.
+        let roundTripped = try JSONDecoder().decode(FixtureGroup.self, from: JSONEncoder().encode(placed))
+        expect(roundTripped.manualPosition == manual, "manualPosition must survive a Codable round-trip")
     }
 
     private static func surroundingsLightPolicyGatesOpaqueVenue() throws {

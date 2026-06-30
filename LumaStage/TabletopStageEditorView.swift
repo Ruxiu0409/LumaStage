@@ -51,9 +51,13 @@ struct TabletopStageEditorView: View {
 
     var body: some View {
         // Eager reads so a layout- or selection-driven change re-evaluates this body and re-runs the
-        // RealityView `update:` closure below. Without them the model would never reflect edits.
+        // RealityView `update:` closure below. Without them the model would never reflect edits. The
+        // `lightingLook` + `selectedFixtureId` reads are what let the fixture (light) proxies rebuild when
+        // a fixture is added/removed/moved and re-highlight on selection — same Observation footgun.
         let _ = appModel.stageLayout
         let _ = appModel.selectedStageObjectId
+        let _ = appModel.lightingLook
+        let _ = appModel.selectedFixtureId
 
         RealityView { content, attachments in
             placement.name = "tabletop_placement"
@@ -62,6 +66,7 @@ struct TabletopStageEditorView: View {
             placement.addChild(turntable)
             content.add(placement)
             TabletopStageScene.sync(turntable, layout: appModel.stageLayout, selectedId: appModel.selectedStageObjectId)
+            TabletopStageScene.syncFixtures(turntable, look: appModel.lightingLook, layout: appModel.stageLayout, selectedFixtureId: appModel.selectedFixtureId)
             TabletopStageScene.seatAssemblyOnSurface(in: turntable)
 
             if let controls = attachments.entity(for: "controls") {
@@ -72,6 +77,7 @@ struct TabletopStageEditorView: View {
             }
         } update: { _, _ in
             TabletopStageScene.sync(turntable, layout: appModel.stageLayout, selectedId: appModel.selectedStageObjectId)
+            TabletopStageScene.syncFixtures(turntable, look: appModel.lightingLook, layout: appModel.stageLayout, selectedFixtureId: appModel.selectedFixtureId)
             TabletopStageScene.seatAssemblyOnSurface(in: turntable)
         } attachments: {
             Attachment(id: "controls") {
@@ -154,12 +160,21 @@ struct TabletopStageEditorView: View {
 
     // MARK: - Gestures
 
-    /// Tap a piece to select it (selecting a different piece switches the selection).
+    /// Tap a piece to select it (selecting a different piece switches the selection). Routes by entity
+    /// prefix: a tapped light proxy (`tabletopfixture_<id>`) selects a rig fixture; anything else falls
+    /// back to the existing `stageobj_` (truss/deck) selection. Selecting one clears the other so only a
+    /// single thing is ever highlighted.
     private var selectTap: some Gesture {
         SpatialTapGesture()
             .targetedToAnyEntity()
             .onEnded { value in
-                appModel.selectStageObject(id: TabletopStageScene.objectId(of: value.entity))
+                if let fixtureId = TabletopStageScene.fixtureId(of: value.entity) {
+                    appModel.selectStageObject(id: nil)
+                    appModel.selectFixture(id: fixtureId)
+                } else {
+                    appModel.selectFixture(id: nil)
+                    appModel.selectStageObject(id: TabletopStageScene.objectId(of: value.entity))
+                }
             }
     }
 
@@ -172,6 +187,17 @@ struct TabletopStageEditorView: View {
         DragGesture()
             .targetedToAnyEntity()
             .updating($dragGrabOffset) { value, state, _ in
+                // A light proxy: free ground-plane drag (no truss node-snap), height preserved.
+                if let fixtureContainer = TabletopStageScene.fixtureContainer(of: value.entity),
+                   let parent = fixtureContainer.parent {
+                    let grab = value.convert(value.location3D, from: .local, to: parent)
+                    let offset = state ?? (fixtureContainer.position - grab)
+                    state = offset
+                    let target = grab + offset
+                    fixtureContainer.position = SIMD3<Float>(target.x, fixtureContainer.position.y, target.z)
+                    return
+                }
+                // Otherwise a truss/deck piece: ground-plane drag with live connector-node snapping.
                 guard let container = TabletopStageScene.objectContainer(of: value.entity),
                       let id = TabletopStageScene.objectId(of: value.entity),
                       let parent = container.parent else { return }
@@ -186,6 +212,15 @@ struct TabletopStageEditorView: View {
             }
             .onEnded { value in
                 TabletopStageScene.updateSnapIndicator(in: turntable, at: nil)
+                // Light proxy: commit its scene position back to model metres in every cue. The proxy
+                // keeps its built Y during the drag, so `sceneToMeters(...).y` round-trips the resolved
+                // model Y — pass x/y/z straight through.
+                if let fixtureContainer = TabletopStageScene.fixtureContainer(of: value.entity),
+                   let fixtureId = TabletopStageScene.fixtureId(of: value.entity) {
+                    let meters = TabletopStageScene.sceneToMeters(fixtureContainer.position)
+                    appModel.moveFixture(id: fixtureId, toX: meters.x, y: meters.y, z: meters.z)
+                    return
+                }
                 guard let container = TabletopStageScene.objectContainer(of: value.entity),
                       let id = TabletopStageScene.objectId(of: value.entity) else { return }
                 let meters = TabletopStageScene.sceneToMeters(container.position)
@@ -233,6 +268,37 @@ struct TabletopStageEditorView: View {
             .lumaGazeTarget()
             .help("加入一段桁架，拖到既有節點附近會自動對齊接上")
             .accessibilityHint("加入一段桁架，拖到既有節點附近會自動對齊接上")
+
+            Menu {
+                ForEach(Self.addableFixtureModels, id: \.self) { model in
+                    Button {
+                        appModel.addFixtureToRig(model: model, zone: .stageFront)
+                    } label: {
+                        Label(Self.fixtureModelName(model), systemImage: "lightbulb")
+                    }
+                }
+            } label: {
+                Label("新增燈具", systemImage: "lightbulb.fill")
+            }
+            .buttonStyle(.bordered)
+            .lumaGazeTarget()
+            .disabled(rigIsFull)
+            .help(rigIsFull ? "燈具數量已達上限" : "加入一盞燈具到舞台前緣，可拖移到任意位置")
+            .accessibilityLabel("新增燈具")
+            .accessibilityHint(rigIsFull ? "燈具數量已達上限，無法再新增" : "加入一盞燈具到舞台前緣，可拖移到任意位置")
+
+            Button("刪除所選燈具", systemImage: "lightbulb.slash") {
+                appModel.removeSelectedFixture()
+            }
+            .labelStyle(.iconOnly)
+            .buttonStyle(.bordered)
+            .buttonBorderShape(.circle)
+            .lumaGazeTarget()
+            .disabled(appModel.selectedFixtureId == nil)
+            .help("刪除選取的燈具")
+            .accessibilityLabel("刪除所選燈具")
+            .accessibilityHint("刪除目前選取的燈具；尚未選取燈具時無法使用")
+            .accessibilityValue(selectedFixtureAccessibilityValue)
 
             // Turntable: spin the WHOLE model so the user can look at any side (distinct from "旋轉所選",
             // which rotates only the selected piece). 45° steps → 8 covers a full turn.
@@ -345,6 +411,29 @@ struct TabletopStageEditorView: View {
     /// current target is spoken even though it's only shown by the 3D highlight.
     private var selectionAccessibilityValue: String {
         selectedObjectTypeName.map { "已選取 \($0)" } ?? "尚未選取物件"
+    }
+
+    /// True when the rig is already at `AppModel.maxRigFixtureCount`, so the add-light control is disabled.
+    private var rigIsFull: Bool {
+        (appModel.lightingLook.cues.map(\.fixtureGroups.count).max() ?? 0) >= AppModel.maxRigFixtureCount
+    }
+
+    /// `.accessibilityValue` for the 刪除所選燈具 button — names the selected fixture (otherwise only the
+    /// 3D highlight signals it).
+    private var selectedFixtureAccessibilityValue: String {
+        appModel.selectedFixtureId == nil ? "尚未選取燈具" : "已選取一盞燈具"
+    }
+
+    /// A small menu of fixture models the user can drop onto the tabletop rig. A representative spread of
+    /// the real-world product fixtures (not the abstract role-teaching ones).
+    private static let addableFixtureModels: [LightingFixtureVisualModel] = [
+        .movingHeadBeam, .ledPar, .ledStrobeBar, .ledFresnel, .laser
+    ]
+
+    /// The Traditional-Chinese display name for a fixture model, from the catalog (falls back to the raw
+    /// identifier if a model isn't catalogued).
+    private static func fixtureModelName(_ model: LightingFixtureVisualModel) -> String {
+        LightingFixtureCatalog.item(for: model)?.displayName ?? model.rawValue
     }
 
     private var stageSizeBinding: Binding<StagePlatformPreset> {
@@ -493,6 +582,25 @@ enum TabletopStageScene {
         return String(container.name.dropFirst("stageobj_".count))
     }
 
+    static func fixtureEntityName(_ id: String) -> String { "tabletopfixture_\(id)" }
+
+    /// Walks up from a hit entity to its owning `tabletopfixture_<id>` container (light proxy).
+    static func fixtureContainer(of entity: Entity) -> Entity? {
+        var node: Entity? = entity
+        while let current = node {
+            if current.name.hasPrefix("tabletopfixture_") {
+                return current
+            }
+            node = current.parent
+        }
+        return nil
+    }
+
+    static func fixtureId(of entity: Entity) -> String? {
+        guard let container = fixtureContainer(of: entity) else { return nil }
+        return String(container.name.dropFirst("tabletopfixture_".count))
+    }
+
     // MARK: - Build / sync
 
     /// Rebuilds the geometry only when the layout signature changes, then refreshes the selection
@@ -509,6 +617,60 @@ enum TabletopStageScene {
         }
 
         applySelection(in: root, selectedId: selectedId)
+    }
+
+    /// Builds/refreshes the selectable, draggable light proxies for the look's rig fixtures, parented under
+    /// the SAME assembly the `stageobj_` containers live in (so `scenePoint`/`sceneToMeters` and the seat
+    /// offset apply identically). Reconciles by fixture id: removes proxies whose fixture is gone, adds new
+    /// ones, and repositions surviving ones to their resolved placement (so add/remove/move all reflect).
+    /// Cheap to call every `update:` pass.
+    static func syncFixtures(_ root: Entity, look: LightingLook, layout: StageLayout, selectedFixtureId: String?) {
+        guard let assembly = root.children.first(where: { $0.name.hasPrefix("tabletop_layout_") }) else {
+            return
+        }
+
+        // Fixtures carry rig identity (same set/positions across cues), so any cue gives the same answer;
+        // use the selected cue, else the first.
+        let fixtures = (look.cues.first(where: { $0.id == look.selectedCueId }) ?? look.cues.first)?.fixtureGroups ?? []
+
+        // Per-zone slot/count, mirroring `ImmersiveView.syncRig`: a fixture's slot is its index among the
+        // fixtures sharing its zone; count is how many share it.
+        var zoneTotals: [StageZone: Int] = [:]
+        for fixture in fixtures {
+            zoneTotals[fixture.zone, default: 0] += 1
+        }
+
+        let wantIds = Set(fixtures.map(\.id))
+        for child in assembly.children where child.name.hasPrefix("tabletopfixture_") {
+            let id = String(child.name.dropFirst("tabletopfixture_".count))
+            if !wantIds.contains(id) {
+                child.removeFromParent()
+            }
+        }
+
+        var zoneSlots: [StageZone: Int] = [:]
+        for fixture in fixtures {
+            let slot = zoneSlots[fixture.zone, default: 0]
+            zoneSlots[fixture.zone] = slot + 1
+            let placement = RigPlacement.resolvedPlacement(
+                fixture: fixture,
+                slot: slot,
+                count: zoneTotals[fixture.zone] ?? 1,
+                layout: layout
+            )
+            let scenePos = scenePoint(placement.position)
+
+            let name = fixtureEntityName(fixture.id)
+            let container: Entity
+            if let existing = assembly.findEntity(named: name) {
+                container = existing
+            } else {
+                container = makeFixtureProxy(named: name, hex: fixture.color.value)
+                assembly.addChild(container)
+            }
+            container.position = scenePos
+            container.findEntity(named: "fixture_selection_highlight")?.isEnabled = (fixture.id == selectedFixtureId)
+        }
     }
 
     /// Seats the assembly so its visual bottom rests exactly on the placement container's origin — i.e. on
@@ -610,6 +772,48 @@ enum TabletopStageScene {
         }
 
         addSelectionMarker(to: container)
+        return container
+    }
+
+    /// A small, cheap light proxy: a tilted cone "fixture body" with a glowing emissive lens, distinct from
+    /// the grey truss rods. Carries collision + input target so it's tappable/draggable, plus a (hidden)
+    /// selection ring toggled by `syncFixtures`. Coloured by the fixture's cue colour so it reads as "a
+    /// light" rather than structure.
+    private static func makeFixtureProxy(named name: String, hex: String) -> Entity {
+        let container = Entity()
+        container.name = name
+
+        // Body: a short cone pointing down at the stage, like a hung head.
+        let body = ModelEntity(
+            mesh: .generateCone(height: sceneLength(0.45), radius: sceneLength(0.22)),
+            materials: [material(hex: "#2B2D31", metallic: true)]
+        )
+        body.orientation = simd_quatf(angle: .pi, axis: SIMD3<Float>(1, 0, 0)) // tip down
+        addInteraction(body)
+        container.addChild(body)
+
+        // Lens: an emissive disc on the (downward) tip so the proxy glows in its colour.
+        let rgb = RGBComponents(hex: hex) ?? .white
+        var lensMaterial = UnlitMaterial(color: UIColor(red: rgb.red, green: rgb.green, blue: rgb.blue, alpha: 1))
+        lensMaterial.blending = .opaque
+        let lens = ModelEntity(
+            mesh: .generateCylinder(height: sceneLength(0.04), radius: sceneLength(0.16)),
+            materials: [lensMaterial]
+        )
+        lens.position = SIMD3<Float>(0, -sceneLength(0.22), 0)
+        addInteraction(lens)
+        container.addChild(lens)
+
+        // Selection ring (hidden by default), toggled on while this fixture is selected.
+        let ring = ModelEntity(
+            mesh: .generateBox(width: sceneLength(0.6), height: sceneLength(0.05), depth: sceneLength(0.6), cornerRadius: sceneLength(0.05)),
+            materials: [material(hex: "#3FB6FF")]
+        )
+        ring.name = "fixture_selection_highlight"
+        ring.position = SIMD3<Float>(0, -sceneLength(0.3), 0)
+        ring.isEnabled = false
+        container.addChild(ring)
+
         return container
     }
 

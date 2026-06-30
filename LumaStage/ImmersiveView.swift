@@ -596,8 +596,8 @@ struct ImmersiveView: View {
         for (index, fixture) in cue.fixtureGroups.enumerated() {
             let slot = zoneSlots[fixture.zone, default: 0]
             zoneSlots[fixture.zone] = slot + 1
-            let placement = RigPlacement.placement(
-                zone: fixture.zone,
+            let placement = RigPlacement.resolvedPlacement(
+                fixture: fixture,
                 slot: slot,
                 count: zoneTotals[fixture.zone] ?? 1,
                 layout: layout

@@ -23,7 +23,7 @@
     LumaStage/LightingModels.swift LumaStage/LightingAIService.swift LumaStage/StageBuilderModels.swift \
     LumaStage/LightingFixtureCatalog.swift LumaStage/LumaSyncProtocol.swift LumaStage/LumaSyncTransport.swift \
     LumaStage/LumaStageDesign.swift LumaStage/StageVoiceCommand.swift LumaStage/LightingPatchSheet.swift \
-    LumaStage/LightEffect.swift LumaStage/StageLightAccessibility.swift \
+    LumaStage/LightEffect.swift LumaStage/MusicBeatClock.swift LumaStage/StageLightAccessibility.swift \
     LumaStage/LightControlCardPlacement.swift LumaStage/FixtureGroups.swift \
     LumaStage/OpenAILightingService.swift LumaStage/FallbackLightingService.swift LumaStage/OpenAIKeychain.swift \
     -o /tmp/smoke && /tmp/smoke    # 印出 "LumaStageCoreSmokeTests passed" 即過
@@ -51,6 +51,8 @@
 
 - **SPEC 03 AI 燈光導師（B2）**：把單一術語的 `explanation` 升級成「為什麼這樣設計」的教學講評,呼應「科技賦能教育」社會價值。純擴充:`LightingExplanation` 加 `var rationale: String = ""`(additive、自訂 `init(from:)` 用 `decodeIfPresent ?? ""` 確保舊 JSON 解 "")、`LightingLookDraft` 兩條 `makeValidatedLook` 路徑加 `explanationRationale` 參數/欄位塞進 `LightingExplanation(rationale:)`;`@Generable GeneratedExplanation` 加帶 `@Guide`(2–3 句 beginner 設計理由)的 `rationale` + 映射 + instructions 補一句(英文)。`VisionAIComposerBox` 在 `.explaining` 多顯一行「設計理由：…」(沿用 `.callout`+`textSecondary`+glass、Dynamic Type、無障礙 label,空則不顯示)。1 個新 smoke(draft 帶 rationale 保留 + 舊 JSON 解 "")。**不動** AppModel。——已實作、**完整 build 綠**、smoke 綠(spec 已封存至 `archive/`)。**rationale 實際品質(是否真在教、不過長)需實機看 FM 輸出微調 prompt。**
 
+- **SPEC 07 桌面 diorama「指哪擺燈」（C2）**：桌面舞台編輯器除了桁架/舞台,現在可在 diorama 上**擺放/移動/刪除/選取 rig 燈具**,擺位寫回 look 並反映到 1:1 舞台。**模型層**:`FixtureGroup` 加 additive `manualPosition: FixturePosition?`(`Codable`,舊 JSON 解 nil,無自訂 decoder);新純函式 `RigPlacement.resolvedPlacement(fixture:slot:count:layout:)`——回傳 zone 推算的 `(position, aim)`,但 fixture 有 `manualPosition` 時 position 改用它(aim 維持 zone 推算),renderer 與桌面編輯器共用此單一入口;`ImmersiveView.syncRig` 那一處 `placement(...)` 改呼 `resolvedPlacement(fixture:...)`。新 smoke `fixtureManualPositionOverridesZonePlacement`(無 manualPosition→等同 placement;有→position 用它/aim 不變;舊 JSON→nil)。**狀態層**(`AppModel`,mirror `moveStageObject`/`removeSelectedStageObject`,全走 `replaceLightingLook` 驗證+`persistCurrentProjectState`,rig identity——同 id 跨所有 cue 同位置):`selectedFixtureId`(於 openProject/generate 清空,沿用 lightOverrides 清除點)、`selectFixture`/`moveFixture(id:toX:y:z:)`/`addFixtureToRig(model:zone:)`/`removeSelectedFixture()`;`validate()` 不檢查 fixture 數,故 add 上限 `maxRigFixtureCount=12`、remove 不留空 cue 的守衛在 AppModel 層。**桌面 view**(`TabletopStageEditorView`):每盞 fixture 建 `tabletopfixture_<id>` 錐狀代理(emissive 鏡片以 cue 色著色,與灰桁架可辨)、`fixtureContainer`/`fixtureId` walk-up,`selectTap`/`moveDrag` 依 prefix 分流(fixture↔stageobj 選取互斥;fixture 為 XZ free drag、Y 保留、`sceneToMeters`→`moveFixture`)、控制列加「新增燈具」Menu(movingHeadBeam/ledPar/ledStrobeBar/ledFresnel/laser→`addFixtureToRig(.stageFront)`,滿 12 disable)+「刪除所選燈具」(補繁中 a11y/`lumaGazeTarget`);`syncFixtures` 依 id 增刪/重定位/切高亮,body eager-read `lightingLook`+`selectedFixtureId` 避 Observation footgun。初始位置複製 syncRig 的 zone slot/count 計數 → `resolvedPlacement` → `scenePoint`。——已實作、**完整 build 綠**、smoke 綠(spec 已封存至 `archive/`)。**AI 重生成換 fixture 集合 → manualPosition 隨舊 look 取代(同 lightOverrides,v1 不合併);桌面拖移目前 XZ(Y 維持 resolved)、代理尺寸/抓握手感、新增燈具 zone 選擇 UI、ARKit 擺位精度、layout 換 preset 重建有無閃爍需實機驗。**
+
 ## Spec 生命週期
 
 - 每份 spec **完成後(實作 + build 綠 + smoke 過)就移到 `docs/specs/archive/` 或直接刪除**——完成的 spec 不留在待辦清單裡(完成內容反映在「現況基線」與程式碼/git)。
@@ -62,6 +64,5 @@
 | 序 | Spec | 對應 | 工作量 | 風險 |
 |---|---|---|---|---|
 | P3 | `05-music-sync.md` | B1 · 依賴 A1 | L | 高(分析準度→降級內建曲) |
-| P3 | `07-tabletop-place-lights.md` | C2 · 空間 wow | L | 中 |
 
 > 風險高/實機相依者,先在實機把 A1 + 房間溢光驗過再排(見根 `docs/demo-runbook.md`)。

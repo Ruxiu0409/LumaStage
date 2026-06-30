@@ -115,6 +115,9 @@ class AppModel {
     /// `saveStageLayout`, so the immersive 1:1 stage reflects them.
     var isEditingTabletopStage = false
     var selectedStageObjectId: String?
+    /// The rig fixture (by `id`) currently selected in the tabletop editor for move/remove. Reset to nil
+    /// whenever the rig changes out from under it (project open / AI regenerate), mirroring `lightOverrides`.
+    var selectedFixtureId: String? = nil
     var conversationState: ConversationState = .idle
     var projects = LumaStageProject.defaultProjects()
     var selectedProjectId: String?
@@ -385,6 +388,116 @@ class AppModel {
         }
     }
 
+    // MARK: - Rig fixtures on the tabletop diorama (place / move / remove a light)
+    //
+    // The rig lives in the look's `cue.fixtureGroups`, NOT `StageLayout` — a fixture has rig identity:
+    // the same `id` appears in every cue at the same `manualPosition`. These methods mirror the
+    // `moveStageObject`/`addStageObject`/`removeSelectedStageObject` shape but route through
+    // `StageState.replaceLightingLook` (which validates) + `persistCurrentProjectState`. The dynamic rig
+    // is 4–12 fixtures; `LightingLook.validate()` itself enforces only non-empty cues + a resolvable
+    // selection (no fixture-count check), so the count guards live here.
+
+    /// Soft cap on the dynamic rig so the tabletop editor can't grow it without bound (mirrors the
+    /// generation schema's 4–12 fixture intent). `addFixtureToRig` refuses to exceed it.
+    static let maxRigFixtureCount = 12
+
+    /// Selects (or clears) the rig fixture the tabletop editor operates on. Pure selection — no look edit.
+    func selectFixture(id: String?) {
+        selectedFixtureId = id
+    }
+
+    /// Sets the manual stage position (model metres) of the fixture `id` in EVERY cue — rig identity, so
+    /// the same fixture sits at the same spot across the whole show — then re-validates + persists.
+    func moveFixture(id: String, toX x: Double, y: Double, z: Double) {
+        var look = stageState.lightingLook
+        let position = FixturePosition(x: x, y: y, z: z)
+        var found = false
+        for cueIndex in look.cues.indices {
+            if let fixtureIndex = look.cues[cueIndex].fixtureGroups.firstIndex(where: { $0.id == id }) {
+                look.cues[cueIndex].fixtureGroups[fixtureIndex].manualPosition = position
+                found = true
+            }
+        }
+        guard found else {
+            fail("找不到要移動的燈具。")
+            return
+        }
+        do {
+            try stageState.replaceLightingLook(look)
+            persistCurrentProjectState()
+        } catch {
+            fail(error.localizedDescription)
+        }
+    }
+
+    /// Appends a new fixture (of the given visual model + zone) to EVERY cue with sensible defaults and
+    /// the same `id` (rig identity), re-validates + persists, and selects it. Refuses to grow the rig past
+    /// `maxRigFixtureCount`.
+    func addFixtureToRig(model: LightingFixtureVisualModel, zone: StageZone) {
+        var look = stageState.lightingLook
+        guard let largestCueCount = look.cues.map(\.fixtureGroups.count).max(),
+              largestCueCount < Self.maxRigFixtureCount else {
+            fail("燈具數量已達上限（\(Self.maxRigFixtureCount) 盞），無法再新增。")
+            return
+        }
+
+        let id = "fixture_\(UUID().uuidString.prefix(6).lowercased())"
+        let role = model.derivedRole
+        let number = largestCueCount + 1
+        let newFixture = FixtureGroup(
+            id: id,
+            name: "燈具 \(number)",
+            role: role,
+            zone: zone,
+            enabled: true,
+            intensity: 0.6,
+            color: FixtureColor(mode: .rgb, value: "#FFFFFF"),
+            fineControl: .default(role: role, zone: zone),
+            model: model,
+            manualPosition: nil
+        )
+
+        for cueIndex in look.cues.indices {
+            look.cues[cueIndex].fixtureGroups.append(newFixture)
+        }
+
+        do {
+            try stageState.replaceLightingLook(look)
+            persistCurrentProjectState()
+            selectedFixtureId = id
+        } catch {
+            fail(error.localizedDescription)
+        }
+    }
+
+    /// Removes the selected fixture from EVERY cue, re-validates + persists, and clears the selection.
+    /// Refuses to remove if doing so would leave any cue with no fixtures (a cue must stay lit).
+    func removeSelectedFixture() {
+        guard let id = selectedFixtureId else {
+            return
+        }
+        var look = stageState.lightingLook
+        let wouldEmptyACue = look.cues.contains { cue in
+            cue.fixtureGroups.contains(where: { $0.id == id }) && cue.fixtureGroups.count <= 1
+        }
+        guard !wouldEmptyACue else {
+            fail("至少需要保留一盞燈具，無法刪除最後一盞。")
+            return
+        }
+
+        for cueIndex in look.cues.indices {
+            look.cues[cueIndex].fixtureGroups.removeAll { $0.id == id }
+        }
+
+        do {
+            try stageState.replaceLightingLook(look)
+            persistCurrentProjectState()
+            selectedFixtureId = nil
+        } catch {
+            fail(error.localizedDescription)
+        }
+    }
+
     /// Swaps the stage platform footprint (small / medium / large) and persists it.
     func setStagePlatformPreset(_ preset: StagePlatformPreset) {
         saveStageLayout(TabletopStageEditing.applyingStagePlatformPreset(preset, to: stageLayout))
@@ -428,6 +541,7 @@ class AppModel {
         desiredImmersiveScene = .stage
         stageState = StageState(lightingLook: project.lightingLook)
         lightOverrides = [:]
+        selectedFixtureId = nil
         resetGroups()
         // A different project is a different rig; drop any stale per-light selection so the control card
         // can't index a fixture that no longer exists. Mirrors generate's reset.
@@ -549,6 +663,7 @@ class AppModel {
             // prior "close the light 3" doesn't silently reattach to a different physical fixture (overrides
             // are keyed by cue order, not fixture id). Mirrors openProject's reset.
             lightOverrides = [:]
+            selectedFixtureId = nil
             resetGroups()
             // Likewise drop a stale selection so the control card doesn't point at a now-missing fixture.
             selectedLightNumber = nil
