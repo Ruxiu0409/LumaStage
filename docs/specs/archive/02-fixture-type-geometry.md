@@ -1,5 +1,7 @@
 # SPEC 02 — 燈具型號專屬幾何上台（B4）
 
+> Status: done
+
 **Goal**：場上的燈看起來就是它的型號——搖頭光束燈、LED PAR、頻閃燈條、觀眾爆閃、雷射各有外形,而非目前的通用 stand/moving-head 形狀。大幅提升沉浸感與專業感。
 
 ## Ground truth

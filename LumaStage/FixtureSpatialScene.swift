@@ -26,6 +26,79 @@ enum FixtureRealityModel {
         return template.clone(recursive: true)
     }
 
+    /// A stage-scale clone of the fixture-type model, sized to ~`targetHeight` metres (scene units) and
+    /// aimed so its front points along `aim`. Reuses the cached observatory geometry.
+    ///
+    /// The observatory model is built front-facing along +Z and (for floor types) standing on a stand
+    /// whose base sits at the model origin; this clone is recentered on its own visual bounds, uniformly
+    /// scaled so its tallest axis is `targetHeight`, then rotated so that local +Z lines up with `aim`.
+    /// The returned container's transform is identity at the origin — the caller sets its position.
+    static func makeStageFixture(for model: LightingFixtureVisualModel, targetHeight: Float, aim: SIMD3<Float>) -> Entity {
+        // Reuse the same procedural geometry as the observatory, but without the thumbnail's three-quarter
+        // tilt — the stage version is driven entirely by `aim`. Build (or fetch) a centered, unit-untilted
+        // template, then scale + orient a fresh clone.
+        let centered = centeredTemplate(for: model).clone(recursive: true)
+
+        let bounds = centered.visualBounds(relativeTo: nil)
+        let maxExtent = max(bounds.extents.x, max(bounds.extents.y, bounds.extents.z))
+        let scale = maxExtent > 0.0001 ? targetHeight / maxExtent : 1
+
+        let container = Entity()
+        container.addChild(centered)
+        container.scale = SIMD3<Float>(repeating: scale)
+        // Rotate the model's front (+Z) to point along `aim`. If `aim` is degenerate, leave facing +Z.
+        let target = simd_length(aim) > 0.0001 ? simd_normalize(aim) : SIMD3<Float>(0, 0, 1)
+        container.orientation = rotation(from: SIMD3<Float>(0, 0, 1), to: target)
+        return container
+    }
+
+    /// A cached, recentered (but un-tilted, unscaled) template used by `makeStageFixture`. Distinct from
+    /// the observatory cache because that one bakes the three-quarter view + fit scale into its pivot.
+    private static var stageCache: [LightingFixtureVisualModel: Entity] = [:]
+
+    private static func centeredTemplate(for model: LightingFixtureVisualModel) -> Entity {
+        if let template = stageCache[model] {
+            return template
+        }
+        let assembly = Entity()
+        switch model {
+        case .washBar: buildWashBar(into: assembly)
+        case .spotBarrel: buildSpotBarrel(into: assembly)
+        case .frontFresnel: buildFrontFresnel(into: assembly)
+        case .backgroundBatten: buildBackgroundBatten(into: assembly)
+        case .ledStrobeBar: buildLedStrobeBar(into: assembly)
+        case .movingHeadBeam: buildMovingHeadBeam(into: assembly)
+        case .ledPar: buildLedPar(into: assembly)
+        case .audienceBlinder: buildAudienceBlinder(into: assembly)
+        case .ledFresnel: buildLedFresnel(into: assembly)
+        case .laser: buildLaser(into: assembly)
+        }
+        let bounds = assembly.visualBounds(relativeTo: nil)
+        assembly.position = -bounds.center
+
+        let pivot = Entity()
+        pivot.addChild(assembly)
+        stageCache[model] = pivot
+        return pivot
+    }
+
+    /// Shortest-arc quaternion rotating `source` onto `target` (both treated as directions). Mirrors the
+    /// `orientation(from:to:)` helper in `ImmersiveView`, kept local so this file stays self-contained.
+    private static func rotation(from source: SIMD3<Float>, to target: SIMD3<Float>) -> simd_quatf {
+        let from = simd_normalize(source)
+        let to = simd_normalize(target)
+        let dot = min(max(simd_dot(from, to), -1), 1)
+        if dot > 0.9999 {
+            return simd_quatf(angle: 0, axis: from)
+        }
+        if dot < -0.9999 {
+            // Antiparallel: pick any axis perpendicular to `from`.
+            let axis = abs(from.x) < 0.9 ? simd_cross(from, SIMD3<Float>(1, 0, 0)) : simd_cross(from, SIMD3<Float>(0, 1, 0))
+            return simd_quatf(angle: .pi, axis: simd_normalize(axis))
+        }
+        return simd_quatf(angle: acos(dot), axis: simd_normalize(simd_cross(from, to)))
+    }
+
     private static func buildTemplate(for model: LightingFixtureVisualModel) -> Entity {
         let assembly = Entity()
         switch model {

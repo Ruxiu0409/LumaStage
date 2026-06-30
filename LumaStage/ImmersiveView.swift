@@ -625,16 +625,33 @@ struct ImmersiveView: View {
             // The laser builds its own emitter + visible aerial beam fan; the spotlight below still adds
             // a faint colour spill on the surfaces the cone reaches.
             addLaserProjector(name: "laser_\(fixture.id)", to: rig, source: placement.position, beamColorHex: fixture.color.value)
-        } else if isFrontOfHouse {
-            addFrontLightStand(name: "stand_\(fixture.id)", to: rig, at: placement.position, aim: placement.aim)
         } else {
-            addMovingHeadFixture(
-                name: "head_\(fixture.id)",
-                to: rig,
-                position: placement.position,
-                color: "#2B2F38",
-                lensColor: "#9FB6FF"
+            // Every other type renders as its real model-type geometry (moving head, PAR, strobe bar,
+            // blinder, fresnel…) at ~0.4 m, aimed front-first at the stage. `spot_<id>`/label/pick proxy
+            // below are separate entities and keep driving the actual light.
+            let aimVector = scenePoint(placement.aim) - scenePoint(placement.position)
+            let model = FixtureRealityModel.makeStageFixture(
+                for: fixture.renderModel,
+                targetHeight: sceneLength(0.4),
+                aim: simd_length(aimVector) > 0.0001 ? simd_normalize(aimVector) : SIMD3<Float>(0, 0, -1)
             )
+            model.name = "model_\(fixture.id)"
+            model.position = scenePoint(placement.position)
+            markShadowCasterRecursively(model)
+            rig.addChild(model)
+
+            // FOH fixtures should read as "standing" in the audience area: drop a slim post from the floor
+            // up to just under the fixture so it doesn't appear to float. Truss-hung types hang as-is.
+            if isFrontOfHouse {
+                let columnTopY = max(0.3, placement.position.y - 0.18)
+                if let post = strut(named: "model_\(fixture.id)_post",
+                                    from: Vector3Meters(x: placement.position.x, y: 0.0, z: placement.position.z),
+                                    to: Vector3Meters(x: placement.position.x, y: columnTopY, z: placement.position.z),
+                                    radius: 0.035, hex: "#3A3D42", intensity: 0.72) {
+                    post.name = "model_\(fixture.id)_post"
+                    rig.addChild(post)
+                }
+            }
         }
 
         addStageSpotLight(
@@ -1652,6 +1669,16 @@ struct ImmersiveView: View {
     /// so only casters (structure that should block the beam) need this.
     private static func markShadowCaster(_ entity: Entity) {
         entity.components.set(DynamicLightShadowComponent(castsShadow: true))
+    }
+
+    /// Marks every `ModelEntity` in a subtree as a shadow caster — used for the fixture-type models
+    /// (`makeStageFixture`), which are containers of nested mesh entities rather than a single mesh.
+    private static func markShadowCasterRecursively(_ entity: Entity) {
+        forEachDescendant(of: entity) { node in
+            if node is ModelEntity {
+                node.components.set(DynamicLightShadowComponent(castsShadow: true))
+            }
+        }
     }
 
     private static func box(
