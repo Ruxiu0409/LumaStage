@@ -76,19 +76,31 @@ struct ProjectSelectionView: View {
                     introAction: { showsFixtureIntro = true }
                 )
             } else {
-                VStack(spacing: 0) {
-                    ForEach(Array(appModel.projects.enumerated()), id: \.element.id) { index, project in
-                        ProjectRow(project: project) {
-                            appModel.openProject(id: project.id)
-                        }
+                // Scroll a long project list instead of letting the content-size window's height hit the
+                // visionOS system maximum and compress every row together (the rows are vertically
+                // compressible, so an over-tall VStack squeezes their padding to nothing). The order is
+                // load-bearing: `.frame(maxHeight:)` THEN `.fixedSize(vertical:)` is the shrink-to-fit-up-
+                // to-a-cap idiom — `fixedSize` lets the ScrollView adopt its content's ideal height so a
+                // short list keeps the window compact (like the AI composer), while the inner `maxHeight`
+                // clamps a tall list and turns on scrolling. `.basedOnSize` suppresses bounce when it fits.
+                ScrollView {
+                    VStack(spacing: 0) {
+                        ForEach(Array(appModel.projects.enumerated()), id: \.element.id) { index, project in
+                            ProjectRow(project: project) {
+                                appModel.openProject(id: project.id)
+                            }
 
-                        if index < appModel.projects.count - 1 {
-                            Divider()
-                                .overlay(LumaStageDesign.hairline)
-                                .padding(.leading, 52)
+                            if index < appModel.projects.count - 1 {
+                                Divider()
+                                    .overlay(LumaStageDesign.hairline)
+                                    .padding(.leading, 52)
+                            }
                         }
                     }
                 }
+                .frame(maxHeight: 460)
+                .fixedSize(horizontal: false, vertical: true)
+                .scrollBounceBehavior(.basedOnSize)
             }
         }
         .lumaNativeGlass(radius: LumaStageDesign.cornerRadius, fallbackOpacity: 0.34)
