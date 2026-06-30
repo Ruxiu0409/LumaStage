@@ -28,6 +28,7 @@ struct TabletopStageEditorView: View {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
     @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// The resting container the diorama hangs under. ARKit moves THIS entity (translation only) onto a
     /// detected table; the control bar is parented here too so it stays put while the model spins. Starts at
@@ -367,7 +368,14 @@ struct TabletopStageEditorView: View {
         stageYaw += degrees
         let yaw = Float(stageYaw * .pi / 180)
         let target = Transform(rotation: simd_quatf(angle: yaw, axis: SIMD3<Float>(0, 1, 0)))
-        turntable.move(to: target, relativeTo: turntable.parent, duration: 0.3)
+        // Reduce Motion: snap to the new yaw instead of spinning the whole diorama — a moving 3D scene is
+        // exactly the vestibular trigger Reduce Motion targets, so gate this RealityKit animation the same
+        // way the sweep gates SwiftUI motion.
+        if reduceMotion {
+            turntable.transform = target
+        } else {
+            turntable.move(to: target, relativeTo: turntable.parent, duration: 0.3)
+        }
     }
 
     /// Done: leave editing and return to the 1:1 stage space. Sets the desired scene back to the stage and

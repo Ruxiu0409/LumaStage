@@ -23,7 +23,7 @@
     LumaStage/LightingModels.swift LumaStage/LightingAIService.swift LumaStage/StageBuilderModels.swift \
     LumaStage/LightingFixtureCatalog.swift LumaStage/LumaSyncProtocol.swift LumaStage/LumaSyncTransport.swift \
     LumaStage/LumaStageDesign.swift LumaStage/StageVoiceCommand.swift LumaStage/LightingPatchSheet.swift \
-    LumaStage/LightEffect.swift \
+    LumaStage/LightEffect.swift LumaStage/StageLightAccessibility.swift \
     -o /tmp/smoke && /tmp/smoke    # 印出 "LumaStageCoreSmokeTests passed" 即過
   ```
   新增 Foundation-only 檔時,把它加進這個指令(並更新根 `CLAUDE.md` 的測試段)。
@@ -39,6 +39,7 @@
 
 - **S2 多 cue + GO**、**S1 語音指令/朗讀**(`StageVoiceCommand`/`SpeechNarrator`,zh-TW 辨識)、**A2 配接表匯出**(`DMXPatchPlanner`/`LightingPatchSheet`/`PatchSheetExportView`)、**A1 動態效果引擎**(`LightEffect`/`LightEffectEngine`/`LightEffectPlan` + `LightEffectComponent`/`LightEffectSystem`,目前為「依燈具型號×cue 能量」的確定性效果)、**頭顯內就地手動控燈**(`AppModel` 選取+override 方法、`SelectedLightControlView`、`ImmersiveView` 的 `lightpick_<n>`+選取環+attachment)——**都已實作、編譯通過、smoke 綠**。
 - **SPEC 04 連續調光 / 捏拉調暗**(`SelectedLightControlView` 連續亮度 `Slider`(0...1,綁 `setManualIntensity`,顯示 % + a11y)+ `ImmersiveView` 捏拉 `lightpick_<n>` 上下調光(`.simultaneousGesture(DragGesture)`,`dragIntensityPerPoint` 係數待實機調)+ 手動 override 走 0.12s 短過場(`apply` 的 `manualTransition`,不動 cue 2.5s 預設))——已實作、**完整 build 綠**(spec 已封存至 `archive/`)。
+- **SPEC 06 社會價值 + 全面無障礙**(S1 完成):全 app 無障礙 sweep(`ProjectSelectionView`/`LightingFixtureIntroView`/`FixtureObservatoryView`/`TabletopStageEditorView`/`ContentView`/`PatchSheetExportView` + iPad panel 三檔)——互動元件補 `accessibilityLabel`/hint/value、非顏色狀態(`.isSelected`/symbol)、Dynamic Type(`@ScaledMetric`)、Reduce Motion gate(含 Tabletop 轉盤的 RealityKit `move(to:)`)、≥60pt 注視目標、增高對比變體;**場上每盞燈進 VoiceOver 樹**——`ImmersiveView` 在 `lightpick_<n>` 設 `AccessibilityComponent`(identity label + 每次 relight 更新 value),字串由新 Foundation-only `StageLightAccessibility`(hex→繁中色名 / 標籤組字,smoke-tested)產生;**社會價值敘事** `docs/social-value.md`(誠實底線對齊 `maic-strategy.md` §5)。——已實作、**完整 build 綠**、smoke 綠(spec 已封存至 `archive/`)。VoiceOver 走 RealityKit 場景、極大 Dynamic Type 版面需實機驗。
 
 ## Spec 生命週期
 
@@ -53,7 +54,6 @@
 | P1 | `08-group-submasters-and-live-control.md` | 編組+現場控制模型 · 創新/商業前景/Q6 demo | L | 中(解析不變式必測;觸控/實機) |
 | P1 | `01-ai-authored-effects.md` | A1 延伸 · 創新 | M | 中(@Generable 實機) |
 | P1 | `03-ai-lighting-tutor.md` | B2 · 教育/社會價值 | S | 低 |
-| P1 | `06-social-value-and-accessibility.md` | S1 完成 · 社會價值 60% 門檻 | M | 低(多為敘事+a11y sweep) |
 | P2 | `02-fixture-type-geometry.md` | B4 · demo 沉浸感 | M | 中(實機觀感) |
 | P3 | `05-music-sync.md` | B1 · 依賴 A1 | L | 高(分析準度→降級內建曲) |
 | P3 | `07-tabletop-place-lights.md` | C2 · 空間 wow | L | 中 |

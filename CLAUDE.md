@@ -49,6 +49,10 @@ swiftc \
   LumaStage/LumaSyncProtocol.swift \
   LumaStage/LumaSyncTransport.swift \
   LumaStage/LumaStageDesign.swift \
+  LumaStage/StageVoiceCommand.swift \
+  LumaStage/LightingPatchSheet.swift \
+  LumaStage/LightEffect.swift \
+  LumaStage/StageLightAccessibility.swift \
   -o /tmp/LumaStageCoreSmokeTests && /tmp/LumaStageCoreSmokeTests
 # prints "LumaStageCoreSmokeTests passed" and exits 0 on success
 ```
@@ -72,6 +76,7 @@ The defining convention: **all pure logic — data models, validation, geometry,
 - **`FoundationModelsLightingService.swift`** — on-device implementation: an `@Generable GeneratedLightingLook` filled by `LanguageModelSession`, mapped into `LightingLookDraft`. Guarded by `#if canImport(FoundationModels)`.
 - **`StageBuilderModels.swift`** (largest file) — the shared stage geometry the visionOS renderer consumes: `StageLayout` / `StageObject` / truss geometry / presets / `ImmersiveStageGeometryPlan`. Also holds the immersion-mode policy: `StageImmersionMode` and the Foundation-only `SurroundingsLightPolicy` (pinned by `surroundingsLightPolicyGatesOpaqueVenue`). The tabletop editor's pure logic lives here too: `StageLayout.trussNodeSnap` → `TrussNodeSnap` (the connector-node snap rule, shared by the live drag and the committed `snappedObject`), `TabletopStageEditing` (preset swaps), and `TabletopSurfaceSelection` + `DetectedHorizontalSurface` (which real table to rest the diorama on). It also still holds the pure-logic layout/policy helpers from the removed iPad stage builder (`StageBuilderPanelLayout`, `IPadRootLayout`, `StageBuilderZoom`, `StageBuilderToolbarLayout`, `StageBuilderViewportGround`, `StageBuilderRenderOrder`, `StageBuilderInspectorPolicy`, `StageBuilderSelectionPolicy`, `StageBuilderDropPlanner`) — no view consumes them now, but the smoke tests still pin them, so they remain as tested, reusable logic.
 - **`LightingFixtureCatalog.swift`** — fixture vocabulary metadata.
+- **`StageLightAccessibility.swift`** — Foundation-only VoiceOver copy for the on-stage lights (`identityLabel`/`stateValue`, plus a hex→繁中 colour-name bucketer keyed on chroma, not HSL saturation, so `#FFE9C8` reads as 暖白 not orange). `ImmersiveView` sets these as the `AccessibilityComponent` label/value on each light's `lightpick_<n>` pick proxy (identity at build, `value` refreshed every relight in `apply`), so VoiceOver can sweep the rig and hear "第 3 盞燈，搖頭光束燈" → "藍色，亮度 60%" / "已關閉". Smoke-tested (`stageLightAccessibilityLabelsAreLocalized`).
 
 When adding behavior to a view, **extract the decidable part into one of these model files and add a smoke test for it** rather than burying it in the view.
 
