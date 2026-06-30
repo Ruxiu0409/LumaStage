@@ -196,6 +196,12 @@ struct TabletopStageEditorView: View {
 
     private var controlBar: some View {
         HStack(spacing: 14) {
+            // A non-visual readout of the current selection. On screen the selected piece is shown only
+            // by the blue 3D highlight plate under it, so VoiceOver / low-vision users get no signal of
+            // what (if anything) is selected — and the "旋轉所選"/"刪除所選" buttons act on it. This line
+            // surfaces it as text and is grouped into one spoken element.
+            selectionStatus
+
             Picker("舞台尺寸", selection: stageSizeBinding) {
                 Text("小").tag(StagePlatformPreset.small4x2)
                 Text("中").tag(StagePlatformPreset.medium6x3)
@@ -203,6 +209,7 @@ struct TabletopStageEditorView: View {
             }
             .pickerStyle(.segmented)
             .frame(width: 210)
+            .accessibilityLabel("舞台尺寸")
 
             Picker("桁架", selection: portalBinding) {
                 Text("4×3").tag(StagePortalPreset.portal4x3)
@@ -211,6 +218,7 @@ struct TabletopStageEditorView: View {
             }
             .pickerStyle(.segmented)
             .frame(width: 170)
+            .accessibilityLabel("桁架門架尺寸")
 
             Divider().frame(height: 26)
 
@@ -221,7 +229,9 @@ struct TabletopStageEditorView: View {
                 Label("新增桁架", systemImage: "plus")
             }
             .buttonStyle(.bordered)
+            .lumaGazeTarget()
             .help("加入一段桁架，拖到既有節點附近會自動對齊接上")
+            .accessibilityHint("加入一段桁架，拖到既有節點附近會自動對齊接上")
 
             // Turntable: spin the WHOLE model so the user can look at any side (distinct from "旋轉所選",
             // which rotates only the selected piece). 45° steps → 8 covers a full turn.
@@ -231,6 +241,9 @@ struct TabletopStageEditorView: View {
             .labelStyle(.iconOnly)
             .buttonStyle(.bordered)
             .buttonBorderShape(.circle)
+            .lumaGazeTarget()
+            .help("將整個舞台模型向左轉 45°，方便檢視其他角度")
+            .accessibilityHint("旋轉整個舞台視角，不會移動任何物件")
 
             Button("舞台右轉", systemImage: "arrow.clockwise.circle") {
                 rotateStage(by: 45)
@@ -238,6 +251,9 @@ struct TabletopStageEditorView: View {
             .labelStyle(.iconOnly)
             .buttonStyle(.bordered)
             .buttonBorderShape(.circle)
+            .lumaGazeTarget()
+            .help("將整個舞台模型向右轉 45°，方便檢視其他角度")
+            .accessibilityHint("旋轉整個舞台視角，不會移動任何物件")
 
             Divider().frame(height: 26)
 
@@ -247,7 +263,11 @@ struct TabletopStageEditorView: View {
             .labelStyle(.iconOnly)
             .buttonStyle(.bordered)
             .buttonBorderShape(.circle)
+            .lumaGazeTarget()
             .disabled(appModel.selectedStageObjectId == nil)
+            .help("將選取的物件旋轉 90°")
+            .accessibilityHint("只旋轉目前選取的物件 90°；尚未選取物件時無法使用")
+            .accessibilityValue(selectionAccessibilityValue)
 
             Button("刪除所選", systemImage: "trash") {
                 appModel.removeSelectedStageObject()
@@ -255,7 +275,11 @@ struct TabletopStageEditorView: View {
             .labelStyle(.iconOnly)
             .buttonStyle(.bordered)
             .buttonBorderShape(.circle)
+            .lumaGazeTarget()
             .disabled(appModel.selectedStageObjectId == nil)
+            .help("刪除選取的物件")
+            .accessibilityHint("刪除目前選取的物件；尚未選取物件時無法使用")
+            .accessibilityValue(selectionAccessibilityValue)
 
             Button("重置舞台", systemImage: "arrow.counterclockwise") {
                 appModel.resetStageLayoutToDefault()
@@ -263,6 +287,9 @@ struct TabletopStageEditorView: View {
             .labelStyle(.iconOnly)
             .buttonStyle(.bordered)
             .buttonBorderShape(.circle)
+            .lumaGazeTarget()
+            .help("還原成預設的舞台佈局")
+            .accessibilityHint("將整個舞台佈局還原成預設值")
 
             Button("完成", systemImage: "checkmark") {
                 finishEditing()
@@ -270,10 +297,53 @@ struct TabletopStageEditorView: View {
             .labelStyle(.iconOnly)
             .buttonStyle(.borderedProminent)
             .buttonBorderShape(.circle)
+            .lumaGazeTarget()
+            .help("儲存佈局並返回 1:1 沉浸式舞台")
+            .accessibilityHint("儲存佈局並返回沉浸式舞台")
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
         .glassBackgroundEffect()
+    }
+
+    /// A compact, always-visible status pill telling the user which piece is selected — the only
+    /// non-color, VoiceOver-legible signal of selection (on screen it's just the blue 3D highlight).
+    /// Combined into one spoken element so it reads as a single phrase.
+    private var selectionStatus: some View {
+        HStack(spacing: 6) {
+            Image(systemName: selectedObjectTypeName == nil ? "hand.tap" : "checkmark.circle.fill")
+                .font(.callout)
+                .foregroundStyle(selectedObjectTypeName == nil ? LumaStageDesign.textSecondary : LumaStageDesign.coolBlue)
+            Text(selectedObjectTypeName.map { "已選取：\($0)" } ?? "未選取物件")
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(LumaStageDesign.textPrimary)
+                .lineLimit(1)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(selectedObjectTypeName.map { "已選取 \($0)" } ?? "尚未選取物件")
+    }
+
+    /// The selected `StageObject`'s type rendered in Traditional Chinese, or `nil` when nothing is
+    /// selected. `StageObject.displayName` is an English data value, so the type name is mapped here for
+    /// the user-facing status rather than surfaced raw.
+    private var selectedObjectTypeName: String? {
+        guard let object = appModel.stageLayout.object(id: appModel.selectedStageObjectId) else {
+            return nil
+        }
+        switch object.type {
+        case .stageBase:
+            return "舞台台座"
+        case .stageDeck:
+            return "舞台平台"
+        case .trussSegment:
+            return "桁架段"
+        }
+    }
+
+    /// Shared `.accessibilityValue` for the selection-dependent buttons (旋轉所選 / 刪除所選) so their
+    /// current target is spoken even though it's only shown by the 3D highlight.
+    private var selectionAccessibilityValue: String {
+        selectedObjectTypeName.map { "已選取 \($0)" } ?? "尚未選取物件"
     }
 
     private var stageSizeBinding: Binding<StagePlatformPreset> {

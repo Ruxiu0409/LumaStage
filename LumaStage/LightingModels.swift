@@ -356,21 +356,32 @@ struct RelightDebugSnapshot: Equatable {
         var intensityPercent: Int
         var beamDegrees: Int
         var gobo: GoboPattern?
+        /// The dynamic effect this fixture runs under the current cue's energy (`.none` = steady) — mirrors
+        /// what `ImmersiveView`'s LightEffectSystem animates, via the shared `LightEffectPlan`.
+        var effectKind: LightEffectKind
         var isRendered: Bool
     }
 
     var cueId: String
     var cueName: String
+    /// Whether the cue reads as high-energy, so its rig runs movement/strobe/chase. Shared gate with the
+    /// renderer (`LightEffectPlan`), so the in-app readout can't drift from what actually animates.
+    var isHighEnergy: Bool
     var rows: [Row]
 
     /// How many fixtures will actually light the stage (rendered roles).
     var renderedCount: Int { rows.filter(\.isRendered).count }
 
+    /// How many fixtures are running a dynamic effect under the current cue.
+    var animatedCount: Int { rows.filter { $0.effectKind != .none }.count }
+
     static func make(from cue: LightingCue) -> RelightDebugSnapshot {
-        RelightDebugSnapshot(
+        let effects = LightEffectPlan.effects(for: cue)
+        return RelightDebugSnapshot(
             cueId: cue.id,
             cueName: cue.localizedDisplayName,
-            rows: cue.fixtureGroups.map { fixture in
+            isHighEnergy: LightEffectPlan.isHighEnergy(cue),
+            rows: cue.fixtureGroups.enumerated().map { index, fixture in
                 Row(
                     fixtureId: fixture.id,
                     name: fixture.name,
@@ -379,6 +390,7 @@ struct RelightDebugSnapshot: Equatable {
                     intensityPercent: Int((fixture.intensity * 100).rounded()),
                     beamDegrees: Int(fixture.effectiveFineControl.beamAngleDegrees.rounded()),
                     gobo: fixture.gobo,
+                    effectKind: effects[index].kind,
                     // Every fixture in the dynamic rig is rendered as a real spotlight now.
                     isRendered: true
                 )

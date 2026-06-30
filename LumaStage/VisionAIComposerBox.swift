@@ -428,6 +428,14 @@ struct VisionAIComposerBox: View {
                         .font(.caption)
                         .foregroundStyle(LumaStageDesign.textSecondary)
 
+                    // A1 dynamic-effects readout: confirms (in-headset) whether the effect engine is engaged
+                    // on this cue, and which fixtures are animating — the same gate the renderer uses.
+                    Text(snapshot.isHighEnergy
+                         ? "動態效果 · 高能量場景 — \(snapshot.animatedCount) 盞燈動態中"
+                         : "動態效果 · 靜態場景（提高整體亮度即啟動掃動/閃爍）")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(snapshot.isHighEnergy ? LumaStageDesign.softGreen : LumaStageDesign.textSecondary)
+
                     ForEach(snapshot.rows) { row in
                         debugFixtureRow(row)
                     }
@@ -491,6 +499,9 @@ struct VisionAIComposerBox: View {
         var parts = [row.role.rawValue, row.hex, "\(row.intensityPercent)%", "\(row.beamDegrees)°"]
         if let gobo = row.gobo {
             parts.append("gobo \(gobo.rawValue)")
+        }
+        if row.effectKind != .none {
+            parts.append("fx \(row.effectKind.rawValue)")
         }
         return parts.joined(separator: " · ")
     }

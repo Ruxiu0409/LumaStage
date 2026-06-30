@@ -16,6 +16,10 @@ struct ImmersiveView: View {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
 
+    // Base intensity captured at the start of a pinch-drag, so vertical drag deltas are applied against
+    // a stable origin (not the running value) for the duration of the gesture. nil between drags.
+    @State private var dragBaseIntensity: Double?
+
     var body: some View {
         // Establish a body-level Observation dependency on the lighting look so a generation-
         // or cue-driven look change re-evaluates this body, which re-runs the RealityView
@@ -28,16 +32,32 @@ struct ImmersiveView: View {
         let _ = appModel.lightingLook
         // Also depend on the per-light overrides so "close the light 3" re-runs the update closure.
         let _ = appModel.lightOverrides
+        // And on the manually selected light so a pinch-to-select re-runs the update closure below,
+        // which toggles the highlight ring and the floating control card. Same Observation footgun as
+        // the reads above: the `update:` closure registers no dependencies of its own.
+        let _ = appModel.selectedLightNumber
 
-        RealityView { content in
+        RealityView { content, attachments in
             let root = Self.makeStageRoot(layout: appModel.stageLayout)
             // Build the dynamic rig (fixtures + spotlights + labels) from the look's fixtures, then light it.
             Self.syncRig(cue: appModel.selectedCue, layout: appModel.stageLayout, in: root)
             if let selectedCue = appModel.selectedCue {
-                Self.apply(selectedCue, overrides: appModel.lightOverrides, to: root)
+                Self.apply(
+                    selectedCue,
+                    overrides: appModel.lightOverrides,
+                    to: root,
+                    manualTransition: appModel.selectedLightNumber != nil ? CueTransition(duration: 0.12, easing: "easeOut") : nil
+                )
+            }
+            // The manual per-light control card rides as a SwiftUI attachment, parented to the root
+            // once here; the `update:` closure positions it in front of the user and toggles its
+            // visibility by selection. It is NOT anchored to a (possibly 5m-high) fixture.
+            if let card = attachments.entity(for: Self.lightControlCardID) {
+                card.name = Self.lightControlCardName
+                root.addChild(card)
             }
             content.add(root)
-        } update: { content in
+        } update: { content, attachments in
             guard let root = content.entities.first(where: { $0.name == "LumaStageRoot" }) else {
                 return
             }
@@ -48,14 +68,74 @@ struct ImmersiveView: View {
             Self.syncRig(cue: appModel.selectedCue, layout: appModel.stageLayout, in: root)
 
             if let selectedCue = appModel.selectedCue {
-                Self.apply(selectedCue, overrides: appModel.lightOverrides, to: root)
+                Self.apply(
+                    selectedCue,
+                    overrides: appModel.lightOverrides,
+                    to: root,
+                    manualTransition: appModel.selectedLightNumber != nil ? CueTransition(duration: 0.12, easing: "easeOut") : nil
+                )
+            }
+
+            // Highlight the pick proxy of the currently selected light (and clear any stale ring).
+            Self.syncSelectionHighlight(selectedLightNumber: appModel.selectedLightNumber, in: root)
+
+            // Show the control card only while a light is selected, floating at a reachable spot in
+            // front of the user (re-parented here as a fallback in case the make closure ran before
+            // the attachment resolved).
+            if let card = attachments.entity(for: Self.lightControlCardID) {
+                if card.parent == nil {
+                    card.name = Self.lightControlCardName
+                    root.addChild(card)
+                }
+                Self.updateLightControlCard(card, selectedLightNumber: appModel.selectedLightNumber)
             }
 
             // Room-spill mode hides the opaque venue so the real room shows through passthrough.
             if let venue = root.findEntity(named: Self.opaqueVenueName) {
                 venue.isEnabled = SurroundingsLightPolicy.includesOpaqueVenue(in: appModel.stageImmersionMode)
             }
+        } attachments: {
+            Attachment(id: Self.lightControlCardID) {
+                SelectedLightControlView()
+                    .environment(appModel)
+            }
         }
+        // Pinch a light's pick proxy to select it for manual control. Mirrors `TabletopStageEditorView`'s
+        // tap-and-walk-up-to-a-named-container pattern.
+        .gesture(
+            SpatialTapGesture()
+                .targetedToAnyEntity()
+                .onEnded { value in
+                    // Select the pinched light. Empty-space pinches don't fire (targetedToAnyEntity only delivers on
+                    // entities with an InputTargetComponent, and the pick proxies are the only ones), so deselection is
+                    // via the control card's X button — not an empty tap.
+                    if let number = Self.lightNumber(forPickTarget: value.entity) {
+                        appModel.selectLight(number: number)
+                    }
+                }
+        )
+        // Pinch a light and pull it up/down to dim it in real time — the spec's headline "捏拉調暗".
+        // Composed with the tap above via `.simultaneousGesture` so tap-to-select still fires; a drag
+        // also selects the light on its first change. Up (negative drag height) = brighter, clamped 0...1.
+        .simultaneousGesture(
+            DragGesture()
+                .targetedToAnyEntity()
+                .onChanged { value in
+                    guard let n = Self.lightNumber(forPickTarget: value.entity) else { return }
+                    if dragBaseIntensity == nil {
+                        // First change of this drag: select the light and capture its current resolved
+                        // intensity as the base the drag delta is applied against.
+                        appModel.selectLight(number: n)
+                        dragBaseIntensity = appModel.selectedLightResolved?.intensity ?? 0
+                    }
+                    let delta = -Double(value.translation.height) * Self.dragIntensityPerPoint
+                    let target = min(max((dragBaseIntensity ?? 0) + delta, 0), 1)
+                    appModel.setManualIntensity(light: n, target)
+                }
+                .onEnded { _ in
+                    dragBaseIntensity = nil
+                }
+        )
         .preferredSurroundingsEffect(appModel.stageImmersionMode == .roomSpill ? .dim(intensity: 0.45) : nil)
         // The AI composer is a native `WindowGroup` (declared in LumaStageApp) so it gets the
         // system move bar and smooth, compositor-driven dragging instead of a hand-rolled entity
@@ -553,6 +633,169 @@ struct ImmersiveView: View {
         )
 
         addLightLabel(number: lightNumber, near: placement.position, to: rig)
+        addLightPickTarget(
+            number: lightNumber,
+            model: fixture.renderModel,
+            initialColorHex: fixture.color.value,
+            initialIntensity: fixture.intensity,
+            near: placement.position,
+            to: rig
+        )
+    }
+
+    private static let lightPickPrefix = "lightpick_"
+    private static let lightPickRingPrefix = "lightpick_ring_"
+
+    /// A near-invisible, hit-testable proxy sphere at the floating label spot so the user can pinch a
+    /// (physically tiny, possibly high) fixture to select it for manual control. It carries a faint
+    /// `UnlitMaterial` (essentially transparent), a sphere collider, an `InputTargetComponent`, and a
+    /// `HoverEffectComponent` so it lights up on gaze. A disabled "selected" ring lives inside it,
+    /// toggled by `syncSelectionHighlight` when this light is the selected one. Named
+    /// `lightpick_<number>` so the tap gesture can parse the number off the tapped ancestor.
+    ///
+    /// It is ALSO the light's VoiceOver element: an `AccessibilityComponent` gives it a fixed identity
+    /// label ("第 N 盞燈，<燈具名>") and an initial state value ("藍色，亮度 60%" / "已關閉") from the
+    /// fixture's own colour/intensity. `apply(_:overrides:to:)` refreshes `.value` on every relight so a
+    /// blind/low-vision user looking at (or sweeping through) the rig hears each light's live state.
+    private static func addLightPickTarget(
+        number: Int,
+        model: LightingFixtureVisualModel,
+        initialColorHex: String,
+        initialIntensity: Double,
+        near position: Vector3Meters,
+        to rig: Entity
+    ) {
+        let pick = ModelEntity(
+            mesh: .generateSphere(radius: sceneLength(0.16)),
+            // Alpha kept just above zero: essentially invisible, but the mesh still hit-tests.
+            materials: [UnlitMaterial(color: UIColor(white: 1, alpha: 0.02))]
+        )
+        pick.name = "\(lightPickPrefix)\(number)"
+        pick.position = scenePoint(position) + SIMD3<Float>(0, sceneLength(0.34), 0)
+        pick.generateCollisionShapes(recursive: false)
+        pick.components.set(InputTargetComponent())
+        pick.components.set(HoverEffectComponent())
+
+        // VoiceOver: make the proxy a focusable element that announces the light's identity + live state.
+        // `label` is fixed (identity); `value` is the current colour/brightness and is re-set per relight
+        // in `apply(...)`. RealityKit's AccessibilityComponent label/value are LocalizedStringResource?,
+        // so runtime Strings are wrapped via `LocalizedStringResource(stringLiteral:)`.
+        var accessibility = AccessibilityComponent()
+        accessibility.isAccessibilityElement = true
+        accessibility.label = LocalizedStringResource(
+            stringLiteral: StageLightAccessibility.identityLabel(number: number, model: model)
+        )
+        accessibility.value = LocalizedStringResource(
+            stringLiteral: StageLightAccessibility.stateValue(
+                colorHex: initialColorHex,
+                intensity: initialIntensity,
+                isOff: false
+            )
+        )
+        pick.components.set(accessibility)
+
+        // Selection ring: an UnlitMaterial torus so it reads at any brightness (even when the light is
+        // off), starting disabled. `syncSelectionHighlight` enables exactly the selected light's ring.
+        let ring = ModelEntity(
+            mesh: selectionRingMesh(),
+            materials: [UnlitMaterial(color: UIColor(LumaStageDesign.coolBlue))]
+        )
+        ring.name = "\(lightPickRingPrefix)\(number)"
+        ring.isEnabled = false
+        pick.addChild(ring)
+
+        rig.addChild(pick)
+    }
+
+    /// A flat ring (thin torus lying in X-Y so it faces the audience/viewer) used as the selection
+    /// halo around a pick proxy. RealityKit has no `generateTorus`, so it's a small `MeshDescriptor`
+    /// torus — mirrors the observatory's ring approach. Cached: every ring is identical.
+    private static var cachedSelectionRingMesh: MeshResource?
+    private static func selectionRingMesh() -> MeshResource {
+        if let cached = cachedSelectionRingMesh {
+            return cached
+        }
+        let majorRadius = sceneLength(0.20)
+        let minorRadius = sceneLength(0.012)
+        let majorSegments = 48
+        let minorSegments = 10
+
+        var positions: [SIMD3<Float>] = []
+        var indices: [UInt32] = []
+        for i in 0..<majorSegments {
+            let theta = Float(i) / Float(majorSegments) * 2 * .pi
+            // Ring lies in the X-Y plane (faces +Z, toward the viewer), matching the floating labels.
+            let center = SIMD3<Float>(cos(theta) * majorRadius, sin(theta) * majorRadius, 0)
+            let radial = SIMD3<Float>(cos(theta), sin(theta), 0)
+            for j in 0..<minorSegments {
+                let phi = Float(j) / Float(minorSegments) * 2 * .pi
+                let offset = radial * (cos(phi) * minorRadius) + SIMD3<Float>(0, 0, sin(phi) * minorRadius)
+                positions.append(center + offset)
+            }
+        }
+        for i in 0..<majorSegments {
+            for j in 0..<minorSegments {
+                let a = UInt32(i * minorSegments + j)
+                let b = UInt32(i * minorSegments + (j + 1) % minorSegments)
+                let c = UInt32(((i + 1) % majorSegments) * minorSegments + j)
+                let d = UInt32(((i + 1) % majorSegments) * minorSegments + (j + 1) % minorSegments)
+                indices.append(contentsOf: [a, c, b, b, c, d])
+            }
+        }
+
+        var descriptor = MeshDescriptor(name: "selection_ring")
+        descriptor.positions = MeshBuffers.Positions(positions)
+        descriptor.primitives = .triangles(indices)
+        let mesh = (try? MeshResource.generate(from: [descriptor])) ?? .generateSphere(radius: sceneLength(0.18))
+        cachedSelectionRingMesh = mesh
+        return mesh
+    }
+
+    /// Toggles the per-light selection rings so exactly the selected light's halo shows. Subtle but
+    /// readable at any cue brightness (the ring is `UnlitMaterial`, so it doesn't depend on the lights).
+    /// Walks the hierarchy by hand — RealityKit's `Entity` has no built-in recursive enumerator.
+    private static func syncSelectionHighlight(selectedLightNumber: Int?, in root: Entity) {
+        forEachDescendant(of: root) { entity in
+            guard entity.name.hasPrefix(lightPickRingPrefix) else { return }
+            let number = Int(entity.name.dropFirst(lightPickRingPrefix.count))
+            entity.isEnabled = (number != nil && number == selectedLightNumber)
+        }
+    }
+
+    /// Depth-first walk of an entity's whole subtree (the node itself + every descendant).
+    private static func forEachDescendant(of entity: Entity, _ body: (Entity) -> Void) {
+        body(entity)
+        for child in entity.children {
+            forEachDescendant(of: child, body)
+        }
+    }
+
+    private static let lightControlCardID = "lightControl"
+    private static let lightControlCardName = "light_control_card"
+
+    private static let dragIntensityPerPoint = 1.0 / 400.0 // vertical points → 0...1 intensity; tune on device
+
+    /// Shows the manual control card only while a light is selected and parks it at a reachable
+    /// floating spot in front of the user, facing them — deliberately NOT at the (possibly 5m-high)
+    /// fixture, so the controls stay within arm's reach.
+    private static func updateLightControlCard(_ card: Entity, selectedLightNumber: Int?) {
+        card.isEnabled = (selectedLightNumber != nil)
+        // World-space spot ~1m in front, a touch below eye level. The card's content faces +Z, which
+        // already points back toward the viewer at the origin, so no extra rotation is needed.
+        card.position = SIMD3<Float>(0.0, 1.2, -1.0)
+    }
+
+    /// Walks a tapped entity up to the nearest `lightpick_<n>` ancestor and parses its 1-based light
+    /// number, or `nil` if the tap didn't land on a pick proxy (→ deselect).
+    private static func lightNumber(forPickTarget tapped: Entity) -> Int? {
+        var node: Entity? = tapped
+        while let current = node {
+            if current.name.hasPrefix(lightPickPrefix), !current.name.hasPrefix(lightPickRingPrefix) {
+                return Int(current.name.dropFirst(lightPickPrefix.count))
+            }
+            node = current.parent
+        }
+        return nil
     }
 
     /// A small floating "Light N" name tag above a fixture (RealityKit text, unlit so it reads at any
@@ -1065,12 +1308,11 @@ struct ImmersiveView: View {
     /// (built by `syncRig`). Dynamic over any number/type of fixtures. Per-light manual overrides
     /// (keyed by the 1-based light number = cue order) are layered on top — "close the light 3"
     /// fades that one fixture to 0 over the same transition.
-    private static func apply(_ cue: LightingCue, overrides: [Int: LightOverride], to root: Entity) {
+    private static func apply(_ cue: LightingCue, overrides: [Int: LightOverride], to root: Entity, manualTransition: CueTransition? = nil) {
         // A cue-level energy read: a bright/punchy look brings the rig alive (sweeps, strobe, chase); a
-        // calm cue holds the beams steady. Derived from the cue's own fixture intensities so the show's
-        // arc (calm Opening → energetic Finale) is what drives the movement — no separate authoring.
-        let energy = cue.fixtureGroups.reduce(0.0) { $0 + $1.intensity } / Double(max(cue.fixtureGroups.count, 1))
-        let highEnergy = energy >= 0.6
+        // calm cue holds the beams steady. The gate lives in `LightEffectPlan` so the in-app debug readout
+        // reports exactly what this renderer animates.
+        let highEnergy = LightEffectPlan.isHighEnergy(cue)
 
         for (index, fixture) in cue.fixtureGroups.enumerated() {
             let override = overrides[index + 1] ?? LightOverride()
@@ -1083,7 +1325,9 @@ struct ImmersiveView: View {
                 intensity: resolved.intensity,
                 beamAngleDegrees: fixture.effectiveFineControl.beamAngleDegrees,
                 gobo: fixture.gobo,
-                transition: cue.transition
+                // While a light is under manual control the relight uses a snappy transition so a
+                // slider/pinch-drag feels live; otherwise nil keeps the normal cue cross-fade.
+                transition: manualTransition ?? cue.transition
             )
 
             // Refresh this fixture's dynamic effect + base brightness for the per-frame LightEffectSystem.
@@ -1099,6 +1343,22 @@ struct ImmersiveView: View {
             // Lasers also drive their visible beam fan (recolor + on/off) on top of the cone spill.
             if fixture.renderModel == .laser {
                 updateLaserProjector(named: "laser_\(fixture.id)", in: root, colorHex: resolved.color, intensity: resolved.intensity)
+            }
+
+            // VoiceOver: refresh the pick proxy's spoken state so a focused light announces the CURRENT
+            // cue/override colour + brightness ("藍色，亮度 60%" / "已關閉"). The identity label set at
+            // build time is left untouched. Re-set the whole component (RealityKit requires a `set` to
+            // commit a mutated component back to the entity).
+            if let pick = root.findEntity(named: "\(lightPickPrefix)\(index + 1)"),
+               var accessibility = pick.components[AccessibilityComponent.self] {
+                accessibility.value = LocalizedStringResource(
+                    stringLiteral: StageLightAccessibility.stateValue(
+                        colorHex: resolved.color,
+                        intensity: resolved.intensity,
+                        isOff: override.isOff
+                    )
+                )
+                pick.components.set(accessibility)
             }
         }
     }

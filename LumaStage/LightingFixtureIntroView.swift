@@ -35,6 +35,17 @@ struct LightingFixtureIntroView: View {
                                 LightingFixtureIntroCard(fixture: fixture)
                             }
                             .buttonStyle(.plain)
+                            // Collapse the card's stacked text + decorative thumbnail into one VoiceOver
+                            // element: name as the label, the English reference term as the spoken value,
+                            // and the short description as the hint — so each card is one swipe stop, not
+                            // four. `.isButton` keeps it activatable (`.plain` style erases the trait here).
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityAddTraits(.isButton)
+                            .accessibilityLabel(fixture.displayName)
+                            .accessibilityValue(fixture.englishName)
+                            .accessibilityHint("點兩下查看 \(fixture.displayName) 的 3D 介紹。\(fixture.shortDescription)")
+                            // Voice Control: let users say either the Chinese name or the English term.
+                            .accessibilityInputLabels([fixture.displayName, fixture.englishName])
                         }
                     }
                 }
@@ -147,6 +158,9 @@ struct LightingFixtureModelPreview: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke(LumaStageDesign.hairline, lineWidth: 1)
         }
+        // Decorative preview art — the catalog card / observatory carries the real label, and the
+        // SceneKit render conveys nothing to VoiceOver. Hide it so it isn't a stray swipe stop.
+        .accessibilityHidden(true)
     }
 }
 

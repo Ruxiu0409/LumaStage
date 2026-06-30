@@ -94,3 +94,30 @@ enum LightEffectEngine {
         }
     }
 }
+
+/// The shared gate the renderer (`ImmersiveView.apply`) and the in-app effect readout (`RelightDebugSnapshot`)
+/// both use, so the debug panel can't drift from what actually animates. A cue's rig "comes alive" (its
+/// fixtures run their suggested effects) when the cue reads as high-energy — its fixtures' average intensity
+/// is at or above the threshold. This is what makes the show's arc (calm Opening → energetic Finale) drive
+/// the movement, with no separate authoring.
+enum LightEffectPlan {
+    static let highEnergyThreshold = 0.6
+
+    static func averageIntensity(of fixtures: [FixtureGroup]) -> Double {
+        guard !fixtures.isEmpty else { return 0 }
+        return fixtures.reduce(0.0) { $0 + $1.intensity } / Double(fixtures.count)
+    }
+
+    static func isHighEnergy(_ cue: LightingCue) -> Bool {
+        averageIntensity(of: cue.fixtureGroups) >= highEnergyThreshold
+    }
+
+    /// The effect each fixture in the cue runs (in rig order) under this cue's energy — the single source
+    /// the renderer and the debug readout share, so they always agree.
+    static func effects(for cue: LightingCue) -> [LightEffect] {
+        let highEnergy = isHighEnergy(cue)
+        return cue.fixtureGroups.enumerated().map { index, fixture in
+            LightEffect.suggested(for: fixture.renderModel, highEnergy: highEnergy, slot: index)
+        }
+    }
+}

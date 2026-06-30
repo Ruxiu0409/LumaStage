@@ -61,6 +61,7 @@ struct LumaStageCoreSmokeTests {
         lightEffectEngineModulatesMovementAndIntensity()
         try patchPlannerAssignsSequentialDMXAndBuildsSheet()
         parsesStageVoiceCommands()
+        stageLightAccessibilityLabelsAreLocalized()
         try relightDebugSnapshotMapsCueFixtures()
         parsesSingleLightCommands()
         resolvesLightOverridesOntoCueValues()
@@ -869,6 +870,14 @@ struct LumaStageCoreSmokeTests {
         expect(frontRow?.hex == front.color.value, "row hex should mirror the fixture color")
         expect(frontRow?.intensityPercent == Int((front.intensity * 100).rounded()), "row intensity% should mirror the fixture")
         expect(frontRow?.isRendered == true, "the frontLight row should be flagged rendered")
+
+        // A1 dynamic effects surface in the snapshot via the shared LightEffectPlan, so the in-app debug
+        // readout matches what the renderer animates. mvpDemo's opening averages ≥ 0.6 → high energy.
+        expect(snapshot.isHighEnergy, "mvpDemo opening averages ≥ 0.6, so it reads as a high-energy cue")
+        expect(snapshot.animatedCount >= 1, "a high-energy cue runs at least one fixture effect")
+        expect(frontRow?.effectKind == LightEffectKind.none, "a front fresnel stays steady even on a high-energy cue")
+        let laserRow = snapshot.rows.first(where: { $0.fixtureId == "laser_fan" })
+        expect(laserRow?.effectKind == LightEffectKind.panSweep, "the laser sweeps on a high-energy cue")
     }
 
     // Deterministic single-light command parsing (the Action-Phrase-style precise control layer):
@@ -1402,6 +1411,36 @@ struct LumaStageCoreSmokeTests {
         // Anchored true positives still parse (with a particle / filler around them).
         expect(StageVoiceCommand.parse("請下一個") == .nextCue, "a Chinese command with a particle still parses")
         expect(StageVoiceCommand.parse("read it aloud") == .readExplanation, "the exact narration command still parses")
+    }
+
+    private static func stageLightAccessibilityLabelsAreLocalized() {
+        // Identity: the Nth light reads "第 N 盞燈，<繁中 type name from the catalog>".
+        expect(StageLightAccessibility.identityLabel(number: 3, model: .movingHeadBeam) == "第 3 盞燈，搖頭光束燈",
+               "Light identity should number the fixture and name its 繁中 type from the catalog")
+        expect(StageLightAccessibility.identityLabel(number: 1, model: .laser) == "第 1 盞燈，雷射燈",
+               "Light identity should resolve the laser type name from the catalog")
+
+        // State value: colour name + intensity percent; off short-circuits to 已關閉.
+        expect(StageLightAccessibility.stateValue(colorHex: "#2E6BFF", intensity: 0.6, isOff: false) == "藍色，亮度 60%",
+               "A lit fixture should announce its colour and rounded intensity percent")
+        expect(StageLightAccessibility.stateValue(colorHex: "#2E6BFF", intensity: 0.6, isOff: true) == "已關閉",
+               "An off fixture should announce 已關閉 regardless of colour/intensity")
+        expect(StageLightAccessibility.stateValue(colorHex: "#FFE9C8", intensity: 0.014, isOff: false) == "暖白，亮度 1%",
+               "Intensity should round to the nearest percent and an incandescent tint reads as 暖白")
+
+        // Colour buckets: representative hues + neutrals + the warm-white incandescent case.
+        expect(StageLightAccessibility.colorName(forHex: "#E23B3B") == "紅色", "A red hex should bucket to 紅色")
+        expect(StageLightAccessibility.colorName(forHex: "#33CC55") == "綠色", "A green hex should bucket to 綠色")
+        expect(StageLightAccessibility.colorName(forHex: "#2E6BFF") == "藍色", "A blue hex should bucket to 藍色")
+        expect(StageLightAccessibility.colorName(forHex: "#FFFFFF") == "白色", "Pure white should bucket to 白色")
+        expect(StageLightAccessibility.colorName(forHex: "#000000") == "黑色", "Pure black should bucket to 黑色")
+        expect(StageLightAccessibility.colorName(forHex: "#808080") == "灰色", "A mid neutral should bucket to 灰色")
+        expect(StageLightAccessibility.colorName(forHex: "#FFE9C8") == "暖白", "A warm low-saturation tint should bucket to 暖白, not 白色")
+        // Tolerates a missing '#' and lowercase.
+        expect(StageLightAccessibility.colorName(forHex: "33cc55") == "綠色", "Colour parsing should tolerate a missing # and lowercase")
+        // Malformed input falls back to 白色.
+        expect(StageLightAccessibility.colorName(forHex: "not-a-color") == "白色", "Malformed hex should fall back to 白色")
+        expect(StageLightAccessibility.colorName(forHex: "#12") == "白色", "A too-short hex should fall back to 白色")
     }
 
     private static func disabledFixtureAssemblesDark() throws {

@@ -419,6 +419,9 @@ class AppModel {
         desiredImmersiveScene = .stage
         stageState = StageState(lightingLook: project.lightingLook)
         lightOverrides = [:]
+        // A different project is a different rig; drop any stale per-light selection so the control card
+        // can't index a fixture that no longer exists. Mirrors generate's reset.
+        selectedLightNumber = nil
         transcript = ""
         typedPrompt = ""
         aiUnderstoodCommand = "已開啟 \(project.name)"
@@ -536,6 +539,8 @@ class AppModel {
             // prior "close the light 3" doesn't silently reattach to a different physical fixture (overrides
             // are keyed by cue order, not fixture id). Mirrors openProject's reset.
             lightOverrides = [:]
+            // Likewise drop a stale selection so the control card doesn't point at a now-missing fixture.
+            selectedLightNumber = nil
             generationSource = result.source
             lastExplanation = result.look.explanation
             persistCurrentProjectState()
@@ -694,6 +699,79 @@ class AppModel {
     private func narrateIfEnabled(_ text: String) {
         guard isVoiceNarrationEnabled else { return }
         narrator.speak(text)
+    }
+
+    // MARK: - In-headset manual per-light control (the "console" surface, on top of the AI cue)
+    //
+    // Hands-on control of a single light from inside the immersive scene: look at it, pinch to select,
+    // then open/close, dim, or recolour it. Drives the same deterministic `LightOverride` layer the voice
+    // commands use (so "select Light 3 → 50%" and "把第 3 盞調到 50%" land identically) — i.e. the
+    // programmer that sits ON TOP of the AI cue: "AI gives the speed, the designer keeps control."
+
+    /// The light (1-based, cue order) currently selected for hands-on control in the immersive scene, or
+    /// nil. Drives the in-scene selection highlight and the floating per-light control card.
+    var selectedLightNumber: Int?
+
+    /// The live manual override on the selected light (nil = following the cue), so the control card can
+    /// reflect its current state.
+    var selectedLightOverride: LightOverride? {
+        guard let number = selectedLightNumber else { return nil }
+        return lightOverrides[number]
+    }
+
+    /// The selected light's effective on/off + intensity, resolving its override onto the cue value — what
+    /// the control card shows as the current level.
+    var selectedLightResolved: (isOff: Bool, intensity: Double)? {
+        guard let number = selectedLightNumber,
+              let fixtures = selectedCue?.fixtureGroups,
+              number >= 1, number <= fixtures.count else { return nil }
+        let fixture = fixtures[number - 1]
+        let override = lightOverrides[number] ?? LightOverride()
+        let resolved = override.resolved(cueColor: fixture.color.value, cueIntensity: fixture.intensity)
+        return (override.isOff, resolved.intensity)
+    }
+
+    /// Selects a light for manual control (or clears the selection with nil). Out-of-range numbers are
+    /// ignored so a stray hit can't select a non-existent light.
+    func selectLight(number: Int?) {
+        guard let number else {
+            selectedLightNumber = nil
+            return
+        }
+        guard number >= 1, number <= lightCount else { return }
+        selectedLightNumber = number
+    }
+
+    /// Sets a light's manual intensity override (0...1). Quiet: it mutates only the override layer the
+    /// renderer observes — no conversation-state churn — so repeated level taps don't thrash the feedback
+    /// panel. The renderer relights over the cue's transition.
+    func setManualIntensity(light number: Int, _ value: Double) {
+        guard number >= 1, number <= lightCount else { return }
+        var override = lightOverrides[number] ?? LightOverride()
+        override.isOff = false
+        override.intensity = min(max(value, 0), 1)
+        lightOverrides[number] = override
+    }
+
+    /// Toggles a light fully off / back on (the manual blackout for one fixture).
+    func toggleManualOff(light number: Int) {
+        guard number >= 1, number <= lightCount else { return }
+        var override = lightOverrides[number] ?? LightOverride()
+        override.isOff.toggle()
+        lightOverrides[number] = override.isActive ? override : nil
+    }
+
+    /// Sets a light's manual colour override (#RRGGBB).
+    func setManualColor(light number: Int, hex: String) {
+        guard number >= 1, number <= lightCount else { return }
+        var override = lightOverrides[number] ?? LightOverride()
+        override.colorHex = hex
+        lightOverrides[number] = override
+    }
+
+    /// Clears a light's manual override so it follows the AI cue again.
+    func clearManualOverride(light number: Int) {
+        lightOverrides[number] = nil
     }
 
     private static func describe(_ command: LightCommand) -> String {

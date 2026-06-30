@@ -35,6 +35,9 @@ struct ProjectSelectionView: View {
                     .font(.headline)
                     .foregroundStyle(LumaStageDesign.textSecondary)
             }
+            // Read the app name + screen title as a single header element.
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isHeader)
 
             Spacer()
 
@@ -43,7 +46,9 @@ struct ProjectSelectionView: View {
             }
             .font(.callout.weight(.semibold))
             .lumaGlassButton(prominent: true)
+            .lumaGazeTarget()
             .tint(LumaStageDesign.coolBlue)
+            .accessibilityHint("選擇範本以建立新的舞台專案")
         }
     }
 
@@ -77,6 +82,7 @@ struct ProjectSelectionView: View {
         HStack(spacing: 10) {
             Image(systemName: "folder")
                 .font(.callout.weight(.semibold))
+                .accessibilityHidden(true)
 
             Text("\(appModel.projects.count) 個專案")
                 .font(.callout.weight(.medium))
@@ -88,9 +94,13 @@ struct ProjectSelectionView: View {
             }
             .font(.caption.weight(.semibold))
             .lumaGlassButton()
+            .lumaGazeTarget()
             .tint(LumaStageDesign.warmAmber)
+            .accessibilityHint("開啟燈具指南，認識常見的舞台燈具")
 
             LumaStatusChip(title: "標準夜景", tint: LumaStageDesign.softGreen)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("環境光：標準夜景")
         }
         .foregroundStyle(LumaStageDesign.textSecondary)
     }
@@ -134,6 +144,7 @@ private struct ProjectTemplateSelectionView: View {
         VStack(alignment: .leading, spacing: 8) {
             Label("新增舞台專案", systemImage: "rectangle.3.group.bubble")
                 .font(.title2.weight(.bold))
+                .accessibilityAddTraits(.isHeader)
 
             Text("建立一個附有預設燈光與專案細節的學生活動舞台，再用 AI 微調整體效果。")
                 .font(.callout)
@@ -164,6 +175,7 @@ private struct ProjectTemplateRow: View {
                             Circle()
                                 .fill(.white.opacity(0.08))
                         )
+                        .accessibilityHidden(true)
 
                     VStack(alignment: .leading, spacing: 7) {
                         HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -195,6 +207,7 @@ private struct ProjectTemplateRow: View {
                         .font(.caption.weight(.bold))
                         .foregroundStyle(LumaStageDesign.textSecondary)
                         .padding(.top, 4)
+                        .accessibilityHidden(true)
                 }
             }
             .padding(16)
@@ -202,6 +215,12 @@ private struct ProjectTemplateRow: View {
         }
         .buttonStyle(.plain)
         .lumaNativeGlass(radius: LumaStageDesign.cornerRadius, interactive: true, fallbackOpacity: 0.32)
+        // One VoiceOver element per template card: the preview art is decorative (hidden inside the
+        // preview view), and the title/type/subtitle/intro fold into the label.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(template.title)，\(template.eventType)，\(template.subtitle)，\(template.introduction)")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityHint("點兩下以此範本建立專案")
     }
 }
 
@@ -237,7 +256,9 @@ private struct ProjectTemplatePreviewImage: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke(LumaStageDesign.hairline, lineWidth: 1)
         }
-        .accessibilityLabel("\(template.title) 情境預覽")
+        // Purely decorative stage illustration — the enclosing template card carries the real
+        // label, so hide this from VoiceOver to avoid a redundant element.
+        .accessibilityHidden(true)
     }
 
     private var background: some View {
@@ -444,12 +465,15 @@ private struct StageSilhouette: Shape {
 private struct EmptyProjectsState: View {
     let createAction: () -> Void
     let introAction: () -> Void
+    // Scale the hero glyph with Dynamic Type instead of a fixed 42pt size.
+    @ScaledMetric(relativeTo: .largeTitle) private var glyphSize: CGFloat = 42
 
     var body: some View {
         VStack(spacing: 14) {
             Image(systemName: "folder.badge.plus")
-                .font(.system(size: 42, weight: .semibold))
+                .font(.system(size: glyphSize, weight: .semibold))
                 .foregroundStyle(LumaStageDesign.coolBlue)
+                .accessibilityHidden(true)
 
             VStack(spacing: 5) {
                 Text("尚無專案")
@@ -466,12 +490,16 @@ private struct EmptyProjectsState: View {
                 Button("先認識燈具", systemImage: "lightbulb.2", action: introAction)
                     .font(.callout.weight(.semibold))
                     .lumaGlassButton()
+                    .lumaGazeTarget()
                     .tint(LumaStageDesign.warmAmber)
+                    .accessibilityHint("開啟燈具指南，認識常見的舞台燈具")
 
                 Button("建立專案", systemImage: "plus", action: createAction)
                     .font(.callout.weight(.semibold))
                     .lumaGlassButton(prominent: true)
+                    .lumaGazeTarget()
                     .tint(LumaStageDesign.coolBlue)
+                    .accessibilityHint("選擇範本以建立新的舞台專案")
             }
             .padding(.top, 4)
         }
@@ -491,6 +519,7 @@ private struct ProjectRow: View {
                     .font(.title3.weight(.semibold))
                     .foregroundStyle(LumaStageDesign.coolBlue)
                     .frame(width: 34)
+                    .accessibilityHidden(true)
 
                 VStack(alignment: .leading, spacing: 5) {
                     Text(project.name)
@@ -521,12 +550,19 @@ private struct ProjectRow: View {
                 Image(systemName: "chevron.right")
                     .font(.caption.weight(.bold))
                     .foregroundStyle(LumaStageDesign.textSecondary)
+                    .accessibilityHidden(true)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 15)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        // Collapse the row's five text fragments + decorative icons into one VoiceOver element so
+        // the project reads as a single item, with all its metadata folded into the label.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(project.name)，\(project.venueDescription)，\(project.eventType)，\(project.lastEditedDescription)")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityHint("點兩下開啟此專案")
     }
 }
 

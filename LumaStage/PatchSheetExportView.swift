@@ -37,9 +37,17 @@ struct PatchSheetExportView: View {
                         ShareLink(item: exportURL) {
                             Label("匯出 PDF", systemImage: "square.and.arrow.up")
                         }
+                        .accessibilityLabel("匯出 DMX 配接表 PDF")
+                        .accessibilityHint("產生一頁式 PDF 並開啟分享，可儲存或傳給燈光技師")
                     } else {
-                        Label("準備 PDF…", systemImage: "square.and.arrow.up")
+                        // Not a control yet — the PDF is still rendering. The busy state is otherwise
+                        // signalled only by the dimmed tint, so encode it in the label, and mark it
+                        // disabled so VoiceOver/Voice Control don't present it as an actionable export.
+                        Label("匯出 PDF", systemImage: "square.and.arrow.up")
                             .foregroundStyle(LumaStageDesign.textSecondary)
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel("正在準備 DMX 配接表 PDF，請稍候")
+                            .disabled(true)
                     }
                 }
             }
@@ -61,6 +69,7 @@ struct PatchSheetExportView: View {
         HStack(spacing: 8) {
             Image(systemName: systemImage)
                 .foregroundStyle(LumaStageDesign.coolBlue)
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 1) {
                 Text(value).font(.title3.weight(.bold)).foregroundStyle(LumaStageDesign.textPrimary)
                 Text(title).font(.caption).foregroundStyle(LumaStageDesign.textSecondary)
@@ -69,6 +78,9 @@ struct PatchSheetExportView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .lumaNativeGlass(radius: LumaStageDesign.surfaceRadius)
+        // Read "燈具 6" as one element, not "6" then "燈具" as disconnected fragments.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(title) \(value)")
     }
 
     private func sheetTable(_ sheet: LightingPatchSheet) -> some View {
@@ -76,6 +88,7 @@ struct PatchSheetExportView: View {
             headerRow
             ForEach(sheet.rows) { row in
                 Divider().overlay(LumaStageDesign.hairline)
+                    .accessibilityHidden(true)
                 dataRow(row)
             }
         }
@@ -95,6 +108,10 @@ struct PatchSheetExportView: View {
         }
         .padding(.vertical, 8)
         .foregroundStyle(LumaStageDesign.textPrimary)
+        // The header is one label, not seven fragments, and is a column heading — not interactive.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("配接表欄位：燈號、名稱、類型、Universe、位址、通道、顏色")
+        .accessibilityAddTraits(.isHeader)
     }
 
     private func dataRow(_ row: LightingPatchSheet.Row) -> some View {
@@ -111,12 +128,25 @@ struct PatchSheetExportView: View {
                     .fill(Color(red: rgb.red, green: rgb.green, blue: rgb.blue))
                     .frame(width: 18, height: 18)
                     .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(LumaStageDesign.hairline))
+                    // The hex text carries the colour non-visually; the swatch is decoration.
+                    .accessibilityHidden(true)
                 Text(row.colorHex).font(.caption.monospaced())
             }
             .frame(width: 100, alignment: .leading)
             .foregroundStyle(LumaStageDesign.textSecondary)
         }
         .padding(.vertical, 8)
+        // Combine the seven cells into one spoken row with field names, so VoiceOver reads
+        // "燈號 1，名稱 …，類型 …，Universe 1，位址 1，通道 1–4，顏色 #RRGGBB" instead of seven
+        // disconnected fragments. The colour is conveyed by its hex value (non-visual), not the swatch.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(rowAccessibilityLabel(row))
+    }
+
+    /// A single spoken sentence for one patch-sheet row, each value prefixed by its 繁中 column name so
+    /// the fields stay distinguishable when read in sequence.
+    private func rowAccessibilityLabel(_ row: LightingPatchSheet.Row) -> String {
+        "燈號 \(row.number)，名稱 \(row.name)，類型 \(row.fixtureType)，Universe \(row.universe)，位址 \(row.address)，通道 \(row.channelSpan)，顏色 \(row.colorHex)"
     }
 
     private func cell(_ text: String, width: CGFloat, weight: Font.Weight = .regular,

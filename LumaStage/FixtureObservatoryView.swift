@@ -20,13 +20,25 @@ struct FixtureObservatoryView: View {
     @State private var stage = Entity()
 
     var body: some View {
-        RealityView { content in
+        // Eagerly read the shown model so `body` re-evaluates when paging swaps the fixture — this
+        // both drives the RealityView `update:` (same Observation footgun as elsewhere) and keeps the
+        // accessibility label below in sync with the current fixture.
+        let model = appModel.fixtureCarousel.current
+        let fixtureName = LightingFixtureCatalog.item(for: model)?.displayName ?? "燈具"
+
+        return RealityView { content in
             stage.name = "fixture_stage"
             content.add(stage)
             sync(stage)
         } update: { _ in
             sync(stage)
         }
+        // The 3D model isn't a SwiftUI element, so VoiceOver/Voice Control have nothing to announce
+        // without an explicit label. Name the current fixture and describe the manipulation gesture.
+        .accessibilityElement()
+        .accessibilityLabel(fixtureName)
+        .accessibilityValue("3D 燈具模型")
+        .accessibilityHint("用雙手可旋轉與縮放，單手可移動")
         // Each fixture is re-presented centered: drop any move/scale/rotate from the previous one.
         .onChange(of: appModel.fixtureCarousel.index) {
             stage.transform = Transform()
@@ -85,6 +97,7 @@ struct FixtureInfoCardWindow: View {
     @Environment(\.dismissWindow) private var dismissWindow
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         FixtureInfoCard(
@@ -109,7 +122,7 @@ struct FixtureInfoCardWindow: View {
     }
 
     private func page(by direction: Int) {
-        withAnimation(.snappy) {
+        withAnimation(reduceMotion ? nil : .snappy) {
             appModel.pageFixture(by: direction)
         }
     }
@@ -134,6 +147,7 @@ struct FixtureInfoCardWindow: View {
 }
 
 private struct FixtureInfoCard: View {
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     let item: LightingFixtureCatalogItem?
     let index: Int
     let count: Int
@@ -141,25 +155,46 @@ private struct FixtureInfoCard: View {
     let onPrevious: () -> Void
     let onNext: () -> Void
 
+    /// The current fixture's name, spoken as the paging buttons' value so VoiceOver/Voice Control
+    /// users hear which fixture they're on without relying on the colour-only dot indicator.
+    private var currentName: String { item?.displayName ?? "燈具" }
+
+    /// 1-based position read alongside the fixture name, e.g. "第 2 個，共 10 個".
+    private var positionLabel: String { "第 \(index + 1) 個，共 \(max(count, 1)) 個" }
+
+    /// VoiceOver value for both pager buttons: the current fixture plus its position in the carousel.
+    private var pagerValue: String { "\(currentName)，\(positionLabel)" }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             backRow
             header
             if let item {
-                Text(item.shortDescription)
-                    .font(.callout)
-                    .foregroundStyle(LumaStageDesign.textPrimary)
-                    .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 14) {
+                    Text(item.shortDescription)
+                        .font(.callout)
+                        .foregroundStyle(LumaStageDesign.textPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
 
-                Text(item.useCase)
-                    .font(.caption)
-                    .foregroundStyle(LumaStageDesign.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                    Text(item.useCase)
+                        .font(.caption)
+                        .foregroundStyle(LumaStageDesign.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
 
-                Label(item.beginnerPromptHint, systemImage: "quote.bubble")
+                    Label {
+                        Text(item.beginnerPromptHint)
+                    } icon: {
+                        // Decorative — the prompt text below already reads as a sample prompt.
+                        Image(systemName: "quote.bubble")
+                            .accessibilityHidden(true)
+                    }
                     .font(.caption.weight(.medium))
                     .foregroundStyle(LumaStageDesign.warmAmber)
                     .fixedSize(horizontal: false, vertical: true)
+                }
+                // Read the description, use case, and sample prompt as one continuous element so
+                // VoiceOver doesn't stop between every short paragraph.
+                .accessibilityElement(children: .combine)
             }
             pager
         }
@@ -167,8 +202,13 @@ private struct FixtureInfoCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .lumaNativeGlass(tint: LumaStageDesign.coolBlue.opacity(0.08), radius: LumaStageDesign.surfaceRadius, fallbackOpacity: 0.36)
         .overlay {
+            // Strengthen the card edge when Increase Contrast is on so the brand-tinted glass card
+            // separates from whatever's behind it; the standard hairline stays subtle otherwise.
             RoundedRectangle(cornerRadius: LumaStageDesign.surfaceRadius, style: .continuous)
-                .stroke(LumaStageDesign.hairline, lineWidth: 1)
+                .stroke(
+                    colorSchemeContrast == .increased ? Color.primary.opacity(0.45) : LumaStageDesign.hairline,
+                    lineWidth: colorSchemeContrast == .increased ? 1.5 : 1
+                )
         }
         .foregroundStyle(LumaStageDesign.textPrimary)
     }
@@ -180,7 +220,12 @@ private struct FixtureInfoCard: View {
                     .font(.caption.weight(.semibold))
             }
             .buttonStyle(.bordered)
-            .accessibilityLabel("返回專案")
+            // Closing inspection reopens the main window onto the project list (the Fixture Guide sheet
+            // was dismissed when inspection began), so the label says 返回專案, not 返回燈具清單. Visible
+            // text is the label, so VoiceOver and Voice Control "點按返回專案" stay in sync — no separate
+            // `.accessibilityLabel`.
+            .accessibilityHint("結束燈具預覽並回到專案列表")
+            .lumaGazeTarget()
 
             Spacer()
         }
@@ -201,6 +246,10 @@ private struct FixtureInfoCard: View {
                     .minimumScaleFactor(0.7)
             }
         }
+        // Read the Chinese name + its English reference term as one element (a header), instead of two
+        // separate fragments. Treat the whole title as the screen's heading for rotor navigation.
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isHeader)
     }
 
     private var pager: some View {
@@ -210,7 +259,10 @@ private struct FixtureInfoCard: View {
                     .font(.body.weight(.semibold))
             }
             .buttonStyle(.bordered)
+            .lumaGazeTarget()
             .accessibilityLabel("上一個燈具")
+            .accessibilityValue(pagerValue)
+            .accessibilityHint("切換到清單中的上一個燈具")
 
             Spacer()
 
@@ -221,6 +273,9 @@ private struct FixtureInfoCard: View {
                         .frame(width: 7, height: 7)
                 }
             }
+            // Colour-only position dots — the position is spoken via each pager button's value, so the
+            // dots are decoration for VoiceOver.
+            .accessibilityHidden(true)
 
             Spacer()
 
@@ -229,7 +284,10 @@ private struct FixtureInfoCard: View {
                     .font(.body.weight(.semibold))
             }
             .buttonStyle(.bordered)
+            .lumaGazeTarget()
             .accessibilityLabel("下一個燈具")
+            .accessibilityValue(pagerValue)
+            .accessibilityHint("切換到清單中的下一個燈具")
         }
         .padding(.top, 2)
     }

@@ -1,133 +1,105 @@
-# LumaStage MVP Demo Runbook
+# LumaStage 決賽 Demo Runbook(現場操作手冊)
 
-> 註：iPad companion app 已移除，LumaStage 現為 **visionOS 單一 app**。原本只存在於 iPad 的 cue 切換與 dimmer／wash color 微調面板也一併移除；目前 visionOS 流程為「語音／文字 → 裝置端 Apple Foundation Models 生成 → 沉浸式舞台預覽」。下方仍提到 iPad 微調面板的步驟為歷史紀錄。
+> 本檔是**現場照著做、零失敗**的操作手冊。「為什麼會贏 / 評委說服 / 評分映射 / 答辯 Q&A」在 [`maic-strategy.md`](maic-strategy.md) §5;這裡只談**當天怎麼演**。
+>
+> 系統現況(2026-06,已非舊版兩-cue MVP):visionOS 主程式 + 可選 iPad「LumaStage Control」伴侶。語音/文字 → 端側 Foundation Models 生成**一整套 4–12 盞燈、2–5 個有序 cue 的秀** → 1:1 沉浸舞台即時打光;cue stack 以 **GO** 走場;**高能量 cue 會自動啟動動態效果**(掃動/strobe/chase);可切**房間溢光**、匯出 **DMX 配接表**、**全語音/朗讀**操作。
 
-## 追求目標
+---
 
-本週 Demo 的追求目標是展示一套可運作的端到端系統，而不是概念稿或靜態 mockup。
+## 0. 一頁速記(貼在手腕上)
 
-Demo 必須讓觀眾看到：
+1. 投影鏡像開好 → 戴上頭顯。
+2. 「幫我做一場熱舞社成發,開場溫暖、收尾要炸。」→ 等燈升起(別搶話)。
+3. 按 **GO** 一路走到最後一個 cue → **光束開始掃動/strobe**(效果自動觸發)。
+4. **開飛航模式** → 再生成一次 → 燈照樣亮(端側鐵證)。
+5. 點**太陽圖示** → 房間溢光打在評委的牆上。
+6. 把 **iPad** 遞給評委動手改一盞燈。
+7. 點**配接表** → 匯出 PDF(閉環真實器材)。
+8. 收尾金句(見 §6)。
 
-1. 使用者透過語音或 typed prompt 描述舞台燈光需求。
-2. AI 將需求轉成 `Opening` / `Highlight` 兩個 cue 的 lighting look。
-3. Apple Vision Pro 顯示 `standardNight` 夜間室外舞台，並依照 selected cue 呈現燈光。
-4. 使用者切換 cue 時，舞台用 transition animation 過渡。
-5. iPad-style 微調面板只 patch selected cue。
-6. AI box 顯示 mic state、transcript、AI understood command、explanation 與 AI source。
+**最該記住的一件事:效果引擎是靠「cue 平均亮度 ≥ 60%」自動觸發的(`LightEffectPlan` 門檻)。所以要先把秀的能量做出弧線 —— 開場柔、收尾亮 —— GO 走到高潮 cue 時動態才會自己跳出來。**
 
-## Demo 前設定
+---
 
-### Apple Foundation Models（Apple Intelligence）
+## 1. 演出前 90 分鐘檢查
 
-AI 生成使用 Apple 裝置端 Foundation Models，**不需要 API key 或網路設定**。請以 Xcode 27 建置，並在 visionOS 27 / iOS 27 模擬器或實機的「設定」中啟用 Apple Intelligence。
+### 1.1 裝置 / Apple Intelligence(最大風險)
+- [ ] 用**實體 Vision Pro**(不要用模擬器 demo 生成 —— 模擬器常缺安全模型資產 `SensitiveContentAnalysisML error 15`)。
+- [ ] 系統與 **Siri 語言設為支援語言(英文(美國))**,並讓 Apple Intelligence **完成下載**(設定 → Apple Intelligence)。
+- [ ] 進 app 確認 AI 盒**不是**「Apple Intelligence 無法使用」狀態(右下 generationStatus 顯示 `Apple Foundation Models`)。
+- [ ] **預先生成一個備援 look 並存成專案**(萬一現場生成卡住,直接開它,從第 3 步接續)。
 
-若 Apple Intelligence 無法使用，AI 對話框會顯示無法使用的原因，並停用語音與送出，**不會生成燈光**（沒有本機 demo fallback）。詳見 `docs/foundation-models-setup.md`。
+### 1.2 現場演示後勤
+- [ ] Vision Pro **即時鏡像投到大螢幕**(評委看得到你看到的)。
+- [ ] **iPad「LumaStage Control」已配對**(同一 Wi-Fi / 點對點;進 app 顯示「已連線」)。⚠️ iPad target 若尚未進 `.xcodeproj`,先依 `docs/ipad-control-panel-setup.md` 建好並實機測過一次。
+- [ ] 麥克風 / 語音辨識權限**已授權**(第一次按 mic 會要)。
+- [ ] 房間有一面**淺色牆**在視線內(房間溢光的畫布);燈光可調暗。
 
-### Speech-to-text
+### 1.3 「能量弧線」彩排(效果引擎的關鍵)
+動態效果**只在高能量 cue 出現**。彩排時務必確認:
+- [ ] 你的 demo 秀**至少有一個 cue 平均亮度 ≥ 60%**(`LightEffectPlan.highEnergyThreshold = 0.6`)。
+- [ ] GO 走到那個 cue 時,**搖頭燈開始 pan 掃動、strobe bar/爆閃燈閃爍、PAR/wash 做亮度 chase**。
+- [ ] 若現場沒看到動態:① 用 GO 確認走到最亮的 cue;② 或補一句「**再亮一點、更有能量**」讓 AI 拉高強度跨過門檻;③ 備援專案的高潮 cue 先確保夠亮。
+- [ ] 開場 cue 維持**柔和**(平均 < 60%),這樣「開場穩 → 收尾炸」的對比才明顯 —— 也順便示範效果是**跟著設計能量走、非亂閃**。
 
-第一次按下 mic 時，系統會要求 microphone / speech recognition 權限。若權限或語音辨識失敗，直接使用 typed prompt fallback。
+---
 
-建議語音測試句：
+## 2. 主線 Demo(3–5 分鐘,計時;情緒弧:好奇→驚訝→信服→打動)
 
-```text
-做一個冷色的開場，front light dimmer 大概 60%，background wash 要藍一點
-```
+> 完整逐字台詞見 `maic-strategy.md` §5.3。以下是**動作 + 驗收點**。
 
-備援 typed prompt：
+| # | 動作 | 該看到什麼(驗收) |
+|---|---|---|
+| 1 · 0:00 | 暗台,戴頭顯,鏡像開。一句定位開場。 | 1:1 夜間室外舞台、floating AI 盒、空的 cue strip 起點。 |
+| 2 · 0:25 | 說:「幫我做一場熱舞社成發的開場,要有能量、有顏色,收尾要炸。」**停頓等燈升起。** | AI 盒走 `interpreting → applying → explaining`;舞台升起 4–12 盞真 SpotLight;cue strip 出現**多個 cue**(非兩格)。 |
+| 3 · 1:00 | 按 **GO** 逐 cue 前進,走到高潮 cue。 | 每按一次,舞台以過場時間**交叉淡入**到下一 cue;走到高能量 cue 時**光束開始掃動 / strobe / chase**(效果自動觸發)。說明這是「整套 rig、一整場秀」,不是一張圖。 |
+| 4 · 1:40 · **決定性** | **開飛航模式**,再說一句生成。 | 斷網後**仍然成功生成並打光** → 強調 100% 端側、無 API key、無雲端、設計不外流。 |
+| 5 · 2:20 · **魔法時刻** | 點 composer 的**太陽圖示**(房間溢光)。 | 沉浸從 `.full` 切 `.mixed` 透視,虛擬光束**打在評委所在房間的真實牆面**上。 |
+| 6 · 3:00 · 參與 | 把 **iPad** 遞給評委,請他改一盞燈(滑桿/色票),或按 iPad 的 GO。 | 評委的編輯**即時反映在鏡像畫面**(Multipeer 本地同步)。 |
+| 7 · 3:30 | 點 **配接表** → 匯出 PDF。 | 跳出 DMX 配接表(燈號/類型/Universe/位址/通道/顏色)+ 匯出 PDF。說「設計完匯出一張紙,進場交給技師直接 patch」。 |
+| 8 · 3:50 | 收尾金句,回到定位。 | —— |
 
-```text
-做一個冷色 Highlight，front light dimmer 亮一點，background wash 改藍一點
-```
+---
 
-## Demo Flow
+## 3. 替代/加分橋段(時間夠或被追問時)
 
-### 1. 開啟主畫面
+- **全語音 / 無障礙**:開**語音朗讀**(喇叭圖示),全程不用手 —— 說「**下一個場景**」「**go**」走 cue、「**把 Light 5 關掉**」「**第 3 盞變綠**」改單燈、「**念出說明**」聽 AI 解釋。定調:這讓看不見傳統燈控台、或行動/視力受限的人也能設計燈光(社會價值)。
+- **單燈精準**:AI 生成後,語音「**把 Light 2 調到 30%**」即時覆寫單燈 → 證明「AI 給速度,設計師留精準」。
+- **桌面編輯**:「編輯舞台」把舞台縮小模型放到真桌上改 truss/結構(空間運算原生互動)。
 
-確認主畫面顯示：
+---
 
-- 左側 `LumaStage` 舞台預覽。
-- 右側 floating AI conversation box。
-- 右下 iPad-style 微調面板。
-- 舞台 baseline 為 `standardNight`。
-- 初始 selected cue 為 `Opening`。
+## 4. 降級預案(背起來,微笑執行)
 
-### 2. 語音或文字生成 Lighting Look
+| 狀況 | 當場怎麼救 |
+|---|---|
+| Apple Intelligence 未就緒 / 生成卡住 | **不要硬等**。說「我們做了嚴謹的端側可用性處理(availability gate)」,開**預先生成的備援專案**,從第 3 步(GO 走場)接續。把 bug 講成工程嚴謹度。 |
+| 現場看不到動態效果 | 用 GO 走到最亮的 cue;或補一句「更亮、更有能量」讓 AI 跨過 60% 門檻;或直接開備援高潮 cue。 |
+| 房間溢光在投影上看不清 | 先把現場燈調暗;挑深色飽和光束(藍/洋紅);對著最近的淺色牆。 |
+| iPad 連線掉 | 不靠它當主力 —— 主線仍可只用頭顯完成;iPad 是加分橋段。 |
+| 語音辨識不準 | 改用 typed prompt;或改用備援句。 |
 
-優先使用 mic：
+---
 
-1. 按下 `Mic`。
-2. 說出燈光需求。
-3. 再按一次停止錄音。
-4. 等待 AI box 進入 `explaining`。
+## 5. 決賽功能驗收清單(彩排逐項打勾)
 
-若 speech-to-text 不穩定：
+- [ ] 一句 prompt 生成**多 cue(2–5)**的秀,cue strip 顯示多格。
+- [ ] **GO** 逐 cue 走場,過場是**交叉淡入**不是硬跳。
+- [ ] 高能量 cue **自動觸發動態效果**(pan 掃動 / strobe / chase),低能量 cue 保持穩定。
+- [ ] **飛航模式**下仍能生成(端側)。
+- [ ] **房間溢光**切換,光打在真實牆面。
+- [ ] **iPad** 即時鏡像 + 可遠端改燈、按 GO。
+- [ ] **配接表** PDF 可匯出,內容正確(位址不衝突、合計正確)。
+- [ ] **語音朗讀** + 全語音走 cue / 改單燈 / 念說明 可用。
+- [ ] 備援專案可一鍵開啟、從第 3 步接續。
 
-1. 在 typed prompt fallback 輸入需求。
-2. 按 `Generate`。
+---
 
-驗收重點：
+## 6. 收尾金句(逐字背,中英各備一句)
 
-- `transcript` 顯示使用者輸入。
-- `AI understood command` 顯示 AI 理解。
-- `explanation` 顯示業界詞與白話說明。
-- `AI source` 顯示 `Apple Foundation Models`（無法使用時改顯示原因）。
+- 中:「在 LumaStage 之前,學燈控台要先**有**一台燈控台。我們把這個門檻,降到一台 Vision Pro。**這是給每一個沒有舞台的人的舞台。**」
+- EN: "Before LumaStage, learning a lighting console meant owning one. We dropped that to a single Vision Pro — a stage for everyone who never had one."
 
-### 3. 切換 Cue
+---
 
-在 iPad-style panel 的 segmented control 切換：
-
-- `Opening`
-- `Highlight`
-
-驗收重點：
-
-- selected cue ID 更新。
-- 舞台預覽跟著變化。
-- transition animation 不應直接跳狀態。
-
-### 4. iPad-style 微調
-
-只調整 selected cue：
-
-1. 拖曳 `front light dimmer` slider。
-2. 點選 `background wash color` swatch。
-3. 觀察 `selected cue patch` 數值。
-4. 觀察舞台預覽即時更新。
-
-驗收重點：
-
-- `frontLight.intensity` 介於 `0.0...1.0`。
-- `backgroundWash.color` 為 RGB hex。
-- 調整 `Opening` 不會改到 `Highlight`。
-- 調整 `Highlight` 不會改到 `Opening`。
-
-### 5. Reset Selected Cue
-
-按下 `Reset`。
-
-驗收重點：
-
-- 只還原目前 selected cue。
-- 另一個 cue 保留自己的狀態。
-- AI explanation 顯示 reset 只回復 cue baseline。
-
-## MVP 驗收清單
-
-- [ ] App 可在 visionOS Simulator 啟動。
-- [ ] 主畫面有 stage preview、floating AI box、iPad-style panel。
-- [ ] speech-to-text 可啟動，失敗時可用 typed prompt fallback。
-- [ ] AI 生成固定輸出 `Opening` / `Highlight`。
-- [ ] `ambient.preset` 固定為 `standardNight`。
-- [ ] cue 切換有 transition animation。
-- [ ] iPad-style panel 只能調整 selected cue。
-- [ ] reset 只還原 selected cue。
-- [ ] AI box 顯示 mic state、transcript、understood command、explanation、AI source。
-- [ ] 無 `darkNight` / `brightSurroundings` / full cue timeline / lighting-console export。
-
-## 目前不是本週 Demo 的內容
-
-- 真 iPad companion app 與跨裝置同步。
-- 真實舞台 AR 對位與真實場景打光。
-- DMX / console export。
-- 完整燈控台或完整 cue timeline editor。
-- rigging、truss 承重與場地工程圖落差模擬。
+*相關文件:策略與評分 → `maic-strategy.md`;Foundation Models 設定/疑難 → `foundation-models-setup.md`;iPad 伴侶建置 → `ipad-control-panel-setup.md`;動態 rig 計畫 → `dynamic-rig-plan.md`。*

@@ -48,12 +48,20 @@ struct PanelConnectionToolbar: ToolbarContent {
                     .font(.footnote.weight(.medium))
                     .foregroundStyle(.secondary)
             }
+            // The state is conveyed visually by a green/orange dot, so fold the whole pill
+            // into one VoiceOver element whose value is the status text — the state then
+            // never depends on colour alone.
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("連線狀態")
+            .accessibilityValue(model.connectionStatusText)
         }
         if let name = model.lighting?.lookName, model.isConnected {
             ToolbarItem(placement: .topBarTrailing) {
                 Text(name)
                     .font(.footnote.weight(.semibold))
                     .lineLimit(1)
+                    .accessibilityLabel("目前燈光效果")
+                    .accessibilityValue(name)
             }
         }
     }
