@@ -8,6 +8,11 @@ import SwiftUI
 struct PatchSheetExportView: View {
     @Environment(AppModel.self) private var appModel
     @Environment(\.dismiss) private var dismiss
+    /// The exported PDF URL, (re)generated only when the sheet changes (via `.task(id:)`) — not eagerly on
+    /// every `body` pass, which would render + write to disk synchronously on the main actor each
+    /// re-render. nil while generating or if rendering failed, so Share hides rather than handing over a
+    /// missing/stale file.
+    @State private var exportURL: URL?
 
     var body: some View {
         let sheet = appModel.patchSheet
@@ -28,11 +33,17 @@ struct PatchSheetExportView: View {
                     Button("完成") { dismiss() }
                 }
                 ToolbarItem(placement: .primaryAction) {
-                    ShareLink(item: exportedPDF(for: sheet)) {
-                        Label("匯出 PDF", systemImage: "square.and.arrow.up")
+                    if let exportURL {
+                        ShareLink(item: exportURL) {
+                            Label("匯出 PDF", systemImage: "square.and.arrow.up")
+                        }
+                    } else {
+                        Label("準備 PDF…", systemImage: "square.and.arrow.up")
+                            .foregroundStyle(LumaStageDesign.textSecondary)
                     }
                 }
             }
+            .task(id: sheet) { exportURL = Self.exportedPDF(for: sheet) }
         }
         .frame(minWidth: 760, minHeight: 580)
     }
@@ -121,10 +132,15 @@ struct PatchSheetExportView: View {
     /// Renders the printable document to a single-page PDF in the temp directory and returns its URL.
     /// ImageRenderer → CGContext(PDF) is the standard SwiftUI-view-to-PDF recipe; it runs on the main
     /// actor (this view's context), so it's safe to call from `body`.
-    private func exportedPDF(for sheet: LightingPatchSheet) -> URL {
+    /// Renders the printable document to a single-page PDF and returns its URL — or nil if rendering
+    /// failed (so the caller hides Share instead of handing over a missing/stale file). The filename is
+    /// unique per look so a failed render can't masquerade as a previously-exported different sheet.
+    private static func exportedPDF(for sheet: LightingPatchSheet) -> URL? {
+        let token = String(UInt(bitPattern: sheet.lookName.hashValue), radix: 16)
         let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("LumaStage-配接表.pdf")
+            .appendingPathComponent("LumaStage-PatchSheet-\(token).pdf")
         let renderer = ImageRenderer(content: PatchSheetDocument(sheet: sheet))
+        var wrote = false
         renderer.render { size, renderInContext in
             var mediaBox = CGRect(origin: .zero, size: size)
             guard let pdf = CGContext(url as CFURL, mediaBox: &mediaBox, nil) else { return }
@@ -132,8 +148,9 @@ struct PatchSheetExportView: View {
             renderInContext(pdf)
             pdf.endPDFPage()
             pdf.closePDF()
+            wrote = true
         }
-        return url
+        return wrote && FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 }
 

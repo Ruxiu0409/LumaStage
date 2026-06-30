@@ -18,9 +18,22 @@ final class SpeechTranscriber {
 
 #if canImport(Speech) && canImport(AVFoundation)
     private let audioEngine = AVAudioEngine()
-    private let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en_US"))
+    private let recognizer = SpeechTranscriber.makeRecognizer()
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
+
+    /// Prefers a Traditional-Chinese recognizer (the app's primary language) when the device supports it,
+    /// then the current locale, then en_US — so Chinese voice commands and design prompts can actually be
+    /// dictated (mixed Chinese/English). `SFSpeechRecognizer(locale:)` returns nil for an unsupported locale,
+    /// so this walks the preference list until one is available. Mirrors the locale gating used for generation.
+    private static func makeRecognizer() -> SFSpeechRecognizer? {
+        for identifier in ["zh-TW", "zh-Hant-TW", "zh-Hant", Locale.current.identifier, "en_US"] {
+            if let recognizer = SFSpeechRecognizer(locale: Locale(identifier: identifier)) {
+                return recognizer
+            }
+        }
+        return SFSpeechRecognizer()
+    }
 #endif
 
     func start() async throws {
@@ -42,15 +55,24 @@ final class SpeechTranscriber {
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
         request.contextualStrings = [
-            "wash",
-            "spot",
-            "front light",
-            "background wash",
-            "dimmer",
-            "intensity",
-            "brightness"
+            // English lighting + show-control vocabulary…
+            "wash", "spot", "front light", "background wash", "dimmer", "intensity", "brightness",
+            "GO", "next cue", "previous cue", "blackout",
+            // …and the Traditional-Chinese terms a zh-TW recognizer should bias toward (the primary language).
+            "暖色", "冷色", "藍色", "紅色", "綠色", "開場", "重點",
+            "下一個場景", "上一個場景", "新增場景", "念出說明"
         ]
         recognitionRequest = request
+
+        // The default session category (.soloAmbient) can't record; switch to .playAndRecord so dictation
+        // works and any narration ducks/routes to the speaker. Best-effort — don't fail dictation on it.
+        // AVAudioSession exists on iOS/visionOS but not macOS (this file's canImport(AVFoundation) guard is
+        // also satisfied under the macOS SDK during headless analysis), so gate it on the platform.
+#if !os(macOS)
+        let session = AVAudioSession.sharedInstance()
+        try? session.setCategory(.playAndRecord, mode: .spokenAudio, options: [.duckOthers, .defaultToSpeaker, .allowBluetooth])
+        try? session.setActive(true)
+#endif
 
         let inputNode = audioEngine.inputNode
         let format = inputNode.outputFormat(forBus: 0)

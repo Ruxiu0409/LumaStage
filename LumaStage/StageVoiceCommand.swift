@@ -21,47 +21,63 @@ enum StageVoiceCommand: Equatable {
     case readExplanation
 
     /// Filler words that may surround a bare command without changing it ("ok go now" is still "go").
-    private static let filler: Set<String> = ["please", "now", "okay", "ok", "the", "a", "to", "請", "一下", "吧"]
+    private static let filler: Set<String> = ["please", "now", "okay", "ok", "the", "a", "an", "to", "my"]
+
+    /// English commands as exact token SETS (filler already removed). A command matches only when the
+    /// whole utterance — minus filler — IS one of these sets, never when a longer design prompt merely
+    /// embeds the phrase. So "add a cooler wash to the next scene" stays a generation prompt instead of
+    /// being hijacked into a cue advance (the substring-match bug this replaced).
+    private static let englishCommands: [(command: StageVoiceCommand, sets: [Set<String>])] = [
+        (.readExplanation, [["read", "it"], ["read", "aloud"], ["read", "it", "aloud"], ["read", "explanation"],
+                            ["read", "it", "out", "loud"], ["speak", "it"], ["say", "it"], ["explain", "it"]].map(Set.init)),
+        (.addCue, [["add", "cue"], ["new", "cue"], ["another", "cue"], ["duplicate", "cue"],
+                   ["add", "scene"], ["new", "scene"]].map(Set.init)),
+        (.previousCue, [["previous", "cue"], ["prev", "cue"], ["last", "cue"], ["previous", "scene"],
+                        ["go", "back"], ["back"], ["previous"]].map(Set.init)),
+        (.nextCue, [["next", "cue"], ["advance", "cue"], ["next", "scene"], ["go", "next"],
+                    ["next"], ["advance"], ["go"]].map(Set.init)),
+    ]
+
+    /// Chinese commands as needles, longest-first within each command. Chinese has no word boundaries, so
+    /// a command matches only when the needle is essentially the whole utterance — its CJK length within a
+    /// small slack of the matched needle. So "把燈光調成上一個演出的暖色" stays a generation prompt rather than
+    /// stepping to the previous cue (the ASCII-only token guard can't protect CJK).
+    private static let chineseCommands: [(command: StageVoiceCommand, needles: [String])] = [
+        (.readExplanation, ["念出說明", "說明一下", "解釋一下", "念出", "唸出", "朗讀", "讀出"]),
+        (.addCue, ["新增場景", "加一個場景", "加個場景", "複製場景", "增加場景", "多一個場景"]),
+        (.previousCue, ["上一個場景", "前一個場景", "回上一個", "上一個", "上一幕", "倒回"]),
+        (.nextCue, ["下一個場景", "切下一個", "進下一個", "下一個", "下一幕"]),
+    ]
+
+    /// Extra CJK characters tolerated beyond the matched needle — room for a particle like 請/吧 without
+    /// admitting a whole design sentence.
+    private static let chineseSlack = 2
 
     static func parse(_ raw: String) -> StageVoiceCommand? {
         let text = raw.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return nil }
 
-        // Narration first, so "read the cue" reads aloud rather than navigating.
-        if contains(text, ["read it", "read aloud", "read the explanation", "read explanation",
-                           "speak it", "say it", "explain it", "念出", "唸出", "朗讀", "讀出", "說明一下", "解釋一下"]) {
-            return .readExplanation
+        // English: the utterance, tokenized and stripped of filler, must EXACTLY equal a command's token
+        // set — anchored, so a design sentence that merely contains "next scene" / "go back" falls through.
+        let tokens = text.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
+        let core = Set(tokens.filter { token in !filler.contains(token) && token.allSatisfy(\.isASCII) })
+        if !core.isEmpty {
+            for entry in englishCommands where entry.sets.contains(core) {
+                return entry.command
+            }
         }
 
-        if contains(text, ["add cue", "add a cue", "new cue", "another cue", "duplicate cue",
-                           "新增場景", "加一個場景", "加個場景", "複製場景", "增加場景", "多一個場景"]) {
-            return .addCue
-        }
-
-        // Previous before next so "go back" / "previous cue" isn't shadowed by a "go" / "next" match.
-        if contains(text, ["previous cue", "prev cue", "last cue", "previous scene", "go back",
-                           "上一個場景", "上一個", "上一幕", "前一個場景", "回上一個", "倒回"]) {
-            return .previousCue
-        }
-
-        if contains(text, ["next cue", "advance cue", "next scene", "go to next", "go next",
-                           "下一個場景", "下一個", "下一幕", "切下一個", "進下一個"]) {
-            return .nextCue
-        }
-
-        // Bare commands: only when the whole utterance IS the command (plus filler), so a design prompt
-        // like "go for a warm sunset" never hijacks into a cue advance.
-        let words = Set(text.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init))
-        let core = words.subtracting(filler)
-        if core.isEmpty == false, core.isSubset(of: ["go", "next", "advance", "back", "previous"]) {
-            if core.contains("back") || core.contains("previous") { return .previousCue }
-            return .nextCue
+        // Chinese: anchored by length — the matched needle must be (nearly) the whole CJK utterance.
+        let cjkCount = text.filter { !$0.isASCII && $0.isLetter }.count
+        if cjkCount > 0 {
+            for entry in chineseCommands {
+                if let matched = entry.needles.first(where: { text.contains($0) }),
+                   cjkCount <= matched.count + chineseSlack {
+                    return entry.command
+                }
+            }
         }
 
         return nil
-    }
-
-    private static func contains(_ text: String, _ needles: [String]) -> Bool {
-        needles.contains { text.contains($0) }
     }
 }

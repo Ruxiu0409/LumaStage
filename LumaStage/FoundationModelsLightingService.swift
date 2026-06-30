@@ -61,9 +61,10 @@ struct FoundationModelsLightingService: LightingLookGenerating {
         // Randomized (nucleus) sampling with NO fixed seed so each generation differs — choosing a
         // lighting look is a creative act, not extraction. `.greedy` made every run byte-identical
         // for a given prompt (and ignores `temperature` entirely), which read as "the output is
-        // always the same". The `@Generable` schema still enforces the shape (two cues, two beams
-        // each), so randomness only varies the colors / intensities / mood / wording — never the
-        // structure. Pass a `seed:` here only if you need reproducible output for debugging.
+        // always the same". The `@Generable` schema still pins the overall shape (2–5 cues, a 4–12
+        // fixture rig, one state per cue), so randomness varies the cue count, fixture mix, colors,
+        // intensities, mood and wording within those bounds. Pass a `seed:` here only if you need
+        // reproducible output for debugging.
         let options = GenerationOptions(samplingMode: .random(probabilityThreshold: 0.9), temperature: 0.9)
 
         do {

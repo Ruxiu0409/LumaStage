@@ -4,6 +4,7 @@ import SwiftUI
 struct VisionAIComposerBox: View {
     @Environment(AppModel.self) private var appModel
     @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isShowingPatchSheet = false
 
     var body: some View {
@@ -29,8 +30,8 @@ struct VisionAIComposerBox: View {
             controlRow
             debugPanel
         }
-        .animation(.smooth(duration: 0.25), value: appModel.isDebugPanelVisible)
-        .animation(.smooth(duration: 0.25), value: appModel.selectedCueId)
+        .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: appModel.isDebugPanelVisible)
+        .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: appModel.selectedCueId)
         .sheet(isPresented: $isShowingPatchSheet) {
             PatchSheetExportView()
                 .environment(appModel)
@@ -72,15 +73,17 @@ struct VisionAIComposerBox: View {
             .labelStyle(.iconOnly)
             .buttonStyle(.bordered)
             .buttonBorderShape(.circle)
+            .lumaGazeTarget()
             .tint(appModel.isVoiceNarrationEnabled ? LumaStageDesign.softGreen : nil)
             .help("語音朗讀 — 開啟後每次生成、走場與單燈調整都會念出來（無障礙模式）")
 
-            Button("燈光除錯", systemImage: "ladybug") {
+            Button("燈光除錯", systemImage: appModel.isDebugPanelVisible ? "ladybug.fill" : "ladybug") {
                 appModel.toggleDebugPanel()
             }
             .labelStyle(.iconOnly)
             .buttonStyle(.bordered)
             .buttonBorderShape(.circle)
+            .lumaGazeTarget()
             .tint(appModel.isDebugPanelVisible ? LumaStageDesign.coolBlue : nil)
             .help("顯示燈光除錯面板 — 目前場景的燈具、顏色，以及哪些角色照亮舞台")
         }
@@ -103,6 +106,7 @@ struct VisionAIComposerBox: View {
                     .labelStyle(.iconOnly)
                     .buttonStyle(.bordered)
                     .buttonBorderShape(.circle)
+                    .lumaGazeTarget()
                     .help("新增場景（複製目前場景作為起點）")
                     .accessibilityLabel("新增場景")
                 }
@@ -117,6 +121,7 @@ struct VisionAIComposerBox: View {
             .font(.headline.weight(.bold))
             .buttonStyle(.borderedProminent)
             .buttonBorderShape(.capsule)
+            .lumaGazeTarget()
             .tint(LumaStageDesign.softGreen)
             .disabled(appModel.cues.count <= 1)
             .help("GO — 以過場時間切換到下一個場景")
@@ -130,16 +135,23 @@ struct VisionAIComposerBox: View {
             appModel.selectCue(id: cue.id)
         } label: {
             HStack(spacing: 6) {
+                // A non-color selection cue (checkmark + bold) so the live cue reads under low colour
+                // vision / Differentiate Without Color, not only via the amber tint.
+                if isSelected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.caption2)
+                }
                 Text("\(index + 1)")
                     .font(.caption2.weight(.bold))
                     .opacity(0.65)
                 Text(cue.localizedDisplayName)
-                    .font(.callout.weight(.semibold))
+                    .font(.callout.weight(isSelected ? .bold : .semibold))
                     .lineLimit(1)
             }
         }
         .buttonStyle(.bordered)
         .buttonBorderShape(.capsule)
+        .lumaGazeTarget()
         .tint(isSelected ? LumaStageDesign.warmAmber : nil)
         .contextMenu {
             Button("刪除場景", systemImage: "trash", role: .destructive) {
@@ -147,8 +159,14 @@ struct VisionAIComposerBox: View {
             }
             .disabled(appModel.cues.count <= 1)
         }
-        .accessibilityLabel("場景 \(index + 1)，\(cue.localizedDisplayName)\(isSelected ? "，目前選取" : "")")
+        .accessibilityLabel("場景 \(index + 1)，\(cue.localizedDisplayName)")
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
         .accessibilityHint("點兩下切換到此場景")
+        // A non-gesture path to the destructive delete (the context menu needs a long-press), so Switch
+        // Control / Voice Control users can reach it too.
+        .accessibilityAction(named: "刪除場景") {
+            if appModel.cues.count > 1 { appModel.removeCue(id: cue.id) }
+        }
     }
 
     private func inputField(text: Binding<String>, isRecording: Bool) -> some View {
@@ -159,7 +177,8 @@ struct VisionAIComposerBox: View {
         HStack(spacing: 12) {
             TextField(isRecording ? "聆聽中…" : "輸入任何需求", text: text)
                 .textFieldStyle(.plain)
-                .font(.system(size: 26, weight: .semibold, design: .rounded))
+                .font(.title2.weight(.semibold))
+                .fontDesign(.rounded)
                 .foregroundStyle(LumaStageDesign.textPrimary)
                 .lineLimit(1)
                 .submitLabel(.send)
@@ -172,15 +191,15 @@ struct VisionAIComposerBox: View {
                 Image(systemName: "waveform")
                     .font(.title2.weight(.semibold))
                     .foregroundStyle(.red)
-                    .symbolEffect(.variableColor.iterative, options: .repeating)
+                    .symbolEffect(.variableColor.iterative, options: .repeating, isActive: !reduceMotion)
                     .accessibilityLabel("聆聽中")
-                    .transition(.opacity.combined(with: .scale))
+                    .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale))
             }
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 16)
         .lumaNativeGlass(radius: 22)
-        .animation(.smooth(duration: 0.2), value: isRecording)
+        .animation(reduceMotion ? nil : .smooth(duration: 0.2), value: isRecording)
     }
 
     private var statusRow: some View {
@@ -211,6 +230,7 @@ struct VisionAIComposerBox: View {
                 .labelStyle(.iconOnly)
                 .buttonStyle(.bordered)
                 .buttonBorderShape(.circle)
+                .lumaGazeTarget()
 
             Spacer()
 
@@ -220,6 +240,7 @@ struct VisionAIComposerBox: View {
             .labelStyle(.iconOnly)
             .buttonStyle(.bordered)
             .buttonBorderShape(.circle)
+            .lumaGazeTarget()
             .tint(appModel.stageImmersionMode == .roomSpill ? LumaStageDesign.warmAmber : nil)
 
             ToggleImmersiveSpaceButton(displayStyle: .icon)
@@ -243,6 +264,7 @@ struct VisionAIComposerBox: View {
         .labelStyle(.iconOnly)
         .buttonStyle(.bordered)
         .buttonBorderShape(.circle)
+        .lumaGazeTarget()
         .tint(appModel.speechTranscriber.isRecording ? .red : nil)
         .disabled(!appModel.isModelAvailable)
     }
@@ -253,6 +275,7 @@ struct VisionAIComposerBox: View {
             .font(.title3.weight(.bold))
             .buttonStyle(.borderedProminent)
             .buttonBorderShape(.circle)
+            .lumaGazeTarget()
             .disabled(!canSendPrompt)
     }
 
@@ -266,7 +289,7 @@ struct VisionAIComposerBox: View {
             Image(systemName: feedback.icon)
                 .font(.title3.weight(.semibold))
                 .foregroundStyle(feedback.tint)
-                .symbolEffect(.variableColor.iterative, options: .repeating, isActive: feedback.animates)
+                .symbolEffect(.variableColor.iterative, options: .repeating, isActive: feedback.animates && !reduceMotion)
                 .frame(width: 26)
 
             VStack(alignment: .leading, spacing: 4) {
@@ -288,7 +311,7 @@ struct VisionAIComposerBox: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
         .lumaNativeGlass(tint: feedback.tint.opacity(0.12), radius: LumaStageDesign.surfaceRadius)
-        .animation(.smooth(duration: 0.25), value: appModel.conversationState)
+        .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: appModel.conversationState)
     }
 
     /// What `feedbackPanel` renders for the current state. View-level (it references SwiftUI colors),

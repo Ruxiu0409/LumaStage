@@ -6,6 +6,9 @@ enum LumaStageDesign {
     static let panelRadius: CGFloat = 32
     static let panelPadding: CGFloat = 20
     static let sectionSpacing: CGFloat = 16
+    /// visionOS minimum reliable gaze (eye-tracking) target — larger than iOS's 44pt. Apply via
+    /// `lumaGazeTarget()` to icon-only / compact controls so look-and-pinch can hit them reliably.
+    static let minGazeTarget: CGFloat = 60
 
     // Brand accent tints. Used sparingly *over* the native system glass — never as opaque fills.
     static let coolBlue = Color(red: 0.275, green: 0.595, blue: 0.950)
@@ -74,6 +77,12 @@ extension View {
         } else {
             self.buttonStyle(.bordered)
         }
+    }
+
+    /// Enforces the visionOS 60pt minimum gaze target (eye tracking is imprecise; iOS's 44pt is too
+    /// small). Apply to icon-only / compact buttons so look-and-pinch selects them reliably.
+    func lumaGazeTarget(_ size: CGFloat = LumaStageDesign.minGazeTarget) -> some View {
+        frame(minWidth: size, minHeight: size)
     }
 }
 

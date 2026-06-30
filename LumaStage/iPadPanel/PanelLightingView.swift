@@ -102,12 +102,13 @@ private struct LightingOverview: View {
                                 model.send(.selectCue(id: c.id))
                             } label: {
                                 Text("\(index + 1) · \(c.localizedDisplayName)")
-                                    .font(.callout.weight(.semibold))
+                                    .font(.callout.weight(c.id == look.selectedCueId ? .bold : .semibold))
                                     .lineLimit(1)
                             }
                             .buttonStyle(.bordered)
                             .buttonBorderShape(.capsule)
                             .tint(c.id == look.selectedCueId ? .orange : nil)
+                            .accessibilityAddTraits(c.id == look.selectedCueId ? [.isSelected] : [])
                             .contextMenu {
                                 Button(role: .destructive) {
                                     model.send(.removeCue(id: c.id))
@@ -125,7 +126,9 @@ private struct LightingOverview: View {
                         }
                         .buttonStyle(.bordered)
                         .buttonBorderShape(.circle)
+                        .frame(minWidth: 44, minHeight: 44)
                         .accessibilityLabel("新增場景")
+                        .accessibilityHint("複製目前場景作為新場景的起點")
                     }
                     .padding(.vertical, 2)
                 }
@@ -141,6 +144,7 @@ private struct LightingOverview: View {
                 .tint(.green)
                 .disabled(look.cues.count <= 1)
                 .accessibilityLabel("GO，前往下一個場景")
+                .accessibilityHint("以過場時間切換到下一個場景")
             }
         }
         .disabled(!model.isConnected)

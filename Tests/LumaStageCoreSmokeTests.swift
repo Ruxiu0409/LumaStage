@@ -57,6 +57,8 @@ struct LumaStageCoreSmokeTests {
         try validateAcceptsMultipleCuesAndRejectsEmpty()
         try multiCueDraftBuildsValidatedSequence()
         try stageStateSupportsCueStackAndGo()
+        try disabledFixtureAssemblesDark()
+        lightEffectEngineModulatesMovementAndIntensity()
         try patchPlannerAssignsSequentialDMXAndBuildsSheet()
         parsesStageVoiceCommands()
         try relightDebugSnapshotMapsCueFixtures()
@@ -1383,6 +1385,96 @@ struct LumaStageCoreSmokeTests {
         expect(StageVoiceCommand.parse("go for a warm sunset mood") == nil, "a design prompt containing 'go' must fall through")
         expect(StageVoiceCommand.parse("make it warm and moody") == nil, "a plain design prompt should not parse as a show command")
         expect(StageVoiceCommand.parse("set light 2 to blue") == nil, "a single-light command should fall through to LightCommand")
+
+        // Longer design prompts that merely EMBED a command phrase must also fall through (the
+        // substring-match bug): the parser is anchored, so the phrase has to be ~the whole utterance.
+        expect(StageVoiceCommand.parse("add a cooler wash to the next scene") == nil, "embedded 'next scene' must not advance the cue")
+        expect(StageVoiceCommand.parse("give me a warm glow for the previous scene transition") == nil, "embedded 'previous scene' must not step back")
+        expect(StageVoiceCommand.parse("light up the last cue area") == nil, "embedded 'last cue' must not step back")
+        expect(StageVoiceCommand.parse("go to next level of brightness") == nil, "embedded 'go to next' must not advance")
+        expect(StageVoiceCommand.parse("add a new cue feel to the room") == nil, "embedded 'new cue' must not append")
+        expect(StageVoiceCommand.parse("make the singer say it loud") == nil, "embedded 'say it' must not narrate")
+        expect(StageVoiceCommand.parse("explain it like a sunset") == nil, "embedded 'explain it' must not narrate")
+        // Chinese (the primary user language) design prompts that embed a command word must fall through.
+        expect(StageVoiceCommand.parse("把燈光調成上一個演出的暖色") == nil, "embedded 上一個 must not step back")
+        expect(StageVoiceCommand.parse("做一個像下一個季節的暖色調") == nil, "embedded 下一個 must not advance")
+        expect(StageVoiceCommand.parse("複製場景的氛圍到主舞台") == nil, "embedded 複製場景 must not append")
+        // Anchored true positives still parse (with a particle / filler around them).
+        expect(StageVoiceCommand.parse("請下一個") == .nextCue, "a Chinese command with a particle still parses")
+        expect(StageVoiceCommand.parse("read it aloud") == .readExplanation, "the exact narration command still parses")
+    }
+
+    private static func disabledFixtureAssemblesDark() throws {
+        // A per-cue state the model emits as enabled:false but intensity > 0 must assemble to a DARK
+        // fixture (intensity 0): the renderer is intensity-driven and never reads `enabled`, so without
+        // this coupling a "should be off" fixture comes up lit on GO.
+        let look = try LightingLookDraft.makeValidatedLook(
+            lookName: "Off Test",
+            mood: "test",
+            cues: [
+                .init(id: "cue_0", name: "A", fixtures: [
+                    LightingLookDraft.Fixture(id: "f0", name: "Off Light", role: .frontLight, zone: .stageFront,
+                                              enabled: false, intensity: 0.7, colorHex: "#FF0000"),
+                    LightingLookDraft.Fixture(id: "f1", name: "On Light", role: .backgroundWash, zone: .stageBack,
+                                              enabled: true, intensity: 0.8, colorHex: "#3A6BFF")
+                ])
+            ],
+            explanationTerm: "Enabled",
+            explanationPlainText: "A disabled fixture is dark.",
+            explanationActionSummary: "Off light stays dark."
+        )
+        try look.validate()
+        let off = try look.requireCue(id: "cue_0").requireFixture(role: .frontLight)
+        expect(off.enabled == false, "a disabled fixture keeps enabled == false")
+        expect(off.intensity == 0, "a disabled fixture must assemble to 0 intensity so it renders dark")
+        let on = try look.requireCue(id: "cue_0").requireFixture(role: .backgroundWash)
+        expect(abs(on.intensity - 0.8) < 0.0001, "an enabled fixture keeps its intensity")
+    }
+
+    private static func lightEffectEngineModulatesMovementAndIntensity() {
+        // Inert: a none / zero-speed effect contributes nothing.
+        expect(LightEffectEngine.output(.none, at: 3.2) == .identity, "a none effect is identity at any time")
+        expect(LightEffectEngine.output(LightEffect(kind: .panSweep, speedHz: 0, sizeDegrees: 30, phase: 0), at: 1) == .identity,
+               "a zero-speed effect is inert")
+
+        // Pan sweep: centred at t=0, peaks at +size a quarter-period later, only touches pan, leaves intensity.
+        let pan = LightEffect(kind: .panSweep, speedHz: 1, sizeDegrees: 30, phase: 0)
+        expect(abs(LightEffectEngine.output(pan, at: 0).panOffsetDegrees) < 1e-9, "pan sweep starts centred at t=0")
+        expect(abs(LightEffectEngine.output(pan, at: 0.25).panOffsetDegrees - 30) < 1e-6, "pan sweep reaches +size at quarter period")
+        expect(LightEffectEngine.output(pan, at: 0.37).tiltOffsetDegrees == 0, "pan sweep never tilts")
+        expect(LightEffectEngine.output(pan, at: 0.37).intensityScale == 1, "a sweep leaves intensity to the cue")
+        for t in stride(from: 0.0, to: 2.0, by: 0.05) {
+            expect(abs(LightEffectEngine.output(pan, at: t).panOffsetDegrees) <= 30 + 1e-9, "pan stays within size")
+        }
+
+        // Circle: pan² + tilt² ≈ size² (the beam traces a circle).
+        let circle = LightEffect(kind: .circle, speedHz: 0.5, sizeDegrees: 20, phase: 0)
+        let c = LightEffectEngine.output(circle, at: 0.6)
+        expect(abs((c.panOffsetDegrees * c.panOffsetDegrees + c.tiltOffsetDegrees * c.tiltOffsetDegrees) - 400) < 1e-3,
+               "circle keeps pan²+tilt² == size²")
+
+        // Strobe: hard 0/1 toggle that actually visits both states.
+        let strobe = LightEffect(kind: .strobe, speedHz: 5, sizeDegrees: 0, phase: 0)
+        let scales = stride(from: 0.0, to: 1.0, by: 0.02).map { LightEffectEngine.output(strobe, at: $0).intensityScale }
+        expect(scales.allSatisfy { $0 == 0 || $0 == 1 }, "strobe is a hard on/off")
+        expect(scales.contains(0) && scales.contains(1), "strobe actually toggles both states")
+
+        // Color chase: a smooth 0...1 pulse, phase-staggered so different fixtures differ at the same instant.
+        let chaseA = LightEffect(kind: .colorChase, speedHz: 1, sizeDegrees: 0, phase: 0)
+        let chaseB = LightEffect(kind: .colorChase, speedHz: 1, sizeDegrees: 0, phase: 0.5)
+        let a = LightEffectEngine.output(chaseA, at: 0.1).intensityScale
+        let b = LightEffectEngine.output(chaseB, at: 0.1).intensityScale
+        expect((0...1).contains(a), "chase pulse stays in 0...1")
+        expect(abs(a - b) > 1e-6, "a phase offset staggers fixtures so the chase runs across the rig")
+
+        // Suggested defaults: moving heads sweep, steady key lights don't, energy widens the swing.
+        expect(LightEffect.suggested(for: .movingHeadBeam, highEnergy: true, slot: 0).kind == .panSweep, "moving heads sweep")
+        expect(LightEffect.suggested(for: .frontFresnel, highEnergy: true, slot: 0).kind == .none, "front fresnels stay steady")
+        expect(LightEffect.suggested(for: .ledStrobeBar, highEnergy: true, slot: 0).kind == .strobe, "strobe bars strobe when high-energy")
+        expect(!LightEffect.suggested(for: .ledStrobeBar, highEnergy: false, slot: 0).isAnimated, "a calm cue leaves the strobe off")
+        expect(LightEffect.suggested(for: .movingHeadBeam, highEnergy: true, slot: 0).sizeDegrees
+               > LightEffect.suggested(for: .movingHeadBeam, highEnergy: false, slot: 0).sizeDegrees,
+               "high energy widens the moving-head swing")
     }
 
     private static func expect(_ condition: @autoclosure () -> Bool, _ message: String) {

@@ -96,6 +96,9 @@ struct ImmersiveView: View {
     }
 
     private static func makeStageRoot(layout: StageLayout) -> Entity {
+        // Register the per-frame dynamic-effects system (sweeps / strobe / chase) before any spotlight
+        // carrying a LightEffectComponent enters the scene. Idempotent.
+        LightEffectSystem.registerIfNeeded()
         let root = Entity()
         root.name = "LumaStageRoot"
 
@@ -848,7 +851,11 @@ struct ImmersiveView: View {
         let direction = scenePoint(aimModel) - position
         if simd_length(direction) > 0.0001 {
             // A spotlight emits along its local -Z; aim that axis at the stage target.
-            spot.orientation = orientation(from: SIMD3<Float>(0, 0, -1), to: simd_normalize(direction))
+            let aim = simd_normalize(direction)
+            spot.orientation = orientation(from: SIMD3<Float>(0, 0, -1), to: aim)
+            // Capture the resting aim so the dynamic-effects system can sweep around it (effect kind +
+            // base lumens are filled in per cue by `apply`).
+            spot.components.set(LightEffectComponent(effect: .none, baseAim: aim, baseLumens: 0))
         }
 
         root.addChild(spot)
@@ -1059,6 +1066,12 @@ struct ImmersiveView: View {
     /// (keyed by the 1-based light number = cue order) are layered on top — "close the light 3"
     /// fades that one fixture to 0 over the same transition.
     private static func apply(_ cue: LightingCue, overrides: [Int: LightOverride], to root: Entity) {
+        // A cue-level energy read: a bright/punchy look brings the rig alive (sweeps, strobe, chase); a
+        // calm cue holds the beams steady. Derived from the cue's own fixture intensities so the show's
+        // arc (calm Opening → energetic Finale) is what drives the movement — no separate authoring.
+        let energy = cue.fixtureGroups.reduce(0.0) { $0 + $1.intensity } / Double(max(cue.fixtureGroups.count, 1))
+        let highEnergy = energy >= 0.6
+
         for (index, fixture) in cue.fixtureGroups.enumerated() {
             let override = overrides[index + 1] ?? LightOverride()
             let resolved = override.resolved(cueColor: fixture.color.value, cueIntensity: fixture.intensity)
@@ -1072,6 +1085,16 @@ struct ImmersiveView: View {
                 gobo: fixture.gobo,
                 transition: cue.transition
             )
+
+            // Refresh this fixture's dynamic effect + base brightness for the per-frame LightEffectSystem.
+            // The resting aim was captured when the spotlight was built, so sweeps modulate around it; a
+            // fixture turned dark (override / enabled=false) carries 0 lumens so its strobe/chase stays off.
+            if let spot = root.findEntity(named: "spot_\(fixture.id)") as? SpotLight,
+               var effectComponent = spot.components[LightEffectComponent.self] {
+                effectComponent.effect = LightEffect.suggested(for: fixture.renderModel, highEnergy: highEnergy, slot: index)
+                effectComponent.baseLumens = Float(SpotLightRenderMath.lumens(forIntensity: resolved.intensity, model: fixture.renderModel)) * lumenScaleCompensation
+                spot.components.set(effectComponent)
+            }
 
             // Lasers also drive their visible beam fan (recolor + on/off) on top of the cone spill.
             if fixture.renderModel == .laser {

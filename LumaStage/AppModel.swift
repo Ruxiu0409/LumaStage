@@ -532,6 +532,10 @@ class AppModel {
             let result = try await aiClient.generateLook(from: prompt)
             conversationState = .applying
             try stageState.replaceLightingLook(result.look)
+            // A freshly generated look is a brand-new dynamic rig — drop stale per-light overrides so a
+            // prior "close the light 3" doesn't silently reattach to a different physical fixture (overrides
+            // are keyed by cue order, not fixture id). Mirrors openProject's reset.
+            lightOverrides = [:]
             generationSource = result.source
             lastExplanation = result.look.explanation
             persistCurrentProjectState()
@@ -681,6 +685,9 @@ class AppModel {
     /// voice command / a button), so it speaks regardless of the narration toggle.
     func readCurrentExplanationAloud() {
         narrator.speak("\(aiUnderstoodCommand)。\(lastExplanation.term)：\(lastExplanation.plainText)")
+        // Clear any prior error so reading the explanation doesn't leave the composer stuck on the red
+        // error panel (the feedback panel shows lastError first, regardless of conversationState).
+        lastError = nil
         conversationState = .explaining
     }
 

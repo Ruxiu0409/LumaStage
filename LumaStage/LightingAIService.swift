@@ -206,7 +206,10 @@ struct LightingLookDraft: Equatable {
             role: fixture.role,
             zone: fixture.zone,
             enabled: fixture.enabled,
-            intensity: fixture.intensity,
+            // The renderer is intensity-driven and never reads `enabled`, so a per-cue state the model
+            // emits as {enabled:false, intensity:0.7} would otherwise come up lit. Make `enabled`
+            // authoritative here: a disabled fixture assembles dark.
+            intensity: fixture.enabled ? fixture.intensity : 0,
             color: FixtureColor(
                 mode: .rgb,
                 value: FixtureColor.normalizedHex(fixture.colorHex) ?? fixture.colorHex
@@ -221,11 +224,11 @@ struct LightingLookDraft: Equatable {
 // MARK: - Renderable draft assembly
 
 extension LightingLookDraft {
-    /// One cue's worth of the only two beams the immersive scene actually renders: a performer-facing
-    /// front light and a backdrop wash. The renderer (`ImmersiveView.apply`) relights ONLY the
-    /// `.frontLight` and `.backgroundWash` roles, so a generated look made of any other role
-    /// (`wash`/`spot`) would validate fine yet leave the stage unchanged. Generation is constrained to
-    /// exactly these two beams (see `FoundationModelsLightingService`) so every look visibly relights.
+    /// One cue's worth of a performer-facing front light + a backdrop wash. NOTE: the renderer no longer
+    /// gates on role — `ImmersiveView.syncRig`/`apply` build and relight a spotlight for EVERY fixture in
+    /// the cue regardless of role. This two-beam `RenderableCue` path now backs only templates / mvpDemo /
+    /// legacy looks; on-device generation builds a dynamic 4–12 fixture rig via
+    /// `GeneratedLightingLook.makeValidatedLook`, not this.
     struct RenderableCue: Equatable {
         var frontLightIntensity: Double
         var frontLightHex: String
