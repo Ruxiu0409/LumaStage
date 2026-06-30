@@ -25,6 +25,7 @@
 				iPadPanel/PanelChatView.swift,
 				iPadPanel/PanelLightingView.swift,
 				iPadPanel/PanelRootView.swift,
+				LightEffect.swift,
 				LightingAIService.swift,
 				LightingFixtureCatalog.swift,
 				LightingModels.swift,

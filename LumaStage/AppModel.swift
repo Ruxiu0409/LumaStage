@@ -95,6 +95,14 @@ class AppModel {
     /// cleared ("all lights on" / "reset lights"). Empty = every light follows the cue.
     var lightOverrides: [Int: LightOverride] = [:]
 
+    /// SPEC 08 — group submasters (the fast live-control unit). `groups` is auto-derived from the
+    /// current rig's role/zone/type on every look change; `groupMasters` is the transient ride layer
+    /// keyed by `StandardFixtureGroup.id` (only groups actively ridden carry an entry). The renderer
+    /// folds these into the SAME cue → override resolution (NOT a second override state) and they reset
+    /// alongside `lightOverrides` on a new rig.
+    var groups: [FixtureGroupMask] = []
+    var groupMasters: [String: Double] = [:]
+
     /// Fixture observatory (volumetric) state. `isInspectingFixture` hides the project window while
     /// the observatory is open; `fixtureCarousel` is the single shared paging state for the two
     /// separate observatory windows (the volumetric model and the info card), so paging in the card
@@ -116,7 +124,7 @@ class AppModel {
     var typedPrompt = ""
     var aiUnderstoodCommand = "等待語音或文字輸入"
     var lastExplanation = LightingLook.mvpDemo().explanation
-    var generationSource: LightingGenerationSource = .foundationModels
+    var generationSource: LightingGenerationSource = .openAI
     private(set) var modelAvailability: LightingModelAvailability = .available
     var lastError: String?
 
@@ -143,10 +151,11 @@ class AppModel {
     }
 
     private static func makeDefaultLightingClient() -> any LightingLookGenerating {
+        let openAI = OpenAILightingService()
 #if canImport(FoundationModels)
-        return FoundationModelsLightingService()
+        return FallbackLightingService(primary: openAI, secondary: FoundationModelsLightingService())
 #else
-        return UnavailableLightingLookService()
+        return FallbackLightingService(primary: openAI, secondary: UnavailableLightingLookService())
 #endif
     }
 
@@ -419,6 +428,7 @@ class AppModel {
         desiredImmersiveScene = .stage
         stageState = StageState(lightingLook: project.lightingLook)
         lightOverrides = [:]
+        resetGroups()
         // A different project is a different rig; drop any stale per-light selection so the control card
         // can't index a fixture that no longer exists. Mirrors generate's reset.
         selectedLightNumber = nil
@@ -539,6 +549,7 @@ class AppModel {
             // prior "close the light 3" doesn't silently reattach to a different physical fixture (overrides
             // are keyed by cue order, not fixture id). Mirrors openProject's reset.
             lightOverrides = [:]
+            resetGroups()
             // Likewise drop a stale selection so the control card doesn't point at a now-missing fixture.
             selectedLightNumber = nil
             generationSource = result.source
@@ -628,7 +639,9 @@ class AppModel {
             plainText: "走場是依序播放一連串場景。按 GO 會以下一個場景設定的過場時間，從目前燈光平順過渡過去 —— 這就是專業燈控台跑一整場演出的方式。",
             actionSummary: aiUnderstoodCommand
         )
-        conversationState = .applying
+        // Cue ops are synchronous (the renderer cross-fades on its own); settle straight to .explaining so
+        // the composer shows the result instead of hanging forever on the pulsing "套用燈光中" spinner.
+        conversationState = .explaining
         lastError = nil
         persistCurrentProjectState()
         narrateIfEnabled(aiUnderstoodCommand)
@@ -647,7 +660,7 @@ class AppModel {
                 plainText: "場景串是一場演出的燈光腳本。新增的場景會複製目前的燈光作為起點，你可以再逐燈微調，串成完整的走台表。",
                 actionSummary: aiUnderstoodCommand
             )
-            conversationState = .applying
+            conversationState = .explaining
             lastError = nil
             persistCurrentProjectState()
             narrateIfEnabled(aiUnderstoodCommand)
@@ -666,7 +679,7 @@ class AppModel {
                 plainText: "刪除場景會把它從走台表中移除，其餘場景的順序保持不變。至少需保留一個場景。",
                 actionSummary: aiUnderstoodCommand
             )
-            conversationState = .applying
+            conversationState = .explaining
             lastError = nil
             persistCurrentProjectState()
             narrateIfEnabled(aiUnderstoodCommand)
@@ -774,6 +787,58 @@ class AppModel {
         lightOverrides[number] = nil
     }
 
+    // MARK: - Group submasters (SPEC 08): the fast live-control unit
+    //
+    // A handful of auto-derived groups (前光/背景洗/上舞台/動態/全部) the iPad rides as submaster faders.
+    // Folded into the SAME cue → override resolution the renderer already runs (`FixtureGroupMask` +
+    // `LightOverride.resolved(cueColor:cueIntensity:groupMaster:)`): the group master scales every member
+    // light that has NO explicit per-light intensity override (those still win — channel beats submaster);
+    // multi-group membership takes the HTP. This is a transient ride layer, not a second override state.
+
+    /// Re-derives the standard groups from the current rig and drops any ride levels — called on every
+    /// look change (new project / generation), mirroring the `lightOverrides` reset so a new rig gets
+    /// fresh groups and no stale masters.
+    private func resetGroups() {
+        groups = (selectedCue ?? cues.first).map(FixtureGroupMask.autoSeed(from:)) ?? []
+        groupMasters = [:]
+    }
+
+    /// Rides a group submaster (0...1). Quiet — mutates only the transient ride layer the renderer
+    /// observes, with no conversation-state churn, since the iPad rides these continuously.
+    func setGroupMaster(id: String, level: Double) {
+        groupMasters[id] = min(max(level, 0), 1)
+    }
+
+    /// Momentary bump/flash: `on` drives the group to full; `off` releases it back to following the cue.
+    func bumpGroup(id: String, on: Bool) {
+        if on { groupMasters[id] = 1.0 } else { groupMasters[id] = nil }
+    }
+
+    /// Releases a group submaster so its members follow the cue again.
+    func clearGroupMaster(id: String) {
+        groupMasters[id] = nil
+    }
+
+    /// The effective group master for the Nth light (1-based, cue order) — the HTP of the ridden groups
+    /// it belongs to, default 1.0.
+    func effectiveGroupMaster(forLight number: Int) -> Double {
+        guard let fixtures = selectedCue?.fixtureGroups, number >= 1, number <= fixtures.count else { return 1.0 }
+        return FixtureGroupMask.effectiveMaster(forFixtureId: fixtures[number - 1].id, groups: groups, masters: groupMasters)
+    }
+
+    /// Per-light effective masters for the renderer — only lights pulled off 1.0 are listed, so the
+    /// renderer defaults the rest. Reading `groupMasters` here is also what lets `ImmersiveView`'s
+    /// `body`-level call establish the Observation dependency the `update:` closure needs (the footgun).
+    func groupMasterByLight() -> [Int: Double] {
+        guard !groupMasters.isEmpty, let fixtures = selectedCue?.fixtureGroups else { return [:] }
+        var result: [Int: Double] = [:]
+        for (index, fixture) in fixtures.enumerated() {
+            let master = FixtureGroupMask.effectiveMaster(forFixtureId: fixture.id, groups: groups, masters: groupMasters)
+            if master != 1.0 { result[index + 1] = master }
+        }
+        return result
+    }
+
     private static func describe(_ command: LightCommand) -> String {
         switch command {
         case .close(let number): return "已關閉 \(StageLightLabel.displayName(number: number))"
@@ -794,7 +859,7 @@ class AppModel {
                 plainText: "場景是一種燈光狀態。切換場景時，LumaStage 會隨時間動畫呈現亮度與顏色的變化。",
                 actionSummary: "已選擇 \(selectedCue?.localizedDisplayName ?? id) 進行預覽與編輯。"
             )
-            conversationState = .applying
+            conversationState = .explaining
             persistCurrentProjectState()
             narrateIfEnabled(aiUnderstoodCommand)
         } catch {

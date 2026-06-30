@@ -48,7 +48,9 @@ struct LightEffect: Codable, Equatable {
         case .movingHeadBeam:
             return LightEffect(kind: .panSweep, speedHz: highEnergy ? 0.5 : 0.22, sizeDegrees: highEnergy ? 26 : 12, phase: phase)
         case .laser:
-            return highEnergy ? LightEffect(kind: .panSweep, speedHz: 0.7, sizeDegrees: 16, phase: phase) : .none
+            // No movement: the laser's visible aerial beam fan is static geometry the effects system does
+            // not animate, so sweeping only its cone spill would look broken (cone swings, fan frozen).
+            return .none
         case .ledStrobeBar:
             return highEnergy ? LightEffect(kind: .strobe, speedHz: 8, sizeDegrees: 0, phase: phase) : .none
         case .audienceBlinder:
@@ -117,7 +119,9 @@ enum LightEffectPlan {
     static func effects(for cue: LightingCue) -> [LightEffect] {
         let highEnergy = isHighEnergy(cue)
         return cue.fixtureGroups.enumerated().map { index, fixture in
-            LightEffect.suggested(for: fixture.renderModel, highEnergy: highEnergy, slot: index)
+            // AI-authored effect wins; otherwise fall back to the deterministic per-type default so a
+            // rig with no authored movement keeps its existing behaviour (no regression).
+            fixture.effect ?? LightEffect.suggested(for: fixture.renderModel, highEnergy: highEnergy, slot: index)
         }
     }
 }

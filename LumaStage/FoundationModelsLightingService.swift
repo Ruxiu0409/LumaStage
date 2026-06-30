@@ -71,6 +71,11 @@ struct FoundationModelsLightingService: LightingLookGenerating {
             let generated = try await session.respond(
                 to: Prompt(trimmedPrompt),
                 generating: GeneratedLightingLook.self,
+                // The @Generable schema is large (a 4–8 fixture rig × up-to-4 per-cue states); its textual
+                // description alone can blow the on-device model's context window (contextSizeExceeded).
+                // Constrained decoding still enforces the structure, so omit the schema text from the
+                // prompt to reclaim that context.
+                includeSchemaInPrompt: false,
                 options: options
             ).content
 
@@ -83,42 +88,27 @@ struct FoundationModelsLightingService: LightingLookGenerating {
         }
     }
 
+    // Kept deliberately SHORT: the on-device model has a small context window, and a long instructions
+    // block plus the structured-output schema can exceed it (contextSizeExceeded). The fixture-type and
+    // zone vocabularies are enforced by the @Generable enums, so they don't need re-listing here.
     private static let instructions = """
-    You are a lighting designer for LumaStage, designing a full lighting rig for a night outdoor
-    student-event stage. From the user's request, design the WHOLE scene.
+    You design a full stage lighting look for a night outdoor student event. Match the request's event and mood.
 
-    Treat the user's request as the primary driver: match the event and mood. A dance-crew showcase
-    ("熱舞社成發") wants an energetic, colorful rig — several moving head beams, a strobe, and one or two
-    lasers up on the truss, bold saturated colors, maybe gobos; a talk or award wants a few gentle front
-    fresnels and soft washes, warm and even. Pick a fixture count that fits: a big showcase uses 8–12
-    fixtures, a simple event 4–6.
+    Design a SHOW: an ordered list of 2 to 4 cues the operator steps through with GO, telling a short arc
+    (e.g. Opening → Build → Finale). The first cue is the soft establishing look; later cues escalate so the
+    sequence clearly progresses.
 
-    Available fixture types: frontFresnel, ledFresnel (soft performer front light); spotBarrel (tight
-    focused spot); movingHeadBeam (punchy moving beam for effects); washBar, backgroundBatten, ledPar
-    (broad color washes); ledStrobeBar (strobe/flash accents); audienceBlinder (big bright blinders
-    facing the crowd); laser (razor-thin saturated aerial beams — the most eye-catching effect, ideal
-    for drops, choruses and high-energy peaks; reach for it on energetic events, especially dance/EDM,
-    and prefer punchy saturated colors like green, red or blue for it).
-    Mounting zones: frontOfHouse (out front, lights performers), upstageTruss (behind, washes the
-    backdrop / beam effects), sideStageLeft, sideStageRight (side accents), floor (uplight from the deck).
+    Define the rig ONCE as 4 to 8 fixtures, a mix of types/zones suiting the request — energetic shows lean on
+    moving beams, a strobe and a laser with bold saturated colours; talks use a few gentle front washes. For
+    EVERY fixture give a `states` array with exactly one entry per cue, IN THE SAME ORDER as the cue list. Each
+    state: enabled, intensity 0.0–1.0, an RGB hex of exactly six digits like #FFD1A3 (no trailing text), beam
+    5 (tight) to 120 (wide), optional gobo (only when a texture is asked for). Contrast warm front vs.
+    cool/coloured back so it looks designed; a fixture may be off in some cues.
 
-    Design a SHOW: an ordered list of 2 to 5 cues the operator steps through with a GO button, telling a
-    short arc. A simple event can be just two cues (Opening, Highlight); a dance showcase or song wants
-    more — e.g. Opening → Build → Chorus → Finale, or Intro → Verse → Drop → Bows. Name each cue with a
-    short, human label in the order it plays. The first cue is the softer establishing look; later cues
-    should escalate or change energy so the sequence clearly progresses (not five near-identical cues).
+    Fixtures MAY specify a `movement` per cue for energetic moments (sweep/circle for moving beams, strobe for
+    accents, chase for colour washes); keep most cues still and reserve movement for peaks.
 
-    Define the rig ONCE as a list of fixtures. For EVERY fixture provide a `states` array with exactly one
-    entry per cue, IN THE SAME ORDER as the cue list — so states[0] is that fixture in the first cue,
-    states[1] in the second, and so on. Each state sets: enabled, intensity (0.0–1.0), an RGB hex color of
-    exactly six hex digits such as #FFD1A3 (no trailing comma or other text), beam spread in degrees
-    (5 tight … 120 wide), and an optional gobo. Give fixtures roles that contrast — warm front vs.
-    cool/colored backlight, for instance — so the stage looks designed, not flat. A fixture can be off
-    (enabled false / intensity 0) in some cues and on in others to build the arc.
-    Only use a gobo when the request calls for a texture (e.g. "starry backdrop", "dappled forest").
-
-    The explanation teaches one industry lighting term a beginner can understand, tied to this look.
-    Voice prompts may mix Chinese and English; interpret lighting vocabulary in either language.
+    The explanation teaches one beginner lighting term tied to this look. Prompts may mix Chinese and English.
     """
 
     private static func describe(_ reason: SystemLanguageModel.Availability.UnavailableReason) -> String {
@@ -197,10 +187,10 @@ struct GeneratedLightingLook {
     @Guide(description: "Short mood summary, e.g. 'high-energy, colorful, dance crew finale'")
     var mood: String
 
-    @Guide(description: "The ordered cue list — 2 to 5 cues the operator steps through with GO, telling a short arc (e.g. Opening, Build, Chorus, Finale). The first is the establishing look; later cues escalate or change energy.", .count(2...5))
+    @Guide(description: "The ordered cue list — 2 to 4 cues the operator steps through with GO, telling a short arc (e.g. Opening, Build, Finale). The first is the establishing look; later cues escalate or change energy.", .count(2...4))
     var cues: [GeneratedCue]
 
-    @Guide(description: "The whole lighting rig: the fixtures that together light this event. Pick a count and a mix of fixture types and zones that genuinely suit the request — e.g. several moving heads + strobes + colored washes for a dance showcase; a few gentle front fresnels and washes for a talk or award.", .count(4...12))
+    @Guide(description: "The whole lighting rig: the fixtures that together light this event. Pick a count and a mix of fixture types and zones that suit the request — e.g. moving heads + a strobe + colored washes for a dance showcase; a few gentle front fresnels and washes for a talk.", .count(4...8))
     var fixtures: [GeneratedFixture]
 
     @Guide(description: "One short teaching note about an industry lighting term used in this look")
@@ -239,7 +229,7 @@ struct GeneratedLightingLook {
         @Guide(description: "Where the fixture is mounted on the stage")
         var zone: GeneratedZone
 
-        @Guide(description: "This fixture's state in each cue, IN THE SAME ORDER as the cue list: states[0] is the first cue, states[1] the second, and so on. Provide exactly one state per cue.", .count(2...5))
+        @Guide(description: "This fixture's state in each cue, IN THE SAME ORDER as the cue list: states[0] is the first cue, states[1] the second, and so on. Provide exactly one state per cue.", .count(2...4))
         var states: [GeneratedFixtureState]
     }
 
@@ -259,6 +249,9 @@ struct GeneratedLightingLook {
 
         @Guide(description: "Optional projected pattern (gobo): none for a plain beam, breakup (dappled foliage), stripes (slats), stars (starfield), or grid (window). Use none unless the request clearly calls for a pattern.")
         var gobo: GeneratedGobo
+
+        @Guide(description: "Dynamic movement for this fixture in THIS cue: none (steady, default), sweep (beam fans side to side), circle (beam traces a circle), strobe (hard flashing), chase (colour wash pulses across the rig). Keep most cues none; reserve movement for energetic peaks.")
+        var movement: GeneratedMovement
     }
 
     @Generable
@@ -291,6 +284,15 @@ struct GeneratedLightingLook {
         case stripes
         case stars
         case grid
+    }
+
+    @Generable
+    enum GeneratedMovement {
+        case none
+        case sweep
+        case circle
+        case strobe
+        case chase
     }
 }
 
@@ -347,11 +349,37 @@ private extension GeneratedLightingLook.GeneratedFixture {
             zone: zone.stageZone,
             enabled: state.enabled,
             intensity: state.intensity,
-            colorHex: state.colorHex,
+            // Self-heal a bad colour at the AI boundary (a colour NAME, #FFF, RGBA, or prose) to white, so
+            // one un-normalizable colour dims just this light instead of failing validate() and rejecting
+            // the WHOLE generated look — likelier now that includeSchemaInPrompt:false drops the hex hint.
+            colorHex: FixtureColor.normalizedHex(state.colorHex) ?? "#FFFFFF",
             gobo: state.gobo.goboPattern,
             model: model,
-            beamAngleDegrees: state.beamAngleDegrees
+            beamAngleDegrees: state.beamAngleDegrees,
+            effect: state.movement.lightEffect(slot: index)
         )
+    }
+}
+
+private extension GeneratedLightingLook.GeneratedMovement {
+    /// Maps an AI-authored per-cue movement onto a `LightEffect` with sensible default speed/size. `none`
+    /// (and any unknown/degenerate value) yields nil — the renderer then falls back to the per-type
+    /// deterministic default — so a missing or off movement never crashes or forces motion. `slot` (the
+    /// fixture's rig index) staggers the phase so chases/sweeps ripple across the rig.
+    func lightEffect(slot: Int) -> LightEffect? {
+        let phase = (Double(slot) * 0.2).truncatingRemainder(dividingBy: 1)
+        switch self {
+        case .none:
+            return nil
+        case .sweep:
+            return LightEffect(kind: .panSweep, speedHz: 0.5, sizeDegrees: 26, phase: phase)
+        case .circle:
+            return LightEffect(kind: .circle, speedHz: 0.4, sizeDegrees: 22, phase: phase)
+        case .strobe:
+            return LightEffect(kind: .strobe, speedHz: 8, sizeDegrees: 0, phase: phase)
+        case .chase:
+            return LightEffect(kind: .colorChase, speedHz: 0.7, sizeDegrees: 0, phase: phase)
+        }
     }
 }
 

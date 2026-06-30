@@ -16,6 +16,14 @@ protocol LightingLookGenerating {
     func generateLook(from prompt: String) async throws -> LightingGenerationResult
 }
 
+/// Injectable network boundary for cloud backends (e.g. `OpenAILightingService`).
+///
+/// Mirrors `URLSession.data(for:)` so the default production wiring is a thin closure over
+/// `URLSession.shared`, while the headless smoke tests can inject a stub that returns a fixed
+/// `(Data, URLResponse)`. Kept Foundation-only here — same injectable-boundary pattern as
+/// `LightingLookGenerating` / `LumaSyncTransport` — so cloud services stay in the smoke compile set.
+typealias HTTPSend = @Sendable (URLRequest) async throws -> (Data, URLResponse)
+
 /// Foundation-only mirror of `SystemLanguageModel.Availability` so views and `AppModel`
 /// can render the "Apple Intelligence unavailable" state without importing FoundationModels.
 enum LightingModelAvailability: Equatable {
@@ -40,11 +48,14 @@ enum LightingModelAvailability: Equatable {
 
 enum LightingGenerationSource: String, Equatable {
     case foundationModels
+    case openAI
 
     var displayName: String {
         switch self {
         case .foundationModels:
             return "Apple Foundation Models"
+        case .openAI:
+            return "OpenAI（雲端）"
         }
     }
 }
@@ -93,6 +104,10 @@ struct LightingLookDraft: Equatable {
         /// derived from `role` when assembled. `beamAngleDegrees` likewise carries the per-fixture beam.
         var model: LightingFixtureVisualModel? = nil
         var beamAngleDegrees: Double? = nil
+        /// An AI-authored dynamic movement for this fixture in this cue (sweep/circle/strobe/chase).
+        /// Optional + back-compat: nil means "no authored movement", so the renderer falls back to the
+        /// per-type deterministic default in `LightEffectPlan`.
+        var effect: LightEffect? = nil
     }
 
     var lookName: String
@@ -216,7 +231,8 @@ struct LightingLookDraft: Equatable {
             ),
             fineControl: fineControl,
             gobo: fixture.gobo,
-            model: fixture.model
+            model: fixture.model,
+            effect: fixture.effect
         )
     }
 }

@@ -53,6 +53,11 @@ swiftc \
   LumaStage/LightingPatchSheet.swift \
   LumaStage/LightEffect.swift \
   LumaStage/StageLightAccessibility.swift \
+  LumaStage/LightControlCardPlacement.swift \
+  LumaStage/FixtureGroups.swift \
+  LumaStage/OpenAILightingService.swift \
+  LumaStage/FallbackLightingService.swift \
+  LumaStage/OpenAIKeychain.swift \
   -o /tmp/LumaStageCoreSmokeTests && /tmp/LumaStageCoreSmokeTests
 # prints "LumaStageCoreSmokeTests passed" and exits 0 on success
 ```

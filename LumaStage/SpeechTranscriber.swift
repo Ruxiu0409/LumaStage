@@ -22,15 +22,18 @@ final class SpeechTranscriber {
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
 
-    /// Prefers a Traditional-Chinese recognizer (the app's primary language) when the device supports it,
-    /// then the current locale, then en_US — so Chinese voice commands and design prompts can actually be
-    /// dictated (mixed Chinese/English). `SFSpeechRecognizer(locale:)` returns nil for an unsupported locale,
-    /// so this walks the preference list until one is available. Mirrors the locale gating used for generation.
+    /// Follows the system / Siri locale (`Locale.current`) — the SAME locale Apple Intelligence requires
+    /// set for on-device generation (e.g. English (US) for the demo, where the user speaks English; or a
+    /// supported Chinese locale). So speech recognition, the Foundation Models model, and the language the
+    /// user actually speaks all agree. Falls back to en-US, then the default recognizer, if `.current` has
+    /// no recognizer. (An earlier version hard-preferred zh-TW, which would mis-transcribe English commands
+    /// on an English-locale demo device — the recogniser must match what the operator actually says.)
     private static func makeRecognizer() -> SFSpeechRecognizer? {
-        for identifier in ["zh-TW", "zh-Hant-TW", "zh-Hant", Locale.current.identifier, "en_US"] {
-            if let recognizer = SFSpeechRecognizer(locale: Locale(identifier: identifier)) {
-                return recognizer
-            }
+        if let current = SFSpeechRecognizer(locale: Locale.current) {
+            return current
+        }
+        if let english = SFSpeechRecognizer(locale: Locale(identifier: "en_US")) {
+            return english
         }
         return SFSpeechRecognizer()
     }
@@ -58,7 +61,8 @@ final class SpeechTranscriber {
             // English lighting + show-control vocabulary…
             "wash", "spot", "front light", "background wash", "dimmer", "intensity", "brightness",
             "GO", "next cue", "previous cue", "blackout",
-            // …and the Traditional-Chinese terms a zh-TW recognizer should bias toward (the primary language).
+            // …plus Traditional-Chinese terms that help when the device locale IS Chinese (the recognizer
+            // follows Locale.current; on the en-US demo device the English terms above carry it).
             "暖色", "冷色", "藍色", "紅色", "綠色", "開場", "重點",
             "下一個場景", "上一個場景", "新增場景", "念出說明"
         ]
@@ -77,8 +81,10 @@ final class SpeechTranscriber {
         let inputNode = audioEngine.inputNode
         let format = inputNode.outputFormat(forBus: 0)
         inputNode.removeTap(onBus: 0)
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
-            self?.recognitionRequest?.append(buffer)
+        // Capture the request locally so the audio-thread tap never touches @MainActor `self` (a Swift 6
+        // data race). SFSpeechAudioBufferRecognitionRequest is safe to append to off the main actor.
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { [request] buffer, _ in
+            request.append(buffer)
         }
 
         audioEngine.prepare()

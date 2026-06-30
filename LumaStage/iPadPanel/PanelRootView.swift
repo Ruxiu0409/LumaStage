@@ -11,9 +11,10 @@ struct PanelRootView: View {
         case chat, lighting
     }
 
-    // TEMP — runs on baked-in sample data so the iPad UI works without a live Apple Vision Pro link.
-    // Swap `.mockPreview()` back to `LumaPanelModel()` to reconnect over Multipeer.
-    @State private var model = LumaPanelModel.mockPreview()
+    // Live link to the Apple Vision Pro host over Multipeer: the default `LumaPanelModel()` uses
+    // `MultipeerSyncTransport`, and `.task { model.start() }` below browses for the host. (Swap to
+    // `LumaPanelModel.mockPreview()` to drive the UI from baked-in sample data without a live host.)
+    @State private var model = LumaPanelModel()
     @State private var selectedTab: PanelTab = .lighting
 
     var body: some View {

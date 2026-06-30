@@ -51,6 +51,10 @@ private struct LightingOverview: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
+                // Primary live-control surface: group submasters + GO, the heart of the hand-the-judge
+                // demo beat. The fixture grid below stays as the design-time per-light drill-in.
+                PanelFaderBankView(model: model)
+
                 cueControl
 
                 if !look.mood.isEmpty {

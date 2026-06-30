@@ -305,6 +305,11 @@ struct FixtureGroup: Codable, Equatable, Identifiable {
     /// fixtures (Art-Net / sACN) or export a patch sheet. Optional + back-compat (old looks decode nil).
     var dmx: DMXPatch? = nil
 
+    /// An AI-authored dynamic movement/flash for this fixture (sweep/circle/strobe/chase). Optional +
+    /// back-compat (old looks decode nil). When set, it OVERRIDES the per-type deterministic default in
+    /// `LightEffectPlan.effects(for:)`; when nil, the renderer falls back to `LightEffect.suggested(...)`.
+    var effect: LightEffect? = nil
+
     var effectiveFineControl: FixtureFineControl {
         fineControl ?? .default(role: role, zone: zone)
     }
@@ -701,25 +706,33 @@ struct LightingLook: Codable, Equatable {
             let tilt: Double
         }
 
+        // A left/right-symmetric rig: every visible fixture has a mirror partner (the lone laser used to
+        // sit off to one side and read as awkward), with one centred strobe as the deliberate centrepiece.
+        // `syncRig` spreads each zone's fixtures evenly across mirror slots (-1…+1), so listing each zone's
+        // members in palindromic order lands the pairs symmetrically — back zone reads
+        // laser ¦ moving-head ¦ (centre) strobe ¦ moving-head ¦ laser.
         let specs: [Spec] = [
+            // FOH stands: the symmetric key-light pair.
             Spec(id: "key_l", name: "主光柔光燈（左）", model: .frontFresnel, zone: .stageFront, target: .downstage,
                  openingHex: "#FFE6C2", highlightHex: "#FFF1DC", openingIntensity: 0.55, highlightIntensity: 0.80, beam: 40, pan: -8, tilt: -35),
             Spec(id: "key_r", name: "主光柔光燈（右）", model: .frontFresnel, zone: .stageFront, target: .downstage,
                  openingHex: "#FFE6C2", highlightHex: "#FFF1DC", openingIntensity: 0.55, highlightIntensity: 0.80, beam: 40, pan: 8, tilt: -35),
+            // Upstage truss, palindromic so the pairs mirror: laser · moving head · centre strobe · moving head · laser.
+            Spec(id: "laser_l", name: "雷射燈（左）", model: .laser, zone: .stageBack, target: .fullStage,
+                 openingHex: "#22FF6A", highlightHex: "#2BFF88", openingIntensity: 0.0, highlightIntensity: 0.95, beam: 6, pan: -6, tilt: -6),
             Spec(id: "mh_l", name: "搖頭光束燈（左）", model: .movingHeadBeam, zone: .stageBack, target: .centerStage,
                  openingHex: "#2E6BFF", highlightHex: "#1E54FF", openingIntensity: 0.40, highlightIntensity: 0.95, beam: 14, pan: -20, tilt: -18),
+            Spec(id: "strobe", name: "LED 頻閃燈條（中）", model: .ledStrobeBar, zone: .stageBack, target: .fullStage,
+                 openingHex: "#FFFFFF", highlightHex: "#FFFFFF", openingIntensity: 0.0, highlightIntensity: 0.70, beam: 60, pan: 0, tilt: -10),
             Spec(id: "mh_r", name: "搖頭光束燈（右）", model: .movingHeadBeam, zone: .stageBack, target: .centerStage,
                  openingHex: "#A24BFF", highlightHex: "#FF2D9E", openingIntensity: 0.40, highlightIntensity: 0.95, beam: 14, pan: 20, tilt: -18),
+            Spec(id: "laser_r", name: "雷射燈（右）", model: .laser, zone: .stageBack, target: .fullStage,
+                 openingHex: "#22FF6A", highlightHex: "#2BFF88", openingIntensity: 0.0, highlightIntensity: 0.95, beam: 6, pan: 6, tilt: -6),
+            // Side booms: the symmetric PAR pair on opposite side zones.
             Spec(id: "par_l", name: "LED PAR（左）", model: .ledPar, zone: .stageLeft, target: .stageLeft,
                  openingHex: "#27D7E0", highlightHex: "#33E07A", openingIntensity: 0.50, highlightIntensity: 0.85, beam: 30, pan: 0, tilt: -22),
             Spec(id: "par_r", name: "LED PAR（右）", model: .ledPar, zone: .stageRight, target: .stageRight,
-                 openingHex: "#33E07A", highlightHex: "#27D7E0", openingIntensity: 0.50, highlightIntensity: 0.85, beam: 30, pan: 0, tilt: -22),
-            Spec(id: "strobe", name: "LED 頻閃燈條", model: .ledStrobeBar, zone: .stageBack, target: .fullStage,
-                 openingHex: "#FFFFFF", highlightHex: "#FFFFFF", openingIntensity: 0.0, highlightIntensity: 0.70, beam: 60, pan: 0, tilt: -10),
-            Spec(id: "blinder", name: "觀眾爆閃燈", model: .audienceBlinder, zone: .stageFront, target: .audience,
-                 openingHex: "#FFB46B", highlightHex: "#FFD9A8", openingIntensity: 0.0, highlightIntensity: 0.60, beam: 90, pan: 0, tilt: 10),
-            Spec(id: "laser", name: "雷射燈", model: .laser, zone: .stageBack, target: .fullStage,
-                 openingHex: "#22FF6A", highlightHex: "#2BFF88", openingIntensity: 0.0, highlightIntensity: 0.95, beam: 6, pan: 0, tilt: -6)
+                 openingHex: "#33E07A", highlightHex: "#27D7E0", openingIntensity: 0.50, highlightIntensity: 0.85, beam: 30, pan: 0, tilt: -22)
         ]
 
         func fixtures(highlight: Bool) -> [FixtureGroup] {
@@ -760,8 +773,8 @@ struct LightingLook: Codable, Equatable {
             ],
             explanation: LightingExplanation(
                 term: "Key Light",
-                plainText: "主光（Key Light）是打亮表演者的主要光源；其餘燈具圍繞它堆疊顏色與動態，營造層次。",
-                actionSummary: "已生成八支燈具的舞團 Showcase：暖色主光、冷暖對比的搖頭光束與 PAR、頻閃與觀眾爆閃點題。"
+                plainText: "主光（Key Light）是打亮表演者的主要光源；其餘燈具左右對稱地圍繞它堆疊顏色與動態，營造層次。",
+                actionSummary: "已生成九支燈具、左右對稱的舞團 Showcase：暖色主光、冷暖對比的搖頭光束與 PAR、中央頻閃，兩側對稱的綠色雷射點題。"
             )
         )
     }
@@ -836,7 +849,24 @@ struct LumaStageProject: Codable, Equatable, Identifiable {
     var lightingLook: LightingLook
 
     static func defaultProjects() -> [LumaStageProject] {
-        []
+        // Open the app on a complete, ready-to-play design instead of an empty home: the 9-fixture
+        // `showcaseDemo` rig (moving heads, PARs, strobe, blinder, laser) carrying an Opening→Highlight
+        // energy arc, so the user can GO straight into a real show with no AI generation. Doubles as the
+        // demo backup project. Starts on Opening (calm) so GO builds up to the high-energy finale where
+        // the dynamic effects ignite.
+        var showcaseLook = LightingLook.showcaseDemo()
+        showcaseLook.selectedCueId = "cue_opening"
+        return [
+            LumaStageProject(
+                id: "project_dance_showcase",
+                name: "舞團演出 Showcase",
+                venueDescription: "戶外桁架舞台",
+                eventType: "舞團成發",
+                lastEditedDescription: "可直接播放的示範秀",
+                stageLayout: .defaultStudentOutdoor(),
+                lightingLook: showcaseLook
+            )
+        ]
     }
 
     static func demoProjects() -> [LumaStageProject] {

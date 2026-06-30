@@ -20,6 +20,12 @@ struct ImmersiveView: View {
     // a stable origin (not the running value) for the duration of the gesture. nil between drags.
     @State private var dragBaseIntensity: Double?
 
+    // The light number the control card is currently placed for. Placement (and the card's
+    // ManipulationComponent re-arm) runs ONCE when the selection becomes a *new* number — so the card
+    // appears beside the just-picked light, then stays where the user drags it instead of being reset
+    // every frame. nil = no light selected / card hidden.
+    @State private var cardPlacedForLight: Int?
+
     var body: some View {
         // Establish a body-level Observation dependency on the lighting look so a generation-
         // or cue-driven look change re-evaluates this body, which re-runs the RealityView
@@ -36,6 +42,9 @@ struct ImmersiveView: View {
         // which toggles the highlight ring and the floating control card. Same Observation footgun as
         // the reads above: the `update:` closure registers no dependencies of its own.
         let _ = appModel.selectedLightNumber
+        // And on the group submasters (SPEC 08) so an iPad fader ride re-runs the update closure and
+        // folds the new master into the relight. Same Observation footgun as the reads above.
+        let _ = appModel.groupMasters
 
         RealityView { content, attachments in
             let root = Self.makeStageRoot(layout: appModel.stageLayout)
@@ -45,16 +54,17 @@ struct ImmersiveView: View {
                 Self.apply(
                     selectedCue,
                     overrides: appModel.lightOverrides,
+                    groupMasters: appModel.groupMasterByLight(),
                     to: root,
-                    manualTransition: appModel.selectedLightNumber != nil ? CueTransition(duration: 0.12, easing: "easeOut") : nil
+                    manualLightNumber: appModel.selectedLightNumber
                 )
             }
-            // The manual per-light control card rides as a SwiftUI attachment, parented to the root
-            // once here; the `update:` closure positions it in front of the user and toggles its
-            // visibility by selection. It is NOT anchored to a (possibly 5m-high) fixture.
+            // The manual per-light control card rides as a SwiftUI attachment under a small grab bar (so it
+            // can be moved without its collision eating the controls' taps); the `update:` closure places it
+            // beside the selected light and toggles visibility. It is NOT anchored to a (possibly 5m-high) fixture.
             if let card = attachments.entity(for: Self.lightControlCardID) {
                 card.name = Self.lightControlCardName
-                root.addChild(card)
+                Self.installedCardHandle(for: card, in: root).isEnabled = false   // hidden until a light is selected
             }
             content.add(root)
         } update: { content, attachments in
@@ -71,23 +81,22 @@ struct ImmersiveView: View {
                 Self.apply(
                     selectedCue,
                     overrides: appModel.lightOverrides,
+                    groupMasters: appModel.groupMasterByLight(),
                     to: root,
-                    manualTransition: appModel.selectedLightNumber != nil ? CueTransition(duration: 0.12, easing: "easeOut") : nil
+                    manualLightNumber: appModel.selectedLightNumber
                 )
             }
 
             // Highlight the pick proxy of the currently selected light (and clear any stale ring).
             Self.syncSelectionHighlight(selectedLightNumber: appModel.selectedLightNumber, in: root)
 
-            // Show the control card only while a light is selected, floating at a reachable spot in
-            // front of the user (re-parented here as a fallback in case the make closure ran before
-            // the attachment resolved).
+            // Show the control card only while a light is selected, placing it beside the just-picked
+            // light (re-parented here as a fallback in case the make closure ran before the attachment
+            // resolved). Placement happens ONCE per selection change so dragging the card sticks.
             if let card = attachments.entity(for: Self.lightControlCardID) {
-                if card.parent == nil {
-                    card.name = Self.lightControlCardName
-                    root.addChild(card)
-                }
-                Self.updateLightControlCard(card, selectedLightNumber: appModel.selectedLightNumber)
+                card.name = Self.lightControlCardName
+                let handle = Self.installedCardHandle(for: card, in: root)
+                placeLightControlCardIfSelectionChanged(handle, in: root, selectedLightNumber: appModel.selectedLightNumber)
             }
 
             // Room-spill mode hides the opaque venue so the real room shows through passthrough.
@@ -608,11 +617,15 @@ struct ImmersiveView: View {
         at placement: (position: Vector3Meters, aim: Vector3Meters),
         to rig: Entity
     ) {
+        // FOH fixtures stand on the floor (label floats above them); everything else — truss-hung heads
+        // and the laser emitter — hangs high, so its label drops BELOW the fixture to clear the truss.
+        let isFrontOfHouse = fixture.zone == .stageFront || fixture.renderModel.defaultMountZone == .stageFront
+
         if fixture.renderModel == .laser {
             // The laser builds its own emitter + visible aerial beam fan; the spotlight below still adds
             // a faint colour spill on the surfaces the cone reaches.
             addLaserProjector(name: "laser_\(fixture.id)", to: rig, source: placement.position, beamColorHex: fixture.color.value)
-        } else if fixture.zone == .stageFront || fixture.renderModel.defaultMountZone == .stageFront {
+        } else if isFrontOfHouse {
             addFrontLightStand(name: "stand_\(fixture.id)", to: rig, at: placement.position, aim: placement.aim)
         } else {
             addMovingHeadFixture(
@@ -632,7 +645,7 @@ struct ImmersiveView: View {
             beamAngleDegrees: fixture.effectiveFineControl.beamAngleDegrees
         )
 
-        addLightLabel(number: lightNumber, near: placement.position, to: rig)
+        addLightLabel(number: lightNumber, near: placement.position, mountedAbove: isFrontOfHouse, to: rig)
         addLightPickTarget(
             number: lightNumber,
             model: fixture.renderModel,
@@ -671,7 +684,10 @@ struct ImmersiveView: View {
             materials: [UnlitMaterial(color: UIColor(white: 1, alpha: 0.02))]
         )
         pick.name = "\(lightPickPrefix)\(number)"
-        pick.position = scenePoint(position) + SIMD3<Float>(0, sceneLength(0.34), 0)
+        // Sit the pick proxy ON THE FIXTURE itself (not at the label's +0.34 spot) so the floating
+        // "Light N" label is no longer trapped inside this 16cm sphere / its selection ring — you pinch
+        // the light, the ring haloes the light, and the label reads clearly in the clear space above it.
+        pick.position = scenePoint(position)
         pick.generateCollisionShapes(recursive: false)
         pick.components.set(InputTargetComponent())
         pick.components.set(HoverEffectComponent())
@@ -775,14 +791,89 @@ struct ImmersiveView: View {
 
     private static let dragIntensityPerPoint = 1.0 / 400.0 // vertical points → 0...1 intensity; tune on device
 
-    /// Shows the manual control card only while a light is selected and parks it at a reachable
-    /// floating spot in front of the user, facing them — deliberately NOT at the (possibly 5m-high)
-    /// fixture, so the controls stay within arm's reach.
-    private static func updateLightControlCard(_ card: Entity, selectedLightNumber: Int?) {
-        card.isEnabled = (selectedLightNumber != nil)
-        // World-space spot ~1m in front, a touch below eye level. The card's content faces +Z, which
-        // already points back toward the viewer at the origin, so no extra rotation is needed.
-        card.position = SIMD3<Float>(0.0, 1.2, -1.0)
+    /// Approx viewer position used to pull the card within reach (origin at standing eye level). A fixed
+    /// origin is simpler than an ARKit deviceAnchor and is good enough since the stage sits in front of
+    /// the seated/standing user; switch to deviceAnchor later if "beside what I'm looking at" needs it.
+    private static let cardViewerPosition = SIMD3<Float>(0, 1.2, 0)
+
+    /// Repositions the manual control card ONLY when the selection becomes a *different* light number
+    /// (compared to `cardPlacedForLight`) — so the card appears beside the just-picked light, then stays
+    /// wherever the user drags it instead of being snapped back every `update:` frame (the old per-frame
+    /// `card.position = …` was exactly that bug, fighting the drag).
+    ///
+    /// - nil selection → hide the card and clear the placed-for marker.
+    /// - new number → find that light's pick proxy (`lightpick_<n>`), take its root-space position, run
+    ///   `LightControlCardPlacement.position` to get a reachable spot beside it, place + show the card,
+    ///   (re)arm its move gesture, and record the number.
+    /// - unchanged selection → leave `card.position` untouched (the whole point).
+    /// `handle` is the grab bar (movability already configured in `installedCardHandle`); positioning /
+    /// showing it carries its child card. Disabling it hides the card too (RealityKit `isEnabled` cascades).
+    private func placeLightControlCardIfSelectionChanged(_ handle: Entity, in root: Entity, selectedLightNumber: Int?) {
+        guard selectedLightNumber != cardPlacedForLight else { return }
+
+        guard let number = selectedLightNumber else {
+            handle.isEnabled = false
+            cardPlacedForLight = nil
+            return
+        }
+
+        // Place beside the just-picked light. If the proxy isn't found yet (rig still building), leave the
+        // card hidden and don't record the number, so a later frame retries placement for this selection.
+        guard let proxy = root.findEntity(named: "\(Self.lightPickPrefix)\(number)") else {
+            handle.isEnabled = false
+            return
+        }
+
+        let lightWorld = proxy.position(relativeTo: root)
+        handle.position = LightControlCardPlacement.position(lightWorld: lightWorld, viewer: Self.cardViewerPosition)
+        handle.isEnabled = true
+        cardPlacedForLight = number
+    }
+
+    /// Lets the user grab and reposition the card, mirroring `FixtureObservatoryView`: RealityKit's system
+    /// `ManipulationComponent` (one-hand translate) on the attachment entity, with `releaseBehavior = .stay`
+    /// so it stays where it's left rather than snapping back. Scale + rotate are LOCKED (`dynamics`) — a flat
+    /// control card should only be slid around, not resized or spun. `configureEntity` adds the input target /
+    /// hover / collision; the card is not a `lightpick_<n>`, so the dim-drag gesture early-returns for it and
+    /// the select-tap can't parse a number off it — neither existing gesture is disturbed. Re-armed on each
+    /// (re)placement so the collision box tracks the attachment's current visual bounds.
+    private static let lightControlHandleName = "light_control_handle"
+
+    /// Wraps the control card under a small **visible grab bar** so the user moves the card by dragging the
+    /// BAR. The bar carries the `ManipulationComponent` + its own (small, mesh-derived) collision; the card
+    /// stays a pure SwiftUI attachment with **no** input/collision component, so its slider & buttons remain
+    /// fully tappable. (Putting `ManipulationComponent`/`InputTargetComponent` on the card itself captured
+    /// every pinch and made the controls dead — the "點不了" regression.) Moving the bar moves its child card.
+    /// Idempotent: returns the existing bar (re-parenting the card under it if needed). The bar is the entity
+    /// placement positions and shows/hides; the card follows as its child.
+    @discardableResult
+    private static func installedCardHandle(for card: Entity, in root: Entity) -> Entity {
+        if let existing = root.findEntity(named: lightControlHandleName) {
+            if card.parent !== existing { existing.addChild(card) }
+            return existing
+        }
+
+        let bar = ModelEntity(
+            mesh: .generateBox(size: SIMD3<Float>(0.16, 0.018, 0.02), cornerRadius: 0.008),
+            materials: [SimpleMaterial(color: UIColor(white: 0.95, alpha: 0.9), isMetallic: false)]
+        )
+        bar.name = lightControlHandleName
+        // The card hangs below the bar (its pivot is its centre); offset is approximate — tune on device.
+        card.position = SIMD3<Float>(0, -0.24, 0)
+        bar.addChild(card)
+
+        // Manipulation lives on the BAR; `configureEntity` (no explicit shapes) derives the collision from the
+        // bar's own small mesh, so ONLY the bar is grabbable. Slide-only (lock scale + rotate); stays put.
+        ManipulationComponent.configureEntity(bar)
+        if var manipulation = bar.components[ManipulationComponent.self] {
+            manipulation.releaseBehavior = .stay
+            manipulation.dynamics.scalingBehavior = .none
+            manipulation.dynamics.primaryRotationBehavior = .none
+            manipulation.dynamics.secondaryRotationBehavior = .none
+            bar.components.set(manipulation)
+        }
+        root.addChild(bar)
+        return bar
     }
 
     /// Walks a tapped entity up to the nearest `lightpick_<n>` ancestor and parses its 1-based light
@@ -801,10 +892,14 @@ struct ImmersiveView: View {
     /// A small floating "Light N" name tag above a fixture (RealityKit text, unlit so it reads at any
     /// brightness, on a dark backing). Faces +Z (toward the audience/viewer). Lets the user see which
     /// number to say for single-light commands.
-    private static func addLightLabel(number: Int, near position: Vector3Meters, to rig: Entity) {
+    private static func addLightLabel(number: Int, near position: Vector3Meters, mountedAbove: Bool, to rig: Entity) {
         let label = makeLabelEntity(StageLightLabel.displayName(number: number))
         label.name = "light_label_\(number)"
-        label.position = scenePoint(position) + SIMD3<Float>(0, sceneLength(0.34), 0)
+        // FOH labels float above the fixture; truss-hung labels drop below it (toward the deck) so they
+        // clear the truss beams/connectors instead of poking into them. The label faces +Z (the
+        // audience), so it reads from the front either way.
+        let offsetY = mountedAbove ? sceneLength(0.34) : -sceneLength(0.34)
+        label.position = scenePoint(position) + SIMD3<Float>(0, offsetY, 0)
         rig.addChild(label)
     }
 
@@ -1308,15 +1403,22 @@ struct ImmersiveView: View {
     /// (built by `syncRig`). Dynamic over any number/type of fixtures. Per-light manual overrides
     /// (keyed by the 1-based light number = cue order) are layered on top — "close the light 3"
     /// fades that one fixture to 0 over the same transition.
-    private static func apply(_ cue: LightingCue, overrides: [Int: LightOverride], to root: Entity, manualTransition: CueTransition? = nil) {
-        // A cue-level energy read: a bright/punchy look brings the rig alive (sweeps, strobe, chase); a
-        // calm cue holds the beams steady. The gate lives in `LightEffectPlan` so the in-app debug readout
-        // reports exactly what this renderer animates.
-        let highEnergy = LightEffectPlan.isHighEnergy(cue)
+    private static func apply(_ cue: LightingCue, overrides: [Int: LightOverride], groupMasters: [Int: Double] = [:], to root: Entity, manualLightNumber: Int? = nil) {
+        // The per-fixture effects (AI-authored override > per-type default), from the same shared Plan the
+        // debug readout uses, so the rendered movement and the debug panel can never drift. The Plan does
+        // the cue-level energy gate internally: a bright/punchy look brings the rig alive (sweeps, strobe,
+        // chase) while a calm cue holds the beams steady.
+        let effects = LightEffectPlan.effects(for: cue)
 
         for (index, fixture) in cue.fixtureGroups.enumerated() {
             let override = overrides[index + 1] ?? LightOverride()
-            let resolved = override.resolved(cueColor: fixture.color.value, cueIntensity: fixture.intensity)
+            // Fold the group submaster (SPEC 08) into the same resolution: it scales a light with no
+            // explicit per-light intensity override; per-light overrides still win. Default 1.0 = no ride.
+            let resolved = override.resolved(
+                cueColor: fixture.color.value,
+                cueIntensity: fixture.intensity,
+                groupMaster: groupMasters[index + 1] ?? 1.0
+            )
             updateSpotLight(
                 named: "spot_\(fixture.id)",
                 in: root,
@@ -1325,9 +1427,10 @@ struct ImmersiveView: View {
                 intensity: resolved.intensity,
                 beamAngleDegrees: fixture.effectiveFineControl.beamAngleDegrees,
                 gobo: fixture.gobo,
-                // While a light is under manual control the relight uses a snappy transition so a
-                // slider/pinch-drag feels live; otherwise nil keeps the normal cue cross-fade.
-                transition: manualTransition ?? cue.transition
+                // Only the fixture under manual control relights with the snappy transition (so a slider /
+                // pinch-drag on IT feels live); every other fixture keeps the cue's cross-fade, so a GO
+                // while a light is selected no longer hard-snaps the WHOLE rig over 0.12s.
+                transition: (manualLightNumber == index + 1) ? CueTransition(duration: 0.12, easing: "easeOut") : cue.transition
             )
 
             // Refresh this fixture's dynamic effect + base brightness for the per-frame LightEffectSystem.
@@ -1335,7 +1438,7 @@ struct ImmersiveView: View {
             // fixture turned dark (override / enabled=false) carries 0 lumens so its strobe/chase stays off.
             if let spot = root.findEntity(named: "spot_\(fixture.id)") as? SpotLight,
                var effectComponent = spot.components[LightEffectComponent.self] {
-                effectComponent.effect = LightEffect.suggested(for: fixture.renderModel, highEnergy: highEnergy, slot: index)
+                effectComponent.effect = effects[index]
                 effectComponent.baseLumens = Float(SpotLightRenderMath.lumens(forIntensity: resolved.intensity, model: fixture.renderModel)) * lumenScaleCompensation
                 spot.components.set(effectComponent)
             }

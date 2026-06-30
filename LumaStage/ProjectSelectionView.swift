@@ -4,6 +4,7 @@ struct ProjectSelectionView: View {
     @Environment(AppModel.self) private var appModel
     @State private var showsFixtureIntro = false
     @State private var showsProjectTemplatePicker = false
+    @State private var showsOpenAISettings = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -23,6 +24,10 @@ struct ProjectSelectionView: View {
                 appModel.createProject(template: template.kind)
             }
         }
+        .sheet(isPresented: $showsOpenAISettings) {
+            OpenAISettingsView()
+                .environment(appModel)
+        }
     }
 
     private var header: some View {
@@ -40,6 +45,17 @@ struct ProjectSelectionView: View {
             .accessibilityAddTraits(.isHeader)
 
             Spacer()
+
+            Button("設定", systemImage: "gearshape") {
+                showsOpenAISettings = true
+            }
+            .font(.callout.weight(.semibold))
+            .labelStyle(.iconOnly)
+            .lumaGlassButton()
+            .lumaGazeTarget()
+            .tint(LumaStageDesign.textSecondary)
+            .accessibilityLabel("設定")
+            .accessibilityHint("開啟設定，輸入 OpenAI API 金鑰")
 
             Button("新增專案", systemImage: "plus") {
                 showsProjectTemplatePicker = true

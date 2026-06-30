@@ -114,6 +114,10 @@ final class LumaSyncCoordinator {
             appModel.appendCue()
         case .removeCue(let id):
             appModel.removeCue(id: id)
+        case .setGroupMaster(let groupId, let level):
+            appModel.setGroupMaster(id: groupId, level: level)
+        case .bumpGroup(let groupId, let on):
+            appModel.bumpGroup(id: groupId, on: on)
         }
     }
 
@@ -132,6 +136,7 @@ final class LumaSyncCoordinator {
             _ = appModel.lastError
             _ = appModel.stageImmersionMode
             _ = appModel.selectedCueId
+            _ = appModel.groupMasters
         } onChange: { [weak self] in
             Task { @MainActor in
                 guard let self else { return }

@@ -120,4 +120,11 @@ enum LumaControlCommand: Codable, Equatable {
     case appendCue
     /// Maps to `AppModel.removeCue(id:)` — remove a cue from the stack (never the last one).
     case removeCue(id: String)
+    /// Maps to `AppModel.setGroupMaster(id:level:)` — ride a group submaster (0...1). The `groupId` is a
+    /// `StandardFixtureGroup.id` (e.g. "group_front"); scales every member light with no explicit
+    /// per-light intensity override (SPEC 08 load invariant).
+    case setGroupMaster(groupId: String, level: Double)
+    /// Maps to `AppModel.bumpGroup(id:on:)` — momentary flash: `on` drives the group to full, `off`
+    /// releases it back to following the cue.
+    case bumpGroup(groupId: String, on: Bool)
 }

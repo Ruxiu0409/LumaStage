@@ -4,7 +4,7 @@ import Foundation
 struct LumaStageCoreSmokeTests {
     static func main() async throws {
         try validatesDemoLookDefaults()
-        defaultProjectListStartsEmpty()
+        try defaultProjectsShipPlayableShowcase()
         spotLightRenderMathMapsIntensityAndBeamAngle()
         try newProjectFactoryCreatesValidProject()
         try newProjectFactoryCreatesDefaultStageLayout()
@@ -42,6 +42,8 @@ struct LumaStageCoreSmokeTests {
         lightingFixtureCatalogCoversCurrentVocabulary()
         fixtureCarouselPagesAndWraps()
         try lumaSyncProtocolRoundTrips()
+        try groupAutoSeedFromRoleZone()
+        groupMasterResolutionAndPrecedence()
         loopbackTransportDeliversMessages()
         try patchesOnlySelectedCue()
         try fineControlPatchesOnlySelectedFixtureInSelectedCue()
@@ -51,6 +53,8 @@ struct LumaStageCoreSmokeTests {
         lightingLookDraftRejectsInvalidValues()
         normalizedHexToleratesModelNoise()
         try goboFlowsThroughDraftAndSurvivesCodec()
+        try aiEffectFlowsThroughDraftAndSurvivesCodec()
+        try lightEffectPlanPrefersAuthoredEffectOverSuggested()
         try dmxAndTargetSurviveValidationAndCodec()
         try showcaseDemoIsValidAndDiverse()
         try aiDraftGuaranteesRenderableFrontAndBackgroundFixtures()
@@ -70,6 +74,11 @@ struct LumaStageCoreSmokeTests {
         try humanoidFigurePlanIsAnatomicallyOrdered()
         aiComposerPlacementClampsWithinReach()
         await unavailableLightingServiceReportsUnavailable()
+        lightControlCardPlacementStaysReachable()
+        try await openAIServiceDecodesAndValidates()
+        await openAIServiceSurfacesRefusal()
+        await openAIServiceRejectsOutOfRangeViaValidator()
+        try await fallbackServiceFallsBackWhenPrimaryThrows()
         print("LumaStageCoreSmokeTests passed")
     }
 
@@ -82,10 +91,16 @@ struct LumaStageCoreSmokeTests {
         try look.validate()
     }
 
-    private static func defaultProjectListStartsEmpty() {
+    private static func defaultProjectsShipPlayableShowcase() throws {
         let projects = LumaStageProject.defaultProjects()
 
-        expect(projects.isEmpty, "Project home should start empty by default")
+        // The app now opens on a ready-to-play default design (the showcase show) instead of an empty
+        // home, so this guards that the shipped default exists and is a valid, playable look.
+        expect(!projects.isEmpty, "App should open on a ready-to-play default project, not an empty home")
+        let showcase = projects.first
+        expect(showcase?.id == "project_dance_showcase", "the default project is the showcase show")
+        expect((showcase?.lightingLook.cues.count ?? 0) >= 2, "a playable show ships at least Opening + Highlight cues")
+        try showcase?.lightingLook.validate()
     }
 
     private static func spotLightRenderMathMapsIntensityAndBeamAngle() {
@@ -601,11 +616,93 @@ struct LumaStageCoreSmokeTests {
         try roundTrip(.control(.goToPreviousCue))
         try roundTrip(.control(.appendCue))
         try roundTrip(.control(.removeCue(id: "cue_highlight")))
+        try roundTrip(.control(.setGroupMaster(groupId: "group_front", level: 0.5)))
+        try roundTrip(.control(.bumpGroup(groupId: "group_movers", on: true)))
 
         for role in LumaPeerRole.allCases {
             try roundTrip(.hello(role: role))
         }
         expect(LumaConversationState.empty.messages.isEmpty, "Empty conversation default should carry no messages")
+    }
+
+    // MARK: - SPEC 08: group submasters
+
+    /// A small rig exercising each `StandardFixtureGroup` predicate (role / zone / render model).
+    private static func groupTestCue() -> LightingCue {
+        func fixture(_ id: String, role: FixtureRole, zone: StageZone, model: LightingFixtureVisualModel?) -> FixtureGroup {
+            FixtureGroup(id: id, name: id, role: role, zone: zone, enabled: true,
+                         intensity: 0.8, color: FixtureColor(mode: .rgb, value: "#FFFFFF"), model: model)
+        }
+        return LightingCue(
+            id: "cue_opening",
+            name: "Opening",
+            transition: .mvpDefault,
+            fixtureGroups: [
+                fixture("f_front", role: .frontLight, zone: .stageFront, model: .frontFresnel),
+                fixture("f_back", role: .backgroundWash, zone: .stageBack, model: .backgroundBatten),
+                fixture("f_mover", role: .spot, zone: .stageBack, model: .movingHeadBeam),
+                fixture("f_par", role: .wash, zone: .stageLeft, model: .ledPar)
+            ]
+        )
+    }
+
+    /// Groups are auto-derived from each fixture's role / zone / render model — no authored schema. An
+    /// empty group is omitted so the panel never shows a fader that controls nothing.
+    private static func groupAutoSeedFromRoleZone() throws {
+        let groups = FixtureGroupMask.autoSeed(from: groupTestCue())
+        func members(_ id: String) -> [String]? { groups.first { $0.id == id }?.members }
+
+        expect(members("group_front") == ["f_front"], "前光 = front-role / stageFront fixtures")
+        expect(members("group_backgroundWash") == ["f_back"], "背景洗 = backgroundWash-role fixtures")
+        expect(members("group_upstage") == ["f_back", "f_mover"], "上舞台 = every stageBack fixture, in cue order")
+        expect(members("group_movers") == ["f_mover"], "動態 = moving heads / lasers / strobes by render model")
+        expect(members("group_all")?.count == 4, "全部 = the whole rig")
+
+        // A rig with no effect fixtures omits the 動態 group entirely.
+        let calm = LightingCue(id: "c", name: "Opening", transition: .mvpDefault,
+                               fixtureGroups: [groupTestCue().fixtureGroups[0]])
+        expect(FixtureGroupMask.autoSeed(from: calm).contains { $0.id == "group_movers" } == false,
+               "An empty group is omitted from the seed")
+    }
+
+    /// The SPEC 08 load invariant: `final = isOff ? 0 : (override.intensity ?? cueIntensity × groupMaster)`,
+    /// per-light override beats the master, colour is master-independent, and multi-group membership takes
+    /// the HTP (highest) of the ridden submasters (default 1.0).
+    private static func groupMasterResolutionAndPrecedence() {
+        let groups = FixtureGroupMask.autoSeed(from: groupTestCue())
+        func master(_ id: String, _ masters: [String: Double]) -> Double {
+            FixtureGroupMask.effectiveMaster(forFixtureId: id, groups: groups, masters: masters)
+        }
+        func approx(_ a: Double, _ b: Double) -> Bool { abs(a - b) < 1e-9 }
+
+        // Master scales a light with no explicit intensity override.
+        let mFront = master("f_front", ["group_front": 0.5])
+        expect(approx(mFront, 0.5), "front master rides at 0.5")
+        let scaled = LightOverride().resolved(cueColor: "#FFFFFF", cueIntensity: 0.8, groupMaster: mFront)
+        expect(approx(scaled.intensity, 0.4), "cueIntensity × master = 0.8 × 0.5 = 0.4")
+
+        // An explicit per-light intensity override beats the master (channel beats submaster).
+        var withLevel = LightOverride(); withLevel.intensity = 0.9
+        expect(approx(withLevel.resolved(cueColor: "#FFFFFF", cueIntensity: 0.8, groupMaster: 0.5).intensity, 0.9),
+               "explicit per-light intensity wins over the group master")
+
+        // isOff forces 0 regardless of the master.
+        var off = LightOverride(); off.isOff = true
+        expect(approx(off.resolved(cueColor: "#FFFFFF", cueIntensity: 0.8, groupMaster: 0.5).intensity, 0),
+               "isOff blacks the light out regardless of master")
+
+        // A colour override applies and is unaffected by the master; intensity still scales.
+        var coloured = LightOverride(); coloured.colorHex = "#FF0000"
+        let c = coloured.resolved(cueColor: "#FFFFFF", cueIntensity: 0.8, groupMaster: 0.5)
+        expect(c.color == "#FF0000", "colour override applies and the master does not touch colour")
+        expect(approx(c.intensity, 0.4), "intensity still scales by the master under a colour-only override")
+
+        // Multi-group membership: HTP (highest) of the ridden submasters.
+        let mMover = master("f_mover", ["group_upstage": 0.3, "group_movers": 0.9])
+        expect(approx(mMover, 0.9), "a fixture in several ridden groups takes the highest (HTP)")
+
+        // A fixture whose groups are untouched defaults to 1.0 (parked submaster doesn't pull it down).
+        expect(approx(master("f_par", ["group_front": 0.5]), 1.0), "an unridden fixture defaults to master 1.0")
     }
 
     private static func loopbackTransportDeliversMessages() {
@@ -793,6 +890,75 @@ struct LumaStageCoreSmokeTests {
         expect(legacy.fineControl == nil, "Legacy fixtures without a fineControl field should still decode")
     }
 
+    // SPEC 01: an AI-authored `effect` on a draft fixture must survive assembly into the look's
+    // `FixtureGroup`, round-trip through Codable, and decode to nil from JSON written before `effect`
+    // existed (additive + back-compat).
+    private static func aiEffectFlowsThroughDraftAndSurvivesCodec() throws {
+        let sweep = LightEffect(kind: .panSweep, speedHz: 0.5, sizeDegrees: 26, phase: 0.2)
+        let draft = LightingLookDraft(
+            lookName: "Moving Beams",
+            mood: "energetic, kinetic",
+            openingFixtures: [
+                LightingLookDraft.Fixture(id: "beam_l", name: "Beam L", role: .spot, zone: .stageLeft, enabled: true, intensity: 0.7, colorHex: "#3A6BFF", model: .movingHeadBeam, effect: sweep),
+                LightingLookDraft.Fixture(id: "front", name: "Front", role: .frontLight, zone: .stageFront, enabled: true, intensity: 0.6, colorHex: "#FFD1A3")
+            ],
+            highlightFixtures: [
+                LightingLookDraft.Fixture(id: "beam_l", name: "Beam L", role: .spot, zone: .stageLeft, enabled: true, intensity: 0.9, colorHex: "#1E4FE0", model: .movingHeadBeam, effect: sweep),
+                LightingLookDraft.Fixture(id: "front", name: "Front", role: .frontLight, zone: .stageFront, enabled: true, intensity: 0.8, colorHex: "#FFE0B8")
+            ],
+            explanationTerm: "Movement",
+            explanationPlainText: "Moving beams sweep through the air to add energy.",
+            explanationActionSummary: "Added a sweeping moving-head beam for the highlight."
+        )
+
+        let look = try draft.makeValidatedLook()
+        try look.validate()
+        let opening = try look.requireCue(id: "cue_opening")
+        let beam = opening.fixtureGroups.first { $0.id == "beam_l" }
+        let front = opening.fixtureGroups.first { $0.id == "front" }
+        expect(beam?.effect == sweep, "An authored effect should land on the assembled fixture")
+        expect(front?.effect == nil, "A fixture without an authored effect should stay nil through assembly")
+
+        // Codable: a fixture round-trips its effect.
+        let fixture = FixtureGroup(id: "f", name: "F", role: .spot, zone: .stageLeft, enabled: true, intensity: 0.5, color: FixtureColor(mode: .rgb, value: "#FFFFFF"), effect: sweep)
+        let encoded = try JSONEncoder().encode(fixture)
+        let decoded = try JSONDecoder().decode(FixtureGroup.self, from: encoded)
+        expect(decoded.effect == sweep, "FixtureGroup effect should survive a Codable round-trip")
+
+        // Backward compatibility: JSON written before `effect` existed must decode with effect == nil.
+        let legacyEffectJSON = Data("""
+        {"id":"legacy","name":"Legacy","role":"frontLight","zone":"stageFront","enabled":true,"intensity":0.5,"color":{"mode":"rgb","value":"#FFFFFF"}}
+        """.utf8)
+        let legacyEffect = try JSONDecoder().decode(FixtureGroup.self, from: legacyEffectJSON)
+        expect(legacyEffect.effect == nil, "Legacy fixtures without an effect field should decode to nil")
+    }
+
+    // SPEC 01: `LightEffectPlan.effects(for:)` must return the AI-authored effect when a fixture has one,
+    // and fall back to `LightEffect.suggested(...)` (the per-type deterministic default) when it does not.
+    private static func lightEffectPlanPrefersAuthoredEffectOverSuggested() throws {
+        let authored = LightEffect(kind: .circle, speedHz: 0.4, sizeDegrees: 22, phase: 0.0)
+        // A high-energy cue (avg intensity >= threshold) so the un-authored fixtures get a non-none default.
+        let cue = LightingCue(
+            id: "cue_test",
+            name: "Test",
+            transition: .mvpDefault,
+            fixtureGroups: [
+                // Authored effect: should be returned verbatim regardless of energy/default.
+                FixtureGroup(id: "authored", name: "Authored", role: .spot, zone: .stageLeft, enabled: true, intensity: 0.9, color: FixtureColor(mode: .rgb, value: "#FFFFFF"), model: .movingHeadBeam, effect: authored),
+                // No authored effect: should fall back to the per-type suggested default.
+                FixtureGroup(id: "fallback", name: "Fallback", role: .spot, zone: .stageRight, enabled: true, intensity: 0.9, color: FixtureColor(mode: .rgb, value: "#FFFFFF"), model: .movingHeadBeam)
+            ]
+        )
+
+        let effects = LightEffectPlan.effects(for: cue)
+        expect(effects.count == 2, "effects(for:) should return one effect per fixture")
+        expect(effects[0] == authored, "An authored effect must be returned verbatim, not overwritten by the default")
+
+        let expectedFallback = LightEffect.suggested(for: .movingHeadBeam, highEnergy: LightEffectPlan.isHighEnergy(cue), slot: 1)
+        expect(effects[1] == expectedFallback, "A fixture without an authored effect must fall back to suggested(...)")
+        expect(expectedFallback.kind != .none, "Sanity: the high-energy moving-head default should be animated, so the fallback differs from authored")
+    }
+
     // The immersive scene relights ONLY the `.frontLight` and `.backgroundWash` roles, so a generated
     // look made of any other role would validate yet change nothing on screen. Generation maps each
     // cue through `RenderableCue`, which must force exactly those two roles — pin that here with the
@@ -877,7 +1043,7 @@ struct LumaStageCoreSmokeTests {
         expect(snapshot.animatedCount >= 1, "a high-energy cue runs at least one fixture effect")
         expect(frontRow?.effectKind == LightEffectKind.none, "a front fresnel stays steady even on a high-energy cue")
         let laserRow = snapshot.rows.first(where: { $0.fixtureId == "laser_fan" })
-        expect(laserRow?.effectKind == LightEffectKind.panSweep, "the laser sweeps on a high-energy cue")
+        expect(laserRow?.effectKind == LightEffectKind.none, "the laser stays still — its visible aerial beam fan isn't animated — even on a high-energy cue")
     }
 
     // Deterministic single-light command parsing (the Action-Phrase-style precise control layer):
@@ -1516,6 +1682,315 @@ struct LumaStageCoreSmokeTests {
                "high energy widens the moving-head swing")
     }
 
+    // The per-light control card's placement rule (SPEC 09): appears near the selected light but pulled
+    // toward the viewer and clamped to a reachable height, so a 5m-high fixture's card never floats out
+    // of reach and a floor light's card never sinks to the deck.
+    private static func lightControlCardPlacementStaysReachable() {
+        let viewer = SIMD3<Float>(0, 1.2, 0)
+
+        // A high-hung light (5m): card clamps into the reachable 0.9...1.6 band and sits between the
+        // light and the viewer on z.
+        let high = LightControlCardPlacement.position(lightWorld: SIMD3<Float>(2, 5, -3), viewer: viewer)
+        expect(high.y <= 1.6 + 1e-6 && high.y >= 0.9 - 1e-6, "card y must clamp into 0.9...1.6 even for a 5m light")
+        expect(high.z > -3 && high.z < 0, "card should sit between the light and the viewer on z")
+
+        // A floor-level light lifts to the minimum reachable height.
+        let low = LightControlCardPlacement.position(lightWorld: SIMD3<Float>(0, 0.2, -1), viewer: viewer)
+        expect(abs(low.y - 0.9) < 1e-6, "a low light should lift the card to the 0.9m minimum")
+
+        // The side offset keeps the card off the beam centre.
+        let centered = LightControlCardPlacement.position(
+            lightWorld: SIMD3<Float>(0, 1.2, -2), viewer: viewer, sideOffset: 0.18)
+        expect(abs(centered.x - 0.18) < 1e-5, "x should carry the side offset so the card doesn't block the beam")
+
+        // Pulling toward the viewer brings the card horizontally closer than the light itself.
+        expect(abs(high.z) < 3, "pullToViewer must move the card closer than the light on z")
+    }
+
+    // MARK: - SPEC 10: OpenAI cloud backend + fallback composer
+
+    /// Builds a canonical OpenAI Responses envelope (HTTP 200) whose assistant `message` carries an
+    /// `output_text` item holding `innerJSON` — the exact shape `OpenAILightingService.extractOutputText`
+    /// walks (a leading `reasoning` item is included so the test also pins that non-message items are
+    /// skipped). Returned as `(Data, URLResponse)` to match the injected `HTTPSend` boundary.
+    private static func openAIEnvelopeData(innerJSON: String) -> Data {
+        let envelope: [String: Any] = [
+            "status": "completed",
+            "output": [
+                ["type": "reasoning", "summary": []],
+                [
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        ["type": "output_text", "text": innerJSON]
+                    ]
+                ]
+            ]
+        ]
+        return try! JSONSerialization.data(withJSONObject: envelope, options: [])
+    }
+
+    /// A canonical Responses envelope whose message content is a `refusal` item (no `output_text`).
+    private static func openAIRefusalData(reason: String) -> Data {
+        let envelope: [String: Any] = [
+            "status": "completed",
+            "output": [
+                [
+                    "type": "message",
+                    "content": [
+                        ["type": "refusal", "refusal": reason]
+                    ]
+                ]
+            ]
+        ]
+        return try! JSONSerialization.data(withJSONObject: envelope, options: [])
+    }
+
+    /// An `HTTPSend` stub that always returns the given `Data` with an HTTP 200 response.
+    private static func httpStub(returning data: Data) -> HTTPSend {
+        return { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (data, response)
+        }
+    }
+
+    /// A wider-than-FOH, well-formed inner lighting look JSON: two cues, six fixtures (≥ 4), six-digit
+    /// hex, and intensities inside 0...1 — exactly the DTO `OpenAILightingService.LookDTO` decodes.
+    private static func validInnerLookJSON() -> String {
+        """
+        {
+          "lookName": "Warm Opening to Bold Finale",
+          "mood": "warm, building to bold",
+          "cues": [
+            { "name": "Opening" },
+            { "name": "Finale" }
+          ],
+          "fixtures": [
+            {
+              "name": "Front Wash L",
+              "type": "frontFresnel",
+              "zone": "frontOfHouse",
+              "states": [
+                { "enabled": true, "intensity": 0.55, "colorHex": "#FFD1A3", "beamAngleDegrees": 40, "gobo": "none" },
+                { "enabled": true, "intensity": 0.85, "colorHex": "#FFE4C2", "beamAngleDegrees": 40, "gobo": "none" }
+              ]
+            },
+            {
+              "name": "Front Wash R",
+              "type": "ledFresnel",
+              "zone": "frontOfHouse",
+              "states": [
+                { "enabled": true, "intensity": 0.5, "colorHex": "#FFD1A3", "beamAngleDegrees": 45, "gobo": "none" },
+                { "enabled": true, "intensity": 0.8, "colorHex": "#FFE4C2", "beamAngleDegrees": 45, "gobo": "none" }
+              ]
+            },
+            {
+              "name": "Back Wash",
+              "type": "backgroundBatten",
+              "zone": "upstageTruss",
+              "states": [
+                { "enabled": true, "intensity": 0.4, "colorHex": "#3A6BFF", "beamAngleDegrees": 60, "gobo": "stars" },
+                { "enabled": true, "intensity": 0.9, "colorHex": "#1E4FE0", "beamAngleDegrees": 60, "gobo": "none" }
+              ]
+            },
+            {
+              "name": "Moving Beam L",
+              "type": "movingHeadBeam",
+              "zone": "sideStageLeft",
+              "states": [
+                { "enabled": false, "intensity": 0.0, "colorHex": "#000000", "beamAngleDegrees": 12, "gobo": "none" },
+                { "enabled": true, "intensity": 0.95, "colorHex": "#22CCFF", "beamAngleDegrees": 12, "gobo": "breakup" }
+              ]
+            },
+            {
+              "name": "Moving Beam R",
+              "type": "movingHeadBeam",
+              "zone": "sideStageRight",
+              "states": [
+                { "enabled": false, "intensity": 0.0, "colorHex": "#000000", "beamAngleDegrees": 12, "gobo": "none" },
+                { "enabled": true, "intensity": 0.95, "colorHex": "#22CCFF", "beamAngleDegrees": 12, "gobo": "breakup" }
+              ]
+            },
+            {
+              "name": "Laser Fan",
+              "type": "laser",
+              "zone": "floor",
+              "states": [
+                { "enabled": false, "intensity": 0.0, "colorHex": "#000000", "beamAngleDegrees": 8, "gobo": "none" },
+                { "enabled": true, "intensity": 1.0, "colorHex": "#39FF14", "beamAngleDegrees": 8, "gobo": "none" }
+              ]
+            }
+          ],
+          "explanation": {
+            "term": "Contrast",
+            "plainText": "Contrast is the brightness difference between the performer and the backdrop.",
+            "actionSummary": "Warmed the front wash and deepened the back wash, then added beams and a laser for the finale."
+          }
+        }
+        """
+    }
+
+    // SPEC 10 work item 8.1 — happy path: a valid Responses envelope whose inner output_text holds a
+    // well-formed lighting look decodes through OpenAILightingService's DTO + the SHARED validator and
+    // surfaces as `.openAI`. Uses an injected HTTPSend stub + fixed key provider — no network, no key.
+    private static func openAIServiceDecodesAndValidates() async throws {
+        let service = OpenAILightingService(
+            httpSend: httpStub(returning: openAIEnvelopeData(innerJSON: validInnerLookJSON())),
+            apiKeyProvider: { "sk-test-fixed-key" }
+        )
+
+        expect(service.availability.isAvailable, "A non-empty key provider should make the service available")
+
+        let result = try await service.generateLook(from: "為校園音樂之夜做一個由暖轉烈的燈光秀")
+
+        // The shared validator is authoritative — the look it produced must itself pass validate().
+        try result.look.validate()
+        expect(result.source == .openAI, "A look generated by the OpenAI backend must report source .openAI")
+        expect(result.look.cues.map(\.id) == ["cue_0", "cue_1"], "Two model cues should assemble as cue_0/cue_1")
+        expect(result.look.selectedCueId == "cue_0", "The first cue should be selected")
+        expect(result.look.cues[0].fixtureGroups.count == 6, "All six model fixtures should be assembled into the rig")
+        // A fixture the model marked off must assemble dark (enabled:false → intensity 0).
+        let openingBeam = result.look.cues[0].fixtureGroups.first { $0.id == "fixture_3" }
+        expect(openingBeam?.intensity == 0, "A model-disabled fixture must assemble to 0 intensity in the opening cue")
+    }
+
+    // SPEC 10 work item 8.2 — a `refusal` content item short-circuits to a refusal failure WITHOUT
+    // attempting to decode it as a look. Asserts the exact 繁中 `.generationFailed` message.
+    private static func openAIServiceSurfacesRefusal() async {
+        let service = OpenAILightingService(
+            httpSend: httpStub(returning: openAIRefusalData(reason: "I can't help with that.")),
+            apiKeyProvider: { "sk-test-fixed-key" }
+        )
+
+        do {
+            _ = try await service.generateLook(from: "做一個燈光秀")
+            fatalError("A refusal content item must throw, not return a look")
+        } catch let error as LightingGenerationError {
+            expect(error == .generationFailed("模型拒絕生成燈光效果。請嘗試換個說法。"),
+                   "A refusal must map to the verbatim 繁中 .generationFailed refusal message")
+        } catch {
+            fatalError("Expected LightingGenerationError.generationFailed, got \(error)")
+        }
+    }
+
+    // SPEC 10 work item 8.3 — proves the schema is NOT trusted for range/hex: an inner JSON whose
+    // intensity exceeds 1.0 (and which carries a malformed hex) is rejected by the SHARED validator, so
+    // generateLook throws `.generationFailed` (wrapping the ValidationError's message), never returns it.
+    private static func openAIServiceRejectsOutOfRangeViaValidator() async {
+        // Out-of-range intensity (1.8) on an otherwise structurally valid look. The schema's numeric
+        // bounds are hints only; the post-parse validate() must catch this.
+        let badInnerJSON = """
+        {
+          "lookName": "Out Of Range",
+          "mood": "test",
+          "cues": [ { "name": "A" }, { "name": "B" } ],
+          "fixtures": [
+            {
+              "name": "Front",
+              "type": "frontFresnel",
+              "zone": "frontOfHouse",
+              "states": [
+                { "enabled": true, "intensity": 1.8, "colorHex": "#FFD1A3", "beamAngleDegrees": 40, "gobo": "none" },
+                { "enabled": true, "intensity": 0.9, "colorHex": "#FFE4C2", "beamAngleDegrees": 40, "gobo": "none" }
+              ]
+            },
+            {
+              "name": "Back",
+              "type": "backgroundBatten",
+              "zone": "upstageTruss",
+              "states": [
+                { "enabled": true, "intensity": 0.5, "colorHex": "#3A6BFF", "beamAngleDegrees": 60, "gobo": "none" },
+                { "enabled": true, "intensity": 0.8, "colorHex": "#1E4FE0", "beamAngleDegrees": 60, "gobo": "none" }
+              ]
+            },
+            {
+              "name": "Wash L",
+              "type": "washBar",
+              "zone": "sideStageLeft",
+              "states": [
+                { "enabled": true, "intensity": 0.5, "colorHex": "#FFFFFF", "beamAngleDegrees": 50, "gobo": "none" },
+                { "enabled": true, "intensity": 0.7, "colorHex": "#FFFFFF", "beamAngleDegrees": 50, "gobo": "none" }
+              ]
+            },
+            {
+              "name": "Wash R",
+              "type": "washBar",
+              "zone": "sideStageRight",
+              "states": [
+                { "enabled": true, "intensity": 0.5, "colorHex": "#FFFFFF", "beamAngleDegrees": 50, "gobo": "none" },
+                { "enabled": true, "intensity": 0.7, "colorHex": "#FFFFFF", "beamAngleDegrees": 50, "gobo": "none" }
+              ]
+            }
+          ],
+          "explanation": { "term": "Intensity", "plainText": "How strong a light is.", "actionSummary": "test." }
+        }
+        """
+
+        let service = OpenAILightingService(
+            httpSend: httpStub(returning: openAIEnvelopeData(innerJSON: badInnerJSON)),
+            apiKeyProvider: { "sk-test-fixed-key" }
+        )
+
+        do {
+            _ = try await service.generateLook(from: "做一個燈光秀")
+            fatalError("An out-of-range intensity must be rejected by the shared validator, not returned")
+        } catch let error as LightingGenerationError {
+            // The validator rejected the parsed look; the service must surface it as .generationFailed
+            // (never .modelUnavailable). The wrapped message is the ValidationError's own description.
+            guard case .generationFailed(let message) = error else {
+                fatalError("Out-of-range intensity must throw .generationFailed, got \(error)")
+            }
+            expect(message == (ValidationError.invalidIntensity(1.8).errorDescription ?? "生成的燈光效果無效。"),
+                   "A validator rejection should surface the ValidationError's own 繁中 message")
+        } catch {
+            fatalError("Expected LightingGenerationError.generationFailed, got \(error)")
+        }
+    }
+
+    // SPEC 10 work item 8.4 — the OpenAI-primary / FM-secondary composer: when the primary throws, the
+    // result comes from the secondary (source .foundationModels); when the primary succeeds, the
+    // secondary is never invoked.
+    private static func fallbackServiceFallsBackWhenPrimaryThrows() async throws {
+        let secondaryLook = LightingLook.mvpDemo()
+
+        // Primary throws .generationFailed; secondary returns a fixed FM look → result is the secondary's.
+        let throwingPrimary = StubLightingService(
+            availability: .available,
+            result: .failure(.generationFailed("OpenAI 服務暫時無法使用，請稍後再試。"))
+        )
+        let fmSecondary = SpyLightingService(
+            availability: .available,
+            result: .success(LightingGenerationResult(look: secondaryLook, source: .foundationModels))
+        )
+
+        let fallback = FallbackLightingService(primary: throwingPrimary, secondary: fmSecondary)
+        let result = try await fallback.generateLook(from: "做一個暖色開場")
+        expect(result.source == .foundationModels, "When the primary throws, the fallback must return the secondary's result")
+        try result.look.validate()
+        expect(fmSecondary.callCount == 1, "The secondary must be invoked exactly once when the primary fails")
+
+        // Primary succeeds → secondary must NOT be invoked.
+        let openAILook = LightingLook.mvpDemo()
+        let succeedingPrimary = StubLightingService(
+            availability: .available,
+            result: .success(LightingGenerationResult(look: openAILook, source: .openAI))
+        )
+        let untouchedSecondary = SpyLightingService(
+            availability: .available,
+            result: .success(LightingGenerationResult(look: secondaryLook, source: .foundationModels))
+        )
+
+        let happyPath = FallbackLightingService(primary: succeedingPrimary, secondary: untouchedSecondary)
+        let happyResult = try await happyPath.generateLook(from: "做一個暖色開場")
+        expect(happyResult.source == .openAI, "On the primary-success path the result must be the primary's")
+        expect(untouchedSecondary.callCount == 0, "The secondary must NOT be invoked when the primary succeeds")
+    }
+
     private static func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
         guard condition() else {
             fatalError(message)
@@ -1541,4 +2016,36 @@ struct LumaStageCoreSmokeTests {
         return value
     }
 
+}
+
+// MARK: - Test doubles for the FallbackLightingService composer (SPEC 10 work item 8.4)
+
+/// A fixed `LightingLookGenerating` stub that reports a chosen availability and either succeeds with a
+/// fixed result or throws a fixed `LightingGenerationError`. Used as the FallbackLightingService primary.
+private struct StubLightingService: LightingLookGenerating {
+    let availability: LightingModelAvailability
+    let result: Result<LightingGenerationResult, LightingGenerationError>
+
+    func generateLook(from prompt: String) async throws -> LightingGenerationResult {
+        try result.get()
+    }
+}
+
+/// Like `StubLightingService` but a reference type that records how many times `generateLook` ran, so a
+/// test can assert the composer DID (or did NOT) reach the secondary backend.
+private final class SpyLightingService: LightingLookGenerating {
+    let availability: LightingModelAvailability
+    let result: Result<LightingGenerationResult, LightingGenerationError>
+    private(set) var callCount = 0
+
+    init(availability: LightingModelAvailability,
+         result: Result<LightingGenerationResult, LightingGenerationError>) {
+        self.availability = availability
+        self.result = result
+    }
+
+    func generateLook(from prompt: String) async throws -> LightingGenerationResult {
+        callCount += 1
+        return try result.get()
+    }
 }
