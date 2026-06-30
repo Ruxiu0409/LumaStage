@@ -49,6 +49,8 @@
 
 - **SPEC 02 燈具型號專屬幾何上台（B4）**：場上 rig 的燈改用「型號專屬幾何」取代通用 stand/moving-head 形狀。`FixtureSpatialScene` 新增 `makeStageFixture(for:targetHeight:aim:)`——沿用觀星窗的 `build*` 程序幾何，另開 `stageCache`(去掉縮圖的三分之四傾斜+填滿縮放)、量 `visualBounds` 等比縮到 `targetHeight`、用本地 shortest-arc `rotation(from:+Z,to:aim)` 對朝向,回傳容器供呼叫端定位。`ImmersiveView.addRigFixture`:`.laser` 維持 `addLaserProjector`(可見光束扇);其餘型號改走 `makeStageFixture(fixture.renderModel, sceneLength(0.4), aim)`、`scenePoint(placement.position)` 定位、新 `markShadowCasterRecursively` 遞迴標陰影;FOH 型號(frontFresnel/ledFresnel/spotBarrel/audienceBlinder)補一根 `strut` 立柱(floor→燈下)避免懸浮。`spot_<id>`/`light_label_<n>`/`lightpick_<n>`/選取環/`LightEffectComponent` 為獨立實體,**全未動**;舊 `addFrontLightStand`/`addMovingHeadFixture` 留作 fallback(已不被呼叫)。——已實作、**完整 build 綠**(純 RealityKit,smoke 不覆蓋;spec 已封存至 `archive/`)。**縮放(0.4m 取最長軸,寬型燈會偏矮寬)、各型號 lens 是否朝台且不翻轉/打滾、FOH 立柱頂端是否貼合模型底、型號幾何面數×4–12 盞的軟陰影開銷(吃緊時對非 key light 降 shadow)需實機驗。**
 
+- **SPEC 03 AI 燈光導師（B2）**：把單一術語的 `explanation` 升級成「為什麼這樣設計」的教學講評,呼應「科技賦能教育」社會價值。純擴充:`LightingExplanation` 加 `var rationale: String = ""`(additive、自訂 `init(from:)` 用 `decodeIfPresent ?? ""` 確保舊 JSON 解 "")、`LightingLookDraft` 兩條 `makeValidatedLook` 路徑加 `explanationRationale` 參數/欄位塞進 `LightingExplanation(rationale:)`;`@Generable GeneratedExplanation` 加帶 `@Guide`(2–3 句 beginner 設計理由)的 `rationale` + 映射 + instructions 補一句(英文)。`VisionAIComposerBox` 在 `.explaining` 多顯一行「設計理由：…」(沿用 `.callout`+`textSecondary`+glass、Dynamic Type、無障礙 label,空則不顯示)。1 個新 smoke(draft 帶 rationale 保留 + 舊 JSON 解 "")。**不動** AppModel。——已實作、**完整 build 綠**、smoke 綠(spec 已封存至 `archive/`)。**rationale 實際品質(是否真在教、不過長)需實機看 FM 輸出微調 prompt。**
+
 ## Spec 生命週期
 
 - 每份 spec **完成後(實作 + build 綠 + smoke 過)就移到 `docs/specs/archive/` 或直接刪除**——完成的 spec 不留在待辦清單裡(完成內容反映在「現況基線」與程式碼/git)。
@@ -59,7 +61,6 @@
 
 | 序 | Spec | 對應 | 工作量 | 風險 |
 |---|---|---|---|---|
-| P1 | `03-ai-lighting-tutor.md` | B2 · 教育/社會價值 | S | 低 |
 | P3 | `05-music-sync.md` | B1 · 依賴 A1 | L | 高(分析準度→降級內建曲) |
 | P3 | `07-tabletop-place-lights.md` | C2 · 空間 wow | L | 中 |
 

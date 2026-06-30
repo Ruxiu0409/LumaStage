@@ -108,7 +108,8 @@ struct FoundationModelsLightingService: LightingLookGenerating {
     Fixtures MAY specify a `movement` per cue for energetic moments (sweep/circle for moving beams, strobe for
     accents, chase for colour washes); keep most cues still and reserve movement for peaks.
 
-    The explanation teaches one beginner lighting term tied to this look. Prompts may mix Chinese and English.
+    The explanation teaches one beginner lighting term tied to this look, and also gives a short teaching
+    rationale tying the look's choices to one or two lighting principles. Prompts may mix Chinese and English.
     """
 
     private static func describe(_ reason: SystemLanguageModel.Availability.UnavailableReason) -> String {
@@ -206,6 +207,9 @@ struct GeneratedLightingLook {
 
         @Guide(description: "One sentence summarizing what this look does")
         var actionSummary: String
+
+        @Guide(description: "2–3 sentence design rationale a beginner can learn from: why the front is warm/cool, what the backlight separates, how contrast/mood is built")
+        var rationale: String
     }
 
     /// One cue in the ordered show — just its display label (its fixture states live on each fixture's
@@ -321,7 +325,8 @@ extension GeneratedLightingLook {
             cues: draftCues,
             explanationTerm: explanation.term,
             explanationPlainText: explanation.plainText,
-            explanationActionSummary: explanation.actionSummary
+            explanationActionSummary: explanation.actionSummary,
+            explanationRationale: explanation.rationale
         )
     }
 }

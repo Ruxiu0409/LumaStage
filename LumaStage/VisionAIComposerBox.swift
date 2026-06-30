@@ -304,6 +304,17 @@ struct VisionAIComposerBox: View {
                         .foregroundStyle(LumaStageDesign.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+
+                // The "why it was designed this way" teaching note (SPEC 03). A third labeled line in
+                // the same glass container, styled like `detail` — no fixed font size, so it scales
+                // with Dynamic Type and wraps freely.
+                if let rationale = feedback.rationale, !rationale.isEmpty {
+                    Text("設計理由：\(rationale)")
+                        .font(.callout)
+                        .foregroundStyle(LumaStageDesign.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityLabel("設計理由，\(rationale)")
+                }
             }
 
             Spacer(minLength: 0)
@@ -321,6 +332,9 @@ struct VisionAIComposerBox: View {
         var tint: Color
         var title: String
         var detail: String?
+        /// A short "why this look was designed this way" teaching note, surfaced as a third labeled
+        /// line under the explanation in the `.explaining` state. Empty/absent for every other state.
+        var rationale: String?
         var animates: Bool = false
     }
 
@@ -369,7 +383,8 @@ struct VisionAIComposerBox: View {
                 icon: "checkmark.seal.fill",
                 tint: LumaStageDesign.softGreen,
                 title: explanation.actionSummary,
-                detail: "\(explanation.term) — \(explanation.plainText)"
+                detail: "\(explanation.term) — \(explanation.plainText)",
+                rationale: explanation.rationale
             )
         case .idle, .listening, .error:
             if !appModel.isModelAvailable {

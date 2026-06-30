@@ -54,6 +54,7 @@ struct LumaStageCoreSmokeTests {
         normalizedHexToleratesModelNoise()
         try goboFlowsThroughDraftAndSurvivesCodec()
         try aiEffectFlowsThroughDraftAndSurvivesCodec()
+        try explanationRationaleFlowsThroughDraftAndIsBackCompat()
         try lightEffectPlanPrefersAuthoredEffectOverSuggested()
         try dmxAndTargetSurviveValidationAndCodec()
         try showcaseDemoIsValidAndDiverse()
@@ -931,6 +932,58 @@ struct LumaStageCoreSmokeTests {
         """.utf8)
         let legacyEffect = try JSONDecoder().decode(FixtureGroup.self, from: legacyEffectJSON)
         expect(legacyEffect.effect == nil, "Legacy fixtures without an effect field should decode to nil")
+    }
+
+    // SPEC 03 (AI 燈光導師): a teaching `rationale` carried on a draft must survive assembly into the
+    // look's `LightingExplanation`, and old JSON written before `rationale` existed must decode to ""
+    // (additive + back-compat).
+    private static func explanationRationaleFlowsThroughDraftAndIsBackCompat() throws {
+        let rationale = "前光暖以塑造表演者膚色，背景偏冷拉開空間層次，靠冷暖對比建立深度。"
+
+        // 1. A non-empty rationale on the two-cue draft must be preserved after assembly.
+        let draft = LightingLookDraft(
+            lookName: "Tutor Look",
+            mood: "warm front, cool back",
+            openingFixtures: [
+                LightingLookDraft.Fixture(id: "front_light", name: "前光", role: .frontLight, zone: .stageFront, enabled: true, intensity: 0.6, colorHex: "#FFD1A3"),
+                LightingLookDraft.Fixture(id: "background_wash", name: "背景泛光", role: .backgroundWash, zone: .stageBack, enabled: true, intensity: 0.7, colorHex: "#4FA8FF")
+            ],
+            highlightFixtures: [
+                LightingLookDraft.Fixture(id: "front_light", name: "前光", role: .frontLight, zone: .stageFront, enabled: true, intensity: 0.8, colorHex: "#FFE0B8"),
+                LightingLookDraft.Fixture(id: "background_wash", name: "背景泛光", role: .backgroundWash, zone: .stageBack, enabled: true, intensity: 0.9, colorHex: "#2F6BFF")
+            ],
+            explanationTerm: "對比",
+            explanationPlainText: "冷暖對比讓表演者從背景中跳出。",
+            explanationActionSummary: "已建立暖前光與冷背景的對比。",
+            explanationRationale: rationale
+        )
+        let look = try draft.makeValidatedLook()
+        expect(look.explanation.rationale == rationale, "A draft rationale must survive assembly into the look's explanation")
+
+        // The multi-cue static path must carry the rationale through too.
+        let multiCueLook = try LightingLookDraft.makeValidatedLook(
+            lookName: "Tutor Multi",
+            mood: "warm front, cool back",
+            cues: [
+                LightingLookDraft.Cue(id: "cue_0", name: "Opening", fixtures: [
+                    LightingLookDraft.Fixture(id: "front_light", name: "前光", role: .frontLight, zone: .stageFront, enabled: true, intensity: 0.6, colorHex: "#FFD1A3"),
+                    LightingLookDraft.Fixture(id: "background_wash", name: "背景泛光", role: .backgroundWash, zone: .stageBack, enabled: true, intensity: 0.7, colorHex: "#4FA8FF")
+                ])
+            ],
+            explanationTerm: "對比",
+            explanationPlainText: "冷暖對比讓表演者從背景中跳出。",
+            explanationActionSummary: "已建立暖前光與冷背景的對比。",
+            explanationRationale: rationale
+        )
+        expect(multiCueLook.explanation.rationale == rationale, "The multi-cue path must carry the rationale into the look's explanation")
+
+        // 2. Old JSON without a `rationale` key must decode to "".
+        let legacyJSON = Data("""
+        {"term":"對比","plainText":"冷暖對比讓表演者跳出。","actionSummary":"已建立對比。"}
+        """.utf8)
+        let legacy = try JSONDecoder().decode(LightingExplanation.self, from: legacyJSON)
+        expect(legacy.rationale == "", "Old explanation JSON without a rationale key should decode to an empty string")
+        expect(legacy.term == "對比", "Other explanation fields should still decode from legacy JSON")
     }
 
     // SPEC 01: `LightEffectPlan.effects(for:)` must return the AI-authored effect when a fixture has one,

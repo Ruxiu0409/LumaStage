@@ -564,6 +564,32 @@ struct LightingExplanation: Codable, Equatable {
     var term: String
     var plainText: String
     var actionSummary: String
+    /// A short teaching rationale ("why the front is warm, what the backlight separates, how contrast is
+    /// built") for the AI 燈光導師. Additive + back-compat: defaults to "" so existing construction sites
+    /// (mvpDemo/showcaseDemo/StageState patches/AppModel) compile unchanged.
+    var rationale: String = ""
+
+    init(
+        term: String,
+        plainText: String,
+        actionSummary: String,
+        rationale: String = ""
+    ) {
+        self.term = term
+        self.plainText = plainText
+        self.actionSummary = actionSummary
+        self.rationale = rationale
+    }
+
+    // Custom decoding so old JSON without a `rationale` key decodes to "" — a synthesized memberwise
+    // decoder would otherwise reject the missing key even though the property is defaulted.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        term = try container.decode(String.self, forKey: .term)
+        plainText = try container.decode(String.self, forKey: .plainText)
+        actionSummary = try container.decode(String.self, forKey: .actionSummary)
+        rationale = try container.decodeIfPresent(String.self, forKey: .rationale) ?? ""
+    }
 }
 
 struct LightingLook: Codable, Equatable {

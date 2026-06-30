@@ -117,6 +117,9 @@ struct LightingLookDraft: Equatable {
     var explanationTerm: String
     var explanationPlainText: String
     var explanationActionSummary: String
+    /// A short teaching rationale carried through to `LightingExplanation.rationale`. Additive +
+    /// back-compat: defaults to "" so existing `LightingLookDraft(...)` construction sites stay valid.
+    var explanationRationale: String = ""
 
     /// Builds a `LightingLook` with the fixed MVP cue identity (`cue_opening` / `cue_highlight`),
     /// `standardNight` ambient baseline, and default transitions, then validates it.
@@ -147,7 +150,8 @@ struct LightingLookDraft: Equatable {
             explanation: LightingExplanation(
                 term: explanationTerm,
                 plainText: explanationPlainText,
-                actionSummary: explanationActionSummary
+                actionSummary: explanationActionSummary,
+                rationale: explanationRationale
             )
         )
 
@@ -175,7 +179,8 @@ struct LightingLookDraft: Equatable {
         cues: [Cue],
         explanationTerm: String,
         explanationPlainText: String,
-        explanationActionSummary: String
+        explanationActionSummary: String,
+        explanationRationale: String = ""
     ) throws -> LightingLook {
         let lightingCues = cues.map { cue in
             LightingCue(
@@ -197,7 +202,8 @@ struct LightingLookDraft: Equatable {
             explanation: LightingExplanation(
                 term: explanationTerm,
                 plainText: explanationPlainText,
-                actionSummary: explanationActionSummary
+                actionSummary: explanationActionSummary,
+                rationale: explanationRationale
             )
         )
 
