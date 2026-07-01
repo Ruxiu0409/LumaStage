@@ -63,6 +63,7 @@ swiftc \
   LumaStage/RigConstraint.swift \
   LumaStage/MusicShowBuilder.swift \
   LumaStage/SongLibrary.swift \
+  LumaStage/DemoTrackSynth.swift \
   -o /tmp/LumaStageCoreSmokeTests && /tmp/LumaStageCoreSmokeTests
 # prints "LumaStageCoreSmokeTests passed" and exits 0 on success
 ```

@@ -670,7 +670,7 @@ class AppModel {
             let url = try await songLibrary.resolvePlayableURL(for: item)
             await importSong(url: url, title: item.title)
         } catch SongSourceError.protected {
-            fail("此曲受保護，無法在裝置端分析；請改用未受保護的本機檔案。")
+            fail("此曲受保護或尚未下載到本機，無法在裝置端分析；請先在「音樂」App 下載，或改用未受保護的本機檔案。")
         } catch SongSourceError.unauthorized {
             fail("沒有音樂資料庫存取權限，請在設定中開啟。")
         } catch {
@@ -695,23 +695,52 @@ class AppModel {
 
     /// Same pipeline as `importSong`, but using the built-in pre-analyzed demo song — the zero-fail stage
     /// path. The demo analyzer ships its analysis as bundled JSON (no live framework run), so the show is
-    /// always built. The demo has no playable audio file, so this loads the engine clock-only: the look is
-    /// applied and the beat grid + cue advance still drive the visuals, just without audio playback.
+    /// always built. Audio is a fully-original backing track synthesized on-device from that same analysis
+    /// (`DemoTrackSynth`, beat-locked to the exact grid + sections) — so the demo actually plays sound AND
+    /// cues auto-advance on the section boundaries, just like an imported file. If synthesis/caching fails
+    /// for any reason, it falls back to the silent clock-only path (visuals still beat-lock; manual GO).
     func useBuiltInDemoSong() async {
         do {
             let analysis = try await CachedSongAnalyzer().analyze(url: URL(fileURLWithPath: ""), title: "")
-            try buildAndLoadShow(from: analysis, audioURL: nil)
+            let audioURL = await Self.demoAudioURL(for: analysis)   // nil ⇒ silent clock-only fallback
+            try buildAndLoadShow(from: analysis, audioURL: audioURL)
         } catch {
             fail(error.localizedDescription)
         }
     }
 
+    /// Render (once, cached) the synthesized demo backing track to a WAV in Caches and return its file URL.
+    /// The synth is deterministic, so a stable filename lets us reuse the file across launches instead of
+    /// re-rendering ~150s of audio every time. The CPU-bound render runs off the main actor. Returns nil on
+    /// any failure so `useBuiltInDemoSong` degrades gracefully to the silent clock-only demo.
+    private static func demoAudioURL(for analysis: SongAnalysis) async -> URL? {
+        let fileManager = FileManager.default
+        guard let caches = try? fileManager.url(
+            for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true
+        ) else { return nil }
+        // Version the name so a future synth change invalidates the cache without a stale file lingering.
+        let url = caches.appendingPathComponent("luma-demo-track-v1.wav")
+        if fileManager.fileExists(atPath: url.path) { return url }
+
+        // Render AND write the ~13 MB WAV off the main actor — both the CPU-bound synthesis and the atomic
+        // disk write stay off-main so tapping the demo button never hitches the UI on a cache miss.
+        return await Task.detached(priority: .userInitiated) {
+            let data = DemoTrackSynth.wavData(for: analysis)
+            do {
+                try data.write(to: url, options: .atomic)
+                return url
+            } catch {
+                return nil
+            }
+        }.value
+    }
+
     /// Shared backbone for `importSong` / `useBuiltInDemoSong`: builds the show from an analysis, applies it,
-    /// and arms the engine. With audio, `play()` runs the player, beat-locks the visuals, and auto-advances
-    /// cues on the section boundaries. With `audioURL == nil` (the demo), there is no player to tick, so
-    /// `playMusicShow` anchors the beat clock directly (visuals still beat-lock) but cues do not auto-advance
-    /// — the show holds its first cue and the user GOes manually. Throws on look-build / validation failure
-    /// (caught by the callers → `fail`).
+    /// and arms the engine. When a decodable audio file loads, `play()` runs the player, beat-locks the
+    /// visuals, and auto-advances cues on the section boundaries. When no audio loads (a nil URL, or a
+    /// non-nil URL the player can't decode), the show falls back to clock-only: `playMusicShow` anchors the
+    /// beat clock directly (visuals still beat-lock) but cues do not auto-advance — the show holds its first
+    /// cue and the user GOes manually. Throws on look-build / validation failure (caught by the callers → `fail`).
     private func buildAndLoadShow(from analysis: SongAnalysis, audioURL: URL?) throws {
         let plan = ShowPlan.make(from: analysis)
         let look = try MusicShowBuilder.buildLook(
@@ -736,17 +765,15 @@ class AppModel {
         lastPlan = plan
         let clock = analysis.makeBeatClock()
         lastClock = clock
-        musicShowIsClockOnly = (audioURL == nil)
 
-        if let audioURL {
-            musicSyncEngine.load(url: audioURL, clock: clock)
-        } else {
-            // No playable audio (built-in demo). Load with an empty URL: the player creation fails and the
-            // engine settles into a safe non-playing state. `playMusicShow` then anchors the beat clock
-            // directly so the visuals still beat-lock; cue auto-advance needs the audio tick, so for the
-            // demo the show holds its first cue (the user can still GO through cues manually).
-            musicSyncEngine.load(url: URL(fileURLWithPath: ""), clock: clock)
-        }
+        // Load first, then derive clock-only from whether a decodable player ACTUALLY loaded — not from the
+        // URL's nil-ness. A nil URL (or an empty one) fails player creation and lands clock-only, but so does
+        // a non-nil-but-unreadable URL (stale/corrupt cached demo WAV, or a file `AVURLAsset` could analyze
+        // but `AVAudioPlayer` can't decode). Keying the fallback on load success means such a case still
+        // beat-locks the visuals via `playMusicShow`'s clock anchor instead of freezing into a dead, silent
+        // show with no player tick.
+        musicSyncEngine.load(url: audioURL ?? URL(fileURLWithPath: ""), clock: clock)
+        musicShowIsClockOnly = !musicSyncEngine.hasLoadedPlayer
         musicSyncEngine.setSectionStarts(plan.cues.map(\.startTime))
         musicSyncEngine.onSectionBoundary = { [weak self] index in
             self?.selectCueAtSectionIndex(index)

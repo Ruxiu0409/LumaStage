@@ -777,9 +777,9 @@ private struct MusicShowSheet: View {
                 .buttonBorderShape(.capsule)
                 .lumaGazeTarget()
                 .frame(maxWidth: .infinity)
-                .help("使用預先分析好的內建示範曲 — 現場零失敗")
+                .help("載入預先分析好的內建示範曲（含裝置端合成的原創背景音軌，有聲音）；再按「播放演出」即可聽到 — 現場零失敗")
                 .accessibilityLabel("使用內建示範曲")
-                .accessibilityHint("載入預先分析的示範曲，現場零失敗")
+                .accessibilityHint("載入預先分析的示範曲，含裝置端合成的原創背景音軌；載入後按「播放演出」開始播放，現場零失敗")
 
                 Button("從音樂資料庫選曲", systemImage: "music.note.list") {
                     isShowingLibraryPicker = true
@@ -944,6 +944,18 @@ private struct SongLibraryPickerView: View {
             ForEach(items, id: \.id) { item in
                 row(for: item)
             }
+            // When the library is mostly DRM-protected streaming (the common case), a wall of greyed rows is
+            // confusing on its own — explain why and point at the working paths (file import / demo song).
+            if items.contains(where: { $0.isProtected }) {
+                Label(
+                    "灰色的曲目受保護或尚未下載到本機，裝置端讀不到可分析的取樣。若是已購買／已加入資料庫的歌曲，先在「音樂」App 下載到本機即可分析；DRM 串流曲目則請改用「匯入音檔」選一首無 DRM 的本機檔案，或使用內建示範曲。",
+                    systemImage: "info.circle"
+                )
+                .font(.footnote)
+                .foregroundStyle(LumaStageDesign.textSecondary)
+                .listRowBackground(Color.clear)
+                .accessibilityLabel("提示：灰色曲目受保護或尚未下載到本機，無法分析。已購買的歌曲可先在音樂 App 下載，或改用匯入音檔或內建示範曲。")
+            }
         }
         .animation(reduceMotion ? nil : .default, value: items)
     }
@@ -954,7 +966,7 @@ private struct SongLibraryPickerView: View {
             HStack(spacing: 12) {
                 songInfo(for: item)
                 Spacer(minLength: 8)
-                Label("受保護，無法分析", systemImage: "lock.fill")
+                Label("受保護或未下載", systemImage: "lock.fill")
                     .labelStyle(.titleAndIcon)
                     .font(.footnote)
                     .foregroundStyle(LumaStageDesign.textSecondary)
@@ -963,7 +975,7 @@ private struct SongLibraryPickerView: View {
             .frame(minHeight: LumaStageDesign.minGazeTarget)
             .disabled(true)
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("\(item.title)，\(item.artist)，\(durationText(item.duration))，受保護，無法分析")
+            .accessibilityLabel("\(item.title)，\(item.artist)，\(durationText(item.duration))，受保護或尚未下載到本機，無法分析")
         } else {
             Button {
                 Task {
@@ -1017,7 +1029,7 @@ private struct SongLibraryPickerView: View {
         ContentUnavailableView {
             Label("資料庫沒有可用的本機歌曲", systemImage: "music.note")
         } description: {
-            Text("找不到可分析的本機歌曲。受保護的 Apple Music 串流曲目無法分析；請改用「匯入音檔」從檔案選擇一首歌。")
+            Text("找不到可分析的本機歌曲。DRM 串流曲目無法分析；已購買或已加入資料庫的歌曲請先在「音樂」App 下載到本機，或改用「匯入音檔」從檔案選擇一首歌。")
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

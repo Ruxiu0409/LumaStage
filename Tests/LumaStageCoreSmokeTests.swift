@@ -67,6 +67,7 @@ struct LumaStageCoreSmokeTests {
         lightEffectEngineModulatesMovementAndIntensity()
         musicBeatClockGridIsCorrect()
         musicBeatSyncLocksEffectsToBeat()
+        demoTrackSynthRendersBeatMatchedAudibleWav()
         try patchPlannerAssignsSequentialDMXAndBuildsSheet()
         parsesStageVoiceCommands()
         stageLightAccessibilityLabelsAreLocalized()
@@ -1923,6 +1924,71 @@ struct LumaStageCoreSmokeTests {
         let before = MusicBeatSync.output(pan, clock: clock, at: 0.5 - dt).panOffsetDegrees
         let after = MusicBeatSync.output(pan, clock: clock, at: 0.5 + dt).panOffsetDegrees
         expect(abs(before - after) < 0.1, "the sweep does not jump across a beat boundary")
+    }
+
+    /// The built-in demo song's synthesized backing track (`DemoTrackSynth`) must produce a well-formed,
+    /// AUDIBLE, deterministic 16-bit PCM WAV whose energy follows the analysis's sections — otherwise the
+    /// demo plays in silence (the exact bug this fixes). Pins: sample count = duration·sampleRate; a canonical
+    /// WAV header (RIFF/WAVE/fmt /data, mono, 44.1 kHz, 16-bit, matching sizes); the buffer isn't silent; a
+    /// loud chorus section is clearly louder than a quiet intro; and the render is byte-stable.
+    private static func demoTrackSynthRendersBeatMatchedAudibleWav() {
+        // A short two-section analysis: a quiet intro then a loud chorus. bpm-only (no beatTimes) exercises the
+        // derived grid. Keep it short so the headless render stays fast.
+        let sections = [
+            SongSection(start: 0, end: 3, kind: .intro, pace: 0.30, loudness: 0.35, keyMode: .minor, dominantInstruments: []),
+            SongSection(start: 3, end: 6, kind: .chorus, pace: 0.90, loudness: 0.90, keyMode: .major, dominantInstruments: ["drums"])
+        ]
+        let analysis = SongAnalysis(title: "T", duration: 6, bpm: 128, beatTimes: [], barTimes: [], sections: sections)
+
+        let sampleRate = DemoTrackSynth.sampleRate
+        let samples = DemoTrackSynth.renderSamples(for: analysis)
+
+        // --- Sample count matches the declared duration -----------------------------------------------------
+        let expectedCount = Int((6.0 * Double(sampleRate)).rounded())
+        expect(samples.count == expectedCount, "render must be duration·sampleRate samples (got \(samples.count), want \(expectedCount))")
+
+        // --- Not silent, and always within [-1, 1] (soft-clipped) -------------------------------------------
+        let peak = samples.map { abs($0) }.max() ?? 0
+        expect(peak > 0.05, "the demo track must be audible, not silent (peak \(peak))")
+        expect(samples.allSatisfy { $0 >= -1 && $0 <= 1 }, "samples must stay within [-1, 1] after soft-clip")
+
+        // --- Section dynamics: the loud chorus is clearly louder than the quiet intro -----------------------
+        func rms(_ startSec: Double, _ endSec: Double) -> Double {
+            let a = Int(startSec * Double(sampleRate)), b = Int(endSec * Double(sampleRate))
+            let slice = samples[a..<min(b, samples.count)]
+            let sumSq = slice.reduce(0.0) { $0 + Double($1) * Double($1) }
+            return (sumSq / Double(max(1, slice.count))).squareRoot()
+        }
+        let introRMS = rms(0.5, 2.5)
+        let chorusRMS = rms(3.5, 5.5)
+        expect(chorusRMS > introRMS * 1.4, "the chorus must swell clearly louder than the intro (intro \(introRMS), chorus \(chorusRMS))")
+
+        // --- Deterministic: same analysis → byte-identical audio (the file cache relies on this) ------------
+        let again = DemoTrackSynth.renderSamples(for: analysis)
+        expect(samples == again, "the synth must be deterministic (same analysis → identical samples)")
+
+        // --- Canonical 16-bit PCM WAV header + sizes --------------------------------------------------------
+        let wav = DemoTrackSynth.wavData(fromMono: samples, sampleRate: sampleRate)
+        let bytes = [UInt8](wav)
+        func ascii(_ range: Range<Int>) -> String { String(decoding: bytes[range], as: UTF8.self) }
+        func le16(_ at: Int) -> Int { Int(bytes[at]) | (Int(bytes[at + 1]) << 8) }
+        func le32(_ at: Int) -> Int { Int(bytes[at]) | (Int(bytes[at + 1]) << 8) | (Int(bytes[at + 2]) << 16) | (Int(bytes[at + 3]) << 24) }
+
+        let dataSize = samples.count * 2
+        expect(bytes.count == 44 + dataSize, "WAV = 44-byte header + 2 bytes/sample (got \(bytes.count))")
+        expect(ascii(0..<4) == "RIFF", "WAV must start with RIFF")
+        expect(le32(4) == 36 + dataSize, "RIFF chunk size must be 36 + dataSize")
+        expect(ascii(8..<12) == "WAVE", "WAV must declare the WAVE form")
+        expect(ascii(12..<16) == "fmt ", "fmt chunk id")
+        expect(le32(16) == 16, "PCM fmt chunk is 16 bytes")
+        expect(le16(20) == 1, "audioFormat must be 1 (PCM)")
+        expect(le16(22) == 1, "mono (1 channel)")
+        expect(le32(24) == sampleRate, "sample rate must round-trip")
+        expect(le32(28) == sampleRate * 2, "byteRate = sampleRate · channels · bytesPerSample")
+        expect(le16(32) == 2, "blockAlign = channels · bytesPerSample")
+        expect(le16(34) == 16, "16 bits per sample")
+        expect(ascii(36..<40) == "data", "data chunk id")
+        expect(le32(40) == dataSize, "data chunk size must equal the sample byte count")
     }
 
     // MARK: - SPEC 10: OpenAI cloud backend + fallback composer

@@ -122,10 +122,11 @@ struct ImmersiveView: View {
                 }
         )
         .preferredSurroundingsEffect(appModel.stageImmersionMode == .roomSpill ? .dim(intensity: 0.45) : nil)
-        // The per-light manual control card is a native `WindowGroup` (declared in LumaStageApp) — it
+        // The per-light manual control card is a single native `Window` (declared in LumaStageApp) — it
         // gets the system move bar and keeps its own position across content updates (no more "jump back
         // to a generated spot" when the user recolours a light). Open it whenever a light becomes
-        // selected and dismiss it when the selection clears. `selectedLightNumber` is already read at
+        // selected and dismiss it when the selection clears; because it's a `Window` (not a `WindowGroup`),
+        // re-opening for a newly selected light reuses the same card instead of stacking duplicates. `selectedLightNumber` is already read at
         // body level (above) so this `.onChange` observes it. The card's own X button calls
         // `appModel.selectLight(number: nil)`, which flows back through here to dismiss the window.
         .onChange(of: appModel.selectedLightNumber, initial: true) { _, newValue in

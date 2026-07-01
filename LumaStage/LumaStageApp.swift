@@ -60,7 +60,13 @@ struct LumaStageApp: App {
         // re-resolve "jump" bug). `.environment(appModel)` is required — `openWindow` does NOT inherit
         // the opener's environment. Opened/dismissed reactively by `ImmersiveView` as the selected
         // light changes (and dismissed when the stage space closes).
-        WindowGroup(id: AppModel.lightControlWindowID) {
+        //
+        // It MUST be a `Window`, not a `WindowGroup`: this is a single, unique, reusable card that reflects
+        // the one shared `appModel.selectedLightNumber`. A `WindowGroup` spawns a NEW window on every
+        // `openWindow(id:)` call, so selecting light after light piled up a stack of duplicate cards that
+        // all rendered the same (latest) light. A `Window` is a singleton scene — `openWindow` on an
+        // already-open `Window` just brings it forward, and switching lights re-renders the same card.
+        Window("燈光控制", id: AppModel.lightControlWindowID) {
             SelectedLightControlView()
                 .environment(appModel)
         }
