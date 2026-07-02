@@ -61,8 +61,25 @@ struct ContentView: View {
     /// `dismissImmersiveSpace`), its `onDisappear` reopens this main window, and the recreated `ContentView`
     /// runs this to open the next space. Driving the open from the always-recreated main window (never from
     /// inside a space, which is torn down mid-transition) is what makes the hand-off reliable.
+    ///
+    /// visionOS intermittently rejects an open issued while the previous space's dismiss transition is
+    /// still winding down, so a failed open retries on `ImmersiveSceneReopenPolicy`'s backoff. When the
+    /// retries are exhausted, giving up must be *visible*: clearing `desiredImmersiveScene` returns this
+    /// window to the AI composer (whose 開啟舞台 button re-requests the stage) instead of leaving the user
+    /// stranded on the invisible transition placeholder with a desired scene no one will ever honor.
     @MainActor
     private func reconcileImmersiveScene() async {
+        // A cancelled predecessor task (desired scene changed mid-retry) resets `.inTransition` back to
+        // `.closed` on its way out — give it a beat instead of bailing, because bailing would strand
+        // `desiredImmersiveScene` with no reconciler left to honor it.
+        while appModel.immersiveSpaceState == .inTransition {
+            do {
+                try await Task.sleep(nanoseconds: 50_000_000)
+            } catch {
+                return
+            }
+        }
+
         guard appModel.immersiveSpaceState == .closed else {
             return
         }
@@ -78,13 +95,29 @@ struct ContentView: View {
         }
 
         appModel.immersiveSpaceState = .inTransition
-        switch await openImmersiveSpace(id: spaceID) {
-        case .opened:
-            break // the space's onAppear sets immersiveSpaceState = .open
-        case .userCancelled, .error:
-            fallthrough
-        @unknown default:
-            appModel.immersiveSpaceState = .closed
+        var attempt = 1
+        while true {
+            switch await openImmersiveSpace(id: spaceID) {
+            case .opened:
+                return // the space's onAppear sets immersiveSpaceState = .open
+            case .userCancelled, .error:
+                fallthrough
+            @unknown default:
+                guard let delay = ImmersiveSceneReopenPolicy.retryDelayNanoseconds(afterFailedAttempt: attempt) else {
+                    appModel.immersiveSpaceState = .closed
+                    appModel.desiredImmersiveScene = .none
+                    return
+                }
+                attempt += 1
+                do {
+                    try await Task.sleep(nanoseconds: delay)
+                } catch {
+                    // Cancelled mid-backoff — release the transition state so the successor task's
+                    // settle-wait above can take over.
+                    appModel.immersiveSpaceState = .closed
+                    return
+                }
+            }
         }
     }
 }

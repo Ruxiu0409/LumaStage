@@ -475,6 +475,11 @@ struct TabletopStageEditorView: View {
             if appModel.immersiveSpaceState == .open {
                 appModel.immersiveSpaceState = .inTransition
                 await dismissImmersiveSpace()
+                // Second line of defence: `onDisappear` reopens the main window, but a window request
+                // issued during a space transition is intermittently dropped by the system (same class
+                // as the documented dropped `dismissWindow`), and the reconciler that reopens the 1:1
+                // stage lives in that window. Re-issuing the open here is idempotent.
+                openWindow(id: AppModel.mainWindowID)
             }
         }
     }

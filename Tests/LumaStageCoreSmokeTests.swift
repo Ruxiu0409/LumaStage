@@ -77,6 +77,7 @@ struct LumaStageCoreSmokeTests {
         rigPlacementSpreadsFixturesAcrossZone()
         try fixtureManualPositionOverridesZonePlacement()
         try surroundingsLightPolicyGatesOpaqueVenue()
+        immersiveSceneReopenPolicyBacksOffThenGivesUp()
         try humanoidFigurePlanIsAnatomicallyOrdered()
         aiComposerPlacementClampsWithinReach()
         await unavailableLightingServiceReportsUnavailable()
@@ -1279,6 +1280,21 @@ struct LumaStageCoreSmokeTests {
         let encoded = try JSONEncoder().encode(StageImmersionMode.roomSpill)
         let decoded = try JSONDecoder().decode(StageImmersionMode.self, from: encoded)
         expect(decoded == .roomSpill, "StageImmersionMode should survive a Codable round-trip")
+    }
+
+    // 空間重開重試節奏（stage↔editor 交接失敗的補救）：前三次失敗以 0.3s 起倍增退避重試，
+    // 第 maxAttempts 次失敗即放棄（回 nil，讓 ContentView 清掉 desired scene、退回 composer）。
+    private static func immersiveSceneReopenPolicyBacksOffThenGivesUp() {
+        expect(ImmersiveSceneReopenPolicy.retryDelayNanoseconds(afterFailedAttempt: 1) == 300_000_000,
+               "First failed open should retry after 0.3s")
+        expect(ImmersiveSceneReopenPolicy.retryDelayNanoseconds(afterFailedAttempt: 2) == 600_000_000,
+               "Second failed open should back off to 0.6s")
+        expect(ImmersiveSceneReopenPolicy.retryDelayNanoseconds(afterFailedAttempt: 3) == 1_200_000_000,
+               "Third failed open should back off to 1.2s")
+        expect(ImmersiveSceneReopenPolicy.retryDelayNanoseconds(afterFailedAttempt: ImmersiveSceneReopenPolicy.maxAttempts) == nil,
+               "Exhausting maxAttempts must give up (nil) so the reconciler exits visibly")
+        expect(ImmersiveSceneReopenPolicy.retryDelayNanoseconds(afterFailedAttempt: 0) == nil,
+               "A nonsensical attempt number must not retry")
     }
 
     private static func aiComposerPlacementClampsWithinReach() {

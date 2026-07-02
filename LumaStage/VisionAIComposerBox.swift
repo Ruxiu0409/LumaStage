@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 struct VisionAIComposerBox: View {
     @Environment(AppModel.self) private var appModel
     @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
+    @Environment(\.openWindow) private var openWindow
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isShowingPatchSheet = false
     @State private var isShowingMusicSheet = false
@@ -658,6 +659,11 @@ struct VisionAIComposerBox: View {
             if appModel.immersiveSpaceState == .open {
                 appModel.immersiveSpaceState = .inTransition
                 await dismissImmersiveSpace()
+                // Second line of defence, mirroring `finishEditing`: the stage's `onDisappear` reopens
+                // the main window, but a window request issued during a space transition is
+                // intermittently dropped by the system — and without that window there is no
+                // reconciler to open the editor space. Re-issuing the open here is idempotent.
+                openWindow(id: AppModel.mainWindowID)
             }
         }
     }
