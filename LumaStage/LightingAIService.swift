@@ -155,8 +155,11 @@ struct LightingLookDraft: Equatable {
             )
         )
 
-        try look.validate()
-        return look
+        // 規定：雷射只能掛在上舞台桁架上。所有生成路徑（on-device staged、cloud DTO、fallback）都經過
+        // 這個組裝器，所以在此把每盞雷射的 zone 正規化為 .stageBack（idempotent；demo/music show 已合規）。
+        let normalized = look.enforcingTrussMountedLasers()
+        try normalized.validate()
+        return normalized
     }
 
     /// One named cue in a multi-cue show: an id, a display name, and the rig's per-cue fixture states.
@@ -207,8 +210,118 @@ struct LightingLookDraft: Equatable {
             )
         )
 
-        try look.validate()
-        return look
+        // 規定：雷射只能掛在上舞台桁架上。所有生成路徑（on-device staged、cloud DTO、fallback）都經過
+        // 這個組裝器，所以在此把每盞雷射的 zone 正規化為 .stageBack（idempotent；demo/music show 已合規）。
+        let normalized = look.enforcingTrussMountedLasers()
+        try normalized.validate()
+        return normalized
+    }
+
+    // MARK: - Staged (define-once rig + per-cue state matrix) assembly
+
+    /// One fixture in a define-once rig, carrying NO per-cue state. Its `id` is assigned by the
+    /// staged assembler and reused verbatim in every cue, so the same physical light stays
+    /// addressable across the whole show (rig identity).
+    struct RigFixture: Equatable {
+        var id: String
+        var name: String
+        var role: FixtureRole
+        var zone: StageZone
+        /// nil → the fixture's `renderModel` is derived from `role`/`zone` (the existing fallback).
+        var model: LightingFixtureVisualModel? = nil
+    }
+
+    /// One fixture's state in a single cue (the Foundation-only mirror of the model's per-cue
+    /// `GeneratedFixtureState`: whether it's on, how bright, and its RGB hex colour).
+    struct StagedState: Equatable {
+        var enabled: Bool
+        var intensity: Double
+        var colorHex: String
+    }
+
+    /// Assembles a multi-cue `LightingLook` from a rig defined ONCE plus a per-cue state matrix.
+    ///
+    /// This is the staged-generation path (SPEC 14): the on-device model designs the rig skeleton in one
+    /// pass and each cue's states in a separate bounded pass, so the assembly here re-joins them. The rig
+    /// is the single source of fixture identity — `rig[j]`'s `id/name/role/zone/model` is reused in EVERY
+    /// cue — while `cueStates[c][j]` supplies fixture `j`'s state in cue `c`. Cue ids are pinned to
+    /// `cue_0`, `cue_1`, … here (never taken from the model), then the existing
+    /// `makeValidatedLook(lookName:mood:cues:…)` runs the same `validate()` invariants.
+    ///
+    /// Count drift is reconciled defensively, mirroring `makeValidatedLook`'s tolerance so a
+    /// slightly-off-count generation still assembles a valid show and a degenerate input never crashes:
+    /// - A state row shorter than the rig reuses its LAST entry for the missing fixtures; an EMPTY row
+    ///   makes that whole cue dark (every fixture `enabled: false`).
+    /// - A state row longer than the rig ignores the extra entries.
+    /// - Fewer `cueStates` rows than `cueNames` treats the missing cues as empty rows (all off); extra
+    ///   `cueStates` rows are ignored.
+    /// Every `colorHex` self-heals through `FixtureColor.normalizedHex(...) ?? "#FFFFFF"` at this boundary,
+    /// so one un-normalizable colour dims a single light rather than failing the whole look.
+    static func makeValidatedStagedLook(
+        lookName: String,
+        mood: String,
+        rig: [RigFixture],
+        cueNames: [String],
+        cueStates: [[StagedState]],
+        explanationTerm: String,
+        explanationPlainText: String,
+        explanationActionSummary: String,
+        explanationRationale: String
+    ) throws -> LightingLook {
+        // Always build at least one cue so `makeValidatedLook`'s `selectedCueId` resolves; an empty
+        // `rig` yields cues with no fixtures, which `validate()` accepts (no fixture-count minimum).
+        let cueCount = max(cueNames.count, 1)
+
+        let draftCues: [Cue] = (0..<cueCount).map { cueIndex in
+            let rawName = cueIndex < cueNames.count ? cueNames[cueIndex] : ""
+            let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? "Cue \(cueIndex + 1)"
+                : rawName
+
+            // The state row for this cue (missing rows / rows past the end are treated as empty → all off).
+            let row = cueIndex < cueStates.count ? cueStates[cueIndex] : []
+
+            let fixtures: [Fixture] = rig.enumerated().map { fixtureIndex, rigFixture in
+                let state = Self.resolvedStagedState(for: fixtureIndex, in: row)
+                return Fixture(
+                    id: rigFixture.id,
+                    name: rigFixture.name,
+                    role: rigFixture.role,
+                    zone: rigFixture.zone,
+                    enabled: state.enabled,
+                    intensity: state.intensity,
+                    colorHex: FixtureColor.normalizedHex(state.colorHex) ?? "#FFFFFF",
+                    model: rigFixture.model
+                )
+            }
+
+            return Cue(id: "cue_\(cueIndex)", name: name, fixtures: fixtures)
+        }
+
+        return try Self.makeValidatedLook(
+            lookName: lookName,
+            mood: mood,
+            cues: draftCues,
+            explanationTerm: explanationTerm,
+            explanationPlainText: explanationPlainText,
+            explanationActionSummary: explanationActionSummary,
+            explanationRationale: explanationRationale
+        )
+    }
+
+    /// Picks fixture `fixtureIndex`'s state from a single cue's state `row`, reconciling count drift:
+    /// an empty row means the fixture is off; a short row reuses its last entry; a long row's extras are
+    /// unreachable (only indices `< rig.count` are ever requested). `colorHex` is self-healed later.
+    private static func resolvedStagedState(for fixtureIndex: Int, in row: [StagedState]) -> StagedState {
+        guard let last = row.last else {
+            // Empty row → whole cue dark for this fixture.
+            return StagedState(enabled: false, intensity: 0, colorHex: "#000000")
+        }
+        if fixtureIndex < row.count {
+            return row[fixtureIndex]
+        }
+        // Short row → reuse the last supplied entry for the trailing fixtures.
+        return last
     }
 
     private static func fixtureGroup(from fixture: Fixture) -> FixtureGroup {

@@ -164,6 +164,8 @@ final class LumaPanelModel {
             }
         case .resetSelectedCue, .setFrontLightDimmer, .setBackgroundWashColor:
             break   // no baseline / legacy single-light paths in the mock
+        case .setGroupMaster, .bumpGroup:
+            break   // group ride layer lives on the host's AppModel, not the wire state; the fader bank is optimistic-local
         }
         host = state
     }

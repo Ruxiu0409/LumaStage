@@ -273,8 +273,12 @@ class AppModel {
 
     /// What the relight debug panel renders: how the selected cue's fixtures map onto the scene
     /// (color/intensity/beam per fixture, and which roles actually light the stage). `nil` with no cue.
+    /// Resolves through the SAME manual-override + group-master layers the renderer applies, so the panel
+    /// reflects hands-on edits (pinch/card/voice/fader rides) — not just the raw AI cue values.
     var relightDebugSnapshot: RelightDebugSnapshot? {
-        selectedCue.map(RelightDebugSnapshot.make(from:))
+        selectedCue.map { cue in
+            RelightDebugSnapshot.make(from: cue, overrides: lightOverrides, groupMasters: groupMasterByLight())
+        }
     }
 
     var generationStatus: String {
@@ -467,7 +471,18 @@ class AppModel {
     /// the same fixture sits at the same spot across the whole show — then re-validates + persists.
     func moveFixture(id: String, toX x: Double, y: Double, z: Double) {
         var look = stageState.lightingLook
-        let position = FixturePosition(x: x, y: y, z: z)
+        // 規定：雷射不可被拖離桁架 — 把拖曳位置夾回 truss footprint 再存（與 RigPlacement 共用同一套規則，
+        // 所以在 1:1 舞台與桌上模型上雷射都會彈回桁架上）。
+        let isLaser = look.cues.contains { cue in
+            cue.fixtureGroups.contains { $0.id == id && RigPlacement.mountsOnTrussOnly($0.renderModel) }
+        }
+        let position: FixturePosition
+        if isLaser {
+            let clamped = RigPlacement.clampedToTruss(Vector3Meters(x: x, y: y, z: z), layout: stageLayout)
+            position = FixturePosition(x: clamped.x, y: clamped.y, z: clamped.z)
+        } else {
+            position = FixturePosition(x: x, y: y, z: z)
+        }
         var found = false
         for cueIndex in look.cues.indices {
             if let fixtureIndex = look.cues[cueIndex].fixtureGroups.firstIndex(where: { $0.id == id }) {
@@ -477,6 +492,33 @@ class AppModel {
         }
         guard found else {
             fail("找不到要移動的燈具。")
+            return
+        }
+        do {
+            try stageState.replaceLightingLook(look)
+            persistCurrentProjectState()
+        } catch {
+            fail(error.localizedDescription)
+        }
+    }
+
+    /// Rotates the aim of the fixture `id` in EVERY cue by a pan/tilt delta — rig identity, so the same
+    /// fixture keeps one orientation across the whole show — then re-validates + persists. Mirrors
+    /// `moveFixture`: the delta accumulates onto the fixture's `aimOffset` (clamped by `adding`), and the
+    /// renderer folds that offset onto the zone-derived resting aim so the head geometry + beam re-aim.
+    func rotateFixture(id: String, panDelta: Double, tiltDelta: Double) {
+        var look = stageState.lightingLook
+        var found = false
+        for cueIndex in look.cues.indices {
+            if let fixtureIndex = look.cues[cueIndex].fixtureGroups.firstIndex(where: { $0.id == id }) {
+                let current = look.cues[cueIndex].fixtureGroups[fixtureIndex].aimOffset ?? .zero
+                look.cues[cueIndex].fixtureGroups[fixtureIndex].aimOffset =
+                    current.adding(panDelta: panDelta, tiltDelta: tiltDelta)
+                found = true
+            }
+        }
+        guard found else {
+            fail("找不到要旋轉的燈具。")
             return
         }
         do {
@@ -500,16 +542,18 @@ class AppModel {
 
         let id = "fixture_\(UUID().uuidString.prefix(6).lowercased())"
         let role = model.derivedRole
+        // 規定：雷射只能掛在上舞台桁架上，忽略呼叫端傳入的 zone（新增燈具面板一律傳 .stageFront）。
+        let effectiveZone = RigPlacement.mountsOnTrussOnly(model) ? .stageBack : zone
         let number = largestCueCount + 1
         let newFixture = FixtureGroup(
             id: id,
             name: "燈具 \(number)",
             role: role,
-            zone: zone,
+            zone: effectiveZone,
             enabled: true,
             intensity: 0.6,
             color: FixtureColor(mode: .rgb, value: "#FFFFFF"),
-            fineControl: .default(role: role, zone: zone),
+            fineControl: .default(role: role, zone: effectiveZone),
             model: model,
             manualPosition: nil
         )
@@ -833,7 +877,8 @@ class AppModel {
         }
 
         // Re-enforce on the current look right now (idempotent, so re-applying a compliant look is a no-op).
-        let enforced = constraint.enforce(on: stageState.lightingLook)
+        // Keep the laser-on-truss rule too — a model remap could otherwise place a laser off the truss.
+        let enforced = constraint.enforce(on: stageState.lightingLook).enforcingTrussMountedLasers()
         do {
             try stageState.replaceLightingLook(enforced)
             lightOverrides = [:]
@@ -951,7 +996,9 @@ class AppModel {
             conversationState = .applying
             // The locked-rig constraint applies to AI generation too (idempotent / no-op when
             // unconstrained), so a manual design still obeys the user's declared equipment profile.
-            let constrained = rigConstraint.enforce(on: result.look)
+            // Then force every laser onto the upstage truss (規定：雷射只能在 Truss 上) — this also
+            // catches the edge case where a constraint remap turns a floor-zoned fixture into a laser.
+            let constrained = rigConstraint.enforce(on: result.look).enforcingTrussMountedLasers()
             try stageState.replaceLightingLook(constrained)
             // A manual generation replaces any music-synced show that was loaded.
             clearMusicShow()
@@ -1012,6 +1059,29 @@ class AppModel {
             return
         }
 
+        // A rotation edits the fixture's persistent aim offset in the LOOK (rig identity, across all
+        // cues) — like `.setRoleColor` above, it goes through `replaceLightingLook` + persist rather than
+        // the override layer, so it survives cue switches and project reopen. Fixture id = the number-th
+        // fixture in cue order (`applyLightCommand`'s range guard already validated `number`).
+        if case .rotate(let number, let pan, let tilt) = command {
+            guard let id = selectedCue?.fixtureGroups[number - 1].id else {
+                fail("找不到第 \(number) 盞燈。")
+                return
+            }
+            rotateFixture(id: id, panDelta: pan, tiltDelta: tilt)
+            guard lastError == nil else { return }   // rotateFixture reported a failure
+            let summary = Self.describe(command)
+            aiUnderstoodCommand = summary
+            lastExplanation = LightingExplanation(
+                term: "燈具朝向",
+                plainText: "旋轉指令會改變單一燈具的朝向（水平左右或垂直俯仰），並在每個場景中保持一致，不會重新生成整個燈光。",
+                actionSummary: summary
+            )
+            conversationState = .explaining
+            narrateIfEnabled(summary)
+            return
+        }
+
         switch command {
         case .close(let number):
             lightOverrides[number, default: LightOverride()].isOff = true
@@ -1032,6 +1102,8 @@ class AppModel {
             lightOverrides.removeAll()
         case .setRoleColor:
             return   // handled above (targeted cue patch, returns early); unreachable here.
+        case .rotate:
+            return   // handled above (persistent aim-offset edit, returns early); unreachable here.
         }
 
         let summary = Self.describe(command)
@@ -1283,6 +1355,15 @@ class AppModel {
         case .setColor(let number, let hex): return "已將 \(StageLightLabel.displayName(number: number)) 設為 \(hex)"
         case .setIntensity(let number, let fraction): return "已將 \(StageLightLabel.displayName(number: number)) 設為 \(Int((fraction * 100).rounded()))%"
         case .setRoleColor(let role, let hex): return "已將目前場景的\(role.displayName)改為 \(hex)"
+        case .rotate(let number, let pan, let tilt):
+            let label = StageLightLabel.displayName(number: number)
+            if pan != 0 {
+                return "已將 \(label) \(pan > 0 ? "向右轉" : "向左轉") \(Int(abs(pan)))°"
+            }
+            if tilt != 0 {
+                return "已將 \(label) \(tilt > 0 ? "向上仰" : "向下俯") \(Int(abs(tilt)))°"
+            }
+            return "已調整 \(label) 的朝向"
         case .allOff: return "已關閉所有燈光"
         case .resetAll: return "已將所有燈光重置為目前的燈光"
         }
@@ -1332,6 +1413,9 @@ class AppModel {
     func setFixtureIntensity(id fixtureId: String, value: Double) {
         do {
             try stageState.patchSelectedCue(.fixtureIntensity(fixtureId: fixtureId, intensity: value))
+            // Authoritative console edit: drop any stale manual intensity override on this light so the
+            // new cue level actually renders (else `LightOverride.resolved` masks it and the light doesn't move).
+            supersedeManualOverride(fixtureId: fixtureId, clearing: .intensity)
             aiUnderstoodCommand = "已將所選燈具亮度設為 \(Int(round(value * 100)))%"
             lastExplanation = stageState.lightingLook.explanation
             conversationState = .explaining
@@ -1344,6 +1428,9 @@ class AppModel {
     func setFixtureColor(id fixtureId: String, hexColor: String) {
         do {
             try stageState.patchSelectedCue(.fixtureColor(fixtureId: fixtureId, hexColor: hexColor))
+            // Authoritative console edit: drop any stale manual colour override on this light so the new
+            // cue colour actually renders instead of being masked by the override.
+            supersedeManualOverride(fixtureId: fixtureId, clearing: .color)
             aiUnderstoodCommand = "已將所選燈具顏色設為 \(hexColor)"
             lastExplanation = stageState.lightingLook.explanation
             conversationState = .explaining
@@ -1351,6 +1438,17 @@ class AppModel {
         } catch {
             fail(error.localizedDescription)
         }
+    }
+
+    /// Supersedes one component of a fixture's manual override after an authoritative cue-layer edit to the
+    /// same light (iPad panel or a direct per-fixture edit). Without this, a light still carrying an override
+    /// from an in-headset pinch/voice/card tweak would have that override mask the console edit at resolve
+    /// time and the on-stage spotlight would never change — the "iPad edits don't reach the lights" bug.
+    private func supersedeManualOverride(fixtureId: String, clearing component: OverrideComponent) {
+        guard let index = selectedCue?.fixtureGroups.firstIndex(where: { $0.id == fixtureId }) else { return }
+        let number = index + 1
+        guard let existing = lightOverrides[number] else { return }
+        lightOverrides[number] = existing.superseded(clearing: component)
     }
 
     func setFixtureFineControl(id fixtureId: String, control: FixtureFineControl) {

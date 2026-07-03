@@ -23,8 +23,10 @@
 				iPadPanel/LumaPanelApp.swift,
 				iPadPanel/LumaPanelModel.swift,
 				iPadPanel/PanelChatView.swift,
+				iPadPanel/PanelFaderBankView.swift,
 				iPadPanel/PanelLightingView.swift,
 				iPadPanel/PanelRootView.swift,
+				FixtureGroups.swift,
 				LightEffect.swift,
 				LightingAIService.swift,
 				LightingFixtureCatalog.swift,
@@ -33,6 +35,7 @@
 				LumaSyncProtocol.swift,
 				LumaSyncTransport.swift,
 				MultipeerSyncTransport.swift,
+				RigConstraint.swift,
 				StageBuilderModels.swift,
 			);
 			target = F71ABA0B2FE95AFD007848FC /* LumaStageControl */;

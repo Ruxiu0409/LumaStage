@@ -26,7 +26,7 @@ The app uses on-device Apple Foundation Models and deploys to **visionOS 27**, s
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer   # an Xcode 27 install
 ```
 
-Single scheme/target: `LumaStage` (visionOS, deploy 27.0). It links the local SwiftPM package `Packages/RealityKitContent`.
+Two targets/schemes (both shared): `LumaStage` (visionOS, deploy 27.0; links the local SwiftPM package `Packages/RealityKitContent`) and `LumaStageControl` (the iPadOS 27.0 companion panel — see "iPad control panel" below).
 
 ```bash
 # Pick a concrete destination from: xcodebuild -showdestinations -scheme LumaStage
@@ -191,7 +191,7 @@ The two windows are intentionally **separate, independently movable objects** (n
 
 ### iPad control panel (real-time companion)
 
-An optional **iPad app target** ("LumaStage Control") is a thin real-time remote for the visionOS host over **Multipeer Connectivity** (local P2P, no server/account — chosen over iCloud, which is seconds-laggy). The visionOS app stays the single source of truth and runs standalone; the iPad mirrors its state and sends edits. The target isn't in the `.xcodeproj` yet — `docs/ipad-control-panel-setup.md` has the Xcode steps (the project uses synchronized folder groups, so file membership is set per-file). The link is layered:
+An optional **iPad app target** ("LumaStage Control") is a thin real-time remote for the visionOS host over **Multipeer Connectivity** (local P2P, no server/account — chosen over iCloud, which is seconds-laggy). The visionOS app stays the single source of truth and runs standalone; the iPad mirrors its state and sends edits. The target is in the `.xcodeproj` (`LumaStageControl`, shared scheme, iOS 27.0, own `LumaStageControl/` folder for Assets/Info.plist): it compiles an **opt-in subset** of the `LumaStage/` folder via a synchronized-folder membership-exception list — the six `iPadPanel/` files plus the shared core (`LightingModels`, `LightingAIService`, `StageBuilderModels`, `LightingFixtureCatalog`, `FixtureGroups`, `LightEffect`, `RigConstraint`, `LumaStageDesign`, `LumaSyncProtocol`, `LumaSyncTransport`, `MultipeerSyncTransport`). **A new shared file the panel needs must be added to that per-file membership list** (Xcode file inspector → Target Membership), or the panel build breaks. `docs/ipad-control-panel-setup.md` documents the original setup. The link is layered:
 
 - **Schema (`LumaSyncProtocol.swift`, Foundation-only, smoke-tested by `lumaSyncProtocolRoundTrips`)** — the transport-agnostic wire types: `LumaSyncMessage` envelope, `LumaHostState`, `LumaConversationState` + `LumaChatMessage` (Chat tab), `LumaControlCommand` (panel → host, 1:1 with `AppModel` methods), `LumaPeerRole`. Lighting payloads **reuse** the already-`Codable` `LightingLook`/`FixtureFineControl` rather than re-describing them.
 - **Transport (`LumaSyncTransport.swift`, Foundation-only, smoke-tested by `loopbackTransportDeliversMessages`)** — the `LumaSyncTransport` protocol + JSON `LumaSyncCodec` + an in-process `LoopbackSyncTransport` for tests/previews. Host/panel depend on this protocol, not on Multipeer (same injectable-boundary pattern as `LightingLookGenerating`).

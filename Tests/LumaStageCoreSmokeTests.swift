@@ -6,10 +6,12 @@ struct LumaStageCoreSmokeTests {
         try validatesDemoLookDefaults()
         try defaultProjectsShipPlayableShowcase()
         spotLightRenderMathMapsIntensityAndBeamAngle()
+        laserBeamMathDerivesCoreAndSheathLayers()
         try newProjectFactoryCreatesValidProject()
         try newProjectFactoryCreatesDefaultStageLayout()
-        projectCreationOffersSingleStudentActivityTemplate()
+        projectCreationOffersTemplatesWithBlankOption()
         try projectFactoryAppliesScenarioTemplate()
+        try projectFactoryCreatesBlankStageProject()
         try stageBaseCanResizeWidthDepthAndHeight()
         try stageBaseExposesSolidGeometry()
         iPadRootProjectSelectionUsesAvailableWidth()
@@ -60,6 +62,8 @@ struct LumaStageCoreSmokeTests {
         try dmxAndTargetSurviveValidationAndCodec()
         try showcaseDemoIsValidAndDiverse()
         try aiDraftGuaranteesRenderableFrontAndBackgroundFixtures()
+        try stagedAssemblyReconcilesStateCounts()
+        try stagedAssemblyPreservesRigIdentityAcrossCues()
         try validateAcceptsMultipleCuesAndRejectsEmpty()
         try multiCueDraftBuildsValidatedSequence()
         try stageStateSupportsCueStackAndGo()
@@ -72,10 +76,14 @@ struct LumaStageCoreSmokeTests {
         parsesStageVoiceCommands()
         stageLightAccessibilityLabelsAreLocalized()
         try relightDebugSnapshotMapsCueFixtures()
+        try relightDebugSnapshotResolvesManualOverrides()
+        cueEditSupersedesMaskingOverride()
         parsesSingleLightCommands()
+        parsesLightRotationCommands()
         resolvesLightOverridesOntoCueValues()
         rigPlacementSpreadsFixturesAcrossZone()
         try fixtureManualPositionOverridesZonePlacement()
+        fixtureSupportPolicyClassifiesTrussVsStand()
         try surroundingsLightPolicyGatesOpaqueVenue()
         immersiveSceneReopenPolicyBacksOffThenGivesUp()
         try humanoidFigurePlanIsAnatomicallyOrdered()
@@ -92,6 +100,7 @@ struct LumaStageCoreSmokeTests {
         try rigConstraintClampsRemapsAndIsIdempotent()
         try musicShowBuilderBuildsValidatedSymmetricShow()
         try musicShowLasersAreMirroredLeftAndRight()
+        try laserFixturesAreForcedOntoTheTruss()
         try legacyProjectJSONDecodesToUnconstrainedRig()
         await songLibraryLoopbackBrowsesAndResolves()
         print("LumaStageCoreSmokeTests passed")
@@ -160,6 +169,94 @@ struct LumaStageCoreSmokeTests {
                "Above-range beam spread must clamp to the largest shadow light size")
     }
 
+    private static func laserBeamMathDerivesCoreAndSheathLayers() {
+        // Visibility gate: shared with the beam geometry so both layers vanish together.
+        expect(!LaserScatterMath.beamsVisible(0.02), "A near-dark laser must be gated off")
+        expect(!LaserScatterMath.beamsVisible(0.03), "The gate stays exclusive at 0.03 (matches the legacy > 0.03)")
+        expect(LaserScatterMath.beamsVisible(0.5), "A lit laser must be visible")
+
+        // Layer geometry: the glow sheath is wider than the thin core (the haze-particle layer was removed).
+        let coreRadius = 0.01
+        let sheathRadius = LaserScatterMath.sheathRadius(coreRadiusMeters: coreRadius)
+        expect(sheathRadius > coreRadius, "The glow sheath must be wider than the core")
+
+        // The core is hotter (whiter) than the raw hue; the sheath stays saturated.
+        let core = LaserScatterMath.coreRGBA(hex: "#FF0000", intensity: 1)
+        expect(core.green > 0 && core.blue > 0, "The white-hot core must lift the non-hue channels toward white")
+        expect(core.red >= core.green, "The core must still lean toward its hue (red dominant for a red laser)")
+        let sheath = LaserScatterMath.sheathRGBA(hex: "#FF0000", intensity: 1)
+        expect(sheath.green < 0.0001 && sheath.blue < 0.0001, "The sheath must keep the saturated hue")
+
+        // Sheath alpha is low and scales with intensity.
+        expect(sheath.alpha < 0.2, "The sheath alpha must stay low so it reads as a halo, not a solid tube")
+        expect(LaserScatterMath.sheathRGBA(hex: "#FF0000", intensity: 0.5).alpha < sheath.alpha,
+               "A dimmer cue must give a fainter sheath")
+
+        // Determinism + invalid-hex fallback to white.
+        expect(LaserScatterMath.coreRGBA(hex: "#3366FF", intensity: 0.7) == LaserScatterMath.coreRGBA(hex: "#3366FF", intensity: 0.7),
+               "Same inputs must be deterministic")
+        let bogus = LaserScatterMath.sheathRGBA(hex: "not-a-hex", intensity: 1)
+        let white = LaserScatterMath.sheathRGBA(hex: "#FFFFFF", intensity: 1)
+        expect(bogus == white, "An invalid hex must fall back to white")
+    }
+
+    // 規定：雷射只能掛在上舞台桁架上。驗證 (1) `enforcingTrussMountedLasers` 把落地/側台的雷射 zone 正規化
+    // 為 .stageBack；(2) 被拖到低處/下舞台的雷射經 `RigPlacement` 解析後仍必定吊掛在桁架（永不落地）。
+    private static func laserFixturesAreForcedOntoTheTruss() throws {
+        let layout = StageLayout.defaultStudentOutdoor()
+
+        // Simulate an AI/edit mistake: force every laser into a floor-of-house zone, then normalize.
+        var look = LightingLook.showcaseDemo()
+        for cueIndex in look.cues.indices {
+            for fixtureIndex in look.cues[cueIndex].fixtureGroups.indices
+            where look.cues[cueIndex].fixtureGroups[fixtureIndex].renderModel == .laser {
+                look.cues[cueIndex].fixtureGroups[fixtureIndex].zone = .stageFront
+            }
+        }
+        let enforced = look.enforcingTrussMountedLasers()
+        var sawLaser = false
+        for cue in enforced.cues {
+            for fixture in cue.fixtureGroups where fixture.renderModel == .laser {
+                sawLaser = true
+                expect(fixture.zone == .stageBack, "A laser must be normalized onto the upstage truss zone")
+            }
+        }
+        expect(sawLaser, "showcaseDemo must contain a laser to exercise the rule")
+
+        // Predicate: only the laser is truss-only.
+        expect(RigPlacement.mountsOnTrussOnly(.laser), "A laser is truss-only")
+        expect(!RigPlacement.mountsOnTrussOnly(.movingHeadBeam), "A moving head is not truss-only")
+
+        // A laser dragged to a low, downstage spot must resolve back onto the truss (hang, never a stand).
+        let laser = try expectUnwrapped(
+            enforced.cues.first?.fixtureGroups.first(where: { $0.renderModel == .laser }),
+            "showcaseDemo must contain a laser"
+        )
+        var dragged = laser
+        dragged.manualPosition = FixturePosition(x: 99, y: 0.4, z: 9) // way off the truss, near the floor
+        let placement = RigPlacement.resolvedPlacement(fixture: dragged, slot: 0, count: 1, layout: layout)
+        expect(RigPlacement.support(forPosition: placement.position, layout: layout) == .hangFromTruss,
+               "A dragged laser must still hang from the truss, never grow a floor stand")
+
+        // Directly pin resolvedPlacement's zone-forcing branch (manualPosition == nil): a laser with a
+        // stale non-back zone (legacy/un-normalized) must STILL resolve onto the truss — independent of
+        // the manual-position clamp path above.
+        var staleZoneLaser = laser
+        staleZoneLaser.zone = .stageFront
+        staleZoneLaser.manualPosition = nil
+        let stalePlacement = RigPlacement.resolvedPlacement(fixture: staleZoneLaser, slot: 0, count: 1, layout: layout)
+        expect(RigPlacement.support(forPosition: stalePlacement.position, layout: layout) == .hangFromTruss,
+               "A laser with no manual position must resolve onto the truss even if its stored zone is wrong")
+
+        // A non-laser fixture with the same off-truss manual position is free to stand on the floor.
+        var standingPar = laser
+        standingPar.model = .ledPar
+        standingPar.manualPosition = FixturePosition(x: 99, y: 0.4, z: 9)
+        let parPlacement = RigPlacement.resolvedPlacement(fixture: standingPar, slot: 0, count: 1, layout: layout)
+        expect(parPlacement.position.z > placement.position.z,
+               "A non-laser keeps its off-truss manual position (only lasers are clamped onto the truss)")
+    }
+
     private static func newProjectFactoryCreatesValidProject() throws {
         let project = LumaStageProject.newProject(index: 1)
 
@@ -182,14 +279,32 @@ struct LumaStageCoreSmokeTests {
         try layout.validate()
     }
 
-    private static func projectCreationOffersSingleStudentActivityTemplate() {
+    private static func projectCreationOffersTemplatesWithBlankOption() {
         let templates = ProjectCreationTemplate.allTemplates
 
-        expect(templates.count == 1, "Project creation should offer a single student-activity template")
-        expect(templates.first?.kind == .campusMusic, "The only project template should be the campus music night student activity")
-        expect(ProjectCreationTemplate.Kind.allCases.count == 1, "campusMusic should be the only project template kind")
-        expect(templates.allSatisfy { !$0.title.isEmpty && !$0.subtitle.isEmpty }, "Every project template should have English labels")
+        expect(templates.count == 2, "Project creation should offer the student-activity template plus a blank option")
+        expect(templates.first?.kind == .emptyStage, "The blank stage should lead the template list (start-from-scratch first)")
+        expect(templates.contains(where: { $0.kind == .campusMusic }), "Project creation should keep the campus music night scenario template")
+        expect(ProjectCreationTemplate.Kind.allCases.count == 2, "campusMusic and emptyStage should be the project template kinds")
+        expect(templates.first(where: { $0.kind == .emptyStage })?.visualStyle == .emptyStage, "The blank template should use the empty-stage preview style")
+        expect(templates.allSatisfy { !$0.title.isEmpty && !$0.subtitle.isEmpty }, "Every project template should have labels")
         expect(templates.allSatisfy { !$0.introduction.isEmpty }, "Every project template should include an intro paragraph")
+    }
+
+    private static func projectFactoryCreatesBlankStageProject() throws {
+        let project = LumaStageProject.newProject(index: 3, template: .emptyStage)
+
+        expect(project.name == "空白舞台 3", "The blank template should name new projects from its label")
+        expect(project.eventType == "自訂", "The blank template should use a custom event type")
+        try project.stageLayout.validate()
+        try project.lightingLook.validate()
+
+        let allWhite = project.lightingLook.cues.allSatisfy { cue in
+            cue.fixtureGroups.allSatisfy { $0.color.value == "#FFFFFF" }
+        }
+        expect(allWhite, "The blank look should be neutral white with no color theme")
+        expect(!project.lightingLook.cues.contains(where: { $0.fixtureGroups.contains(where: { $0.model == .laser }) }),
+               "The blank look should not include a laser or accent fixtures")
     }
 
     private static func projectFactoryAppliesScenarioTemplate() throws {
@@ -1110,6 +1225,107 @@ struct LumaStageCoreSmokeTests {
         expect(highlightFront.intensity > openingFront.intensity, "Highlight front light should be brighter than Opening")
     }
 
+    // SPEC 14 (staged generation): the Foundation-only staged assembler joins a define-once rig with a
+    // per-cue state MATRIX (row j → rig[j]). It must reconcile count drift exactly like `makeValidatedLook`
+    // — a short row reuses its last entry, a long row truncates, and an empty row makes the whole cue dark
+    // — and still produce a look that passes `validate()`.
+    private static func stagedAssemblyReconcilesStateCounts() throws {
+        let rig = [
+            LightingLookDraft.RigFixture(id: "fixture_0", name: "Front L", role: .frontLight, zone: .stageFront, model: .frontFresnel),
+            LightingLookDraft.RigFixture(id: "fixture_1", name: "Wash", role: .backgroundWash, zone: .stageBack, model: .washBar),
+            LightingLookDraft.RigFixture(id: "fixture_2", name: "Beam", role: .spot, zone: .stageBack, model: .movingHeadBeam)
+        ]
+
+        let cueStates: [[LightingLookDraft.StagedState]] = [
+            // Short row: 2 states for 3 fixtures → the 3rd reuses the last (the wash's #2244FF entry).
+            [
+                LightingLookDraft.StagedState(enabled: true, intensity: 0.6, colorHex: "#FFD1A3"),
+                LightingLookDraft.StagedState(enabled: true, intensity: 0.7, colorHex: "#2244FF")
+            ],
+            // Long row: 5 states for 3 fixtures → the extra two are ignored.
+            [
+                LightingLookDraft.StagedState(enabled: true, intensity: 0.9, colorHex: "#FF3300"),
+                LightingLookDraft.StagedState(enabled: true, intensity: 0.8, colorHex: "#00FF88"),
+                LightingLookDraft.StagedState(enabled: true, intensity: 0.5, colorHex: "#8800FF"),
+                LightingLookDraft.StagedState(enabled: false, intensity: 0.2, colorHex: "#111111"),
+                LightingLookDraft.StagedState(enabled: true, intensity: 0.1, colorHex: "#222222")
+            ],
+            // Empty row: whole cue dark (every fixture off).
+            []
+        ]
+
+        let look = try LightingLookDraft.makeValidatedStagedLook(
+            lookName: "Staged Show",
+            mood: "warm → bold → blackout",
+            rig: rig,
+            cueNames: ["Opening", "Build", "Blackout"],
+            cueStates: cueStates,
+            explanationTerm: "Cue",
+            explanationPlainText: "A cue is one saved state of the whole rig the operator steps through.",
+            explanationActionSummary: "Built a three-cue staged show.",
+            explanationRationale: "Escalating cues build a short arc."
+        )
+        try look.validate()
+
+        expect(look.cues.count == 3, "Every cue name should produce a cue")
+        expect(look.cues.allSatisfy { $0.fixtureGroups.count == rig.count },
+               "Every cue must carry one fixture per rig fixture (count reconciled)")
+
+        // Short row: fixture_2 reuses fixture_1's last state (the #2244FF wash entry).
+        let opening = try look.requireCue(id: "cue_0")
+        let openingBeam = opening.fixtureGroups.first { $0.id == "fixture_2" }
+        expect(openingBeam?.color.value == "#2244FF", "A short state row must reuse the last entry for the trailing fixture")
+        expect(abs((openingBeam?.intensity ?? -1) - 0.7) < 0.0001, "The reused entry must carry its intensity too")
+
+        // Long row: only the first three states are used; extras dropped.
+        let build = try look.requireCue(id: "cue_1")
+        let buildThird = build.fixtureGroups.first { $0.id == "fixture_2" }
+        expect(buildThird?.color.value == "#8800FF", "A long state row must map the 3rd entry to the 3rd fixture and ignore extras")
+
+        // Empty row: whole cue dark — `enabled:false` assembles intensity 0.
+        let blackout = try look.requireCue(id: "cue_2")
+        expect(blackout.fixtureGroups.allSatisfy { $0.intensity == 0 },
+               "An empty state row must make the whole cue dark (intensity 0)")
+    }
+
+    // SPEC 14: the rig is defined ONCE and reused in every cue, so fixture ids + order must be identical
+    // across cues (rig identity), cue ids must be the pinned `cue_0…`, and `selectedCueId` must resolve.
+    private static func stagedAssemblyPreservesRigIdentityAcrossCues() throws {
+        let rig = [
+            LightingLookDraft.RigFixture(id: "fixture_0", name: "A", role: .frontLight, zone: .stageFront, model: .frontFresnel),
+            LightingLookDraft.RigFixture(id: "fixture_1", name: "B", role: .wash, zone: .stageLeft, model: .washBar),
+            LightingLookDraft.RigFixture(id: "fixture_2", name: "C", role: .spot, zone: .stageRight, model: .movingHeadBeam),
+            LightingLookDraft.RigFixture(id: "fixture_3", name: "D", role: .backgroundWash, zone: .stageBack, model: .backgroundBatten)
+        ]
+
+        func row(_ intensity: Double) -> [LightingLookDraft.StagedState] {
+            rig.map { _ in LightingLookDraft.StagedState(enabled: true, intensity: intensity, colorHex: "#FFFFFF") }
+        }
+
+        let look = try LightingLookDraft.makeValidatedStagedLook(
+            lookName: "Identity Show",
+            mood: "steady",
+            rig: rig,
+            cueNames: ["Opening", "Build", "Chorus", "Finale"],
+            cueStates: [row(0.3), row(0.5), row(0.7), row(0.9)],
+            explanationTerm: "Rig",
+            explanationPlainText: "The rig is the fixed set of fixtures the whole show is built from.",
+            explanationActionSummary: "Built a four-cue show on a stable four-fixture rig.",
+            explanationRationale: "A stable rig keeps each light addressable across every cue."
+        )
+        try look.validate()
+
+        let expectedIds = ["fixture_0", "fixture_1", "fixture_2", "fixture_3"]
+        expect(look.cues.count == 4, "Four cue names should produce four cues")
+        expect(look.cues.map(\.id) == ["cue_0", "cue_1", "cue_2", "cue_3"], "Cue ids must be the pinned cue_0… sequence")
+        for cue in look.cues {
+            expect(cue.fixtureGroups.map(\.id) == expectedIds,
+                   "Every cue must carry the same fixture ids in the same order (rig identity)")
+        }
+        _ = try look.requireCue(id: look.selectedCueId)
+        expect(look.selectedCueId == "cue_0", "The first cue should be selected and resolve")
+    }
+
     // The relight debug panel (toggled from the AI composer) renders `RelightDebugSnapshot`. Pin that
     // it mirrors the cue's fixtures and correctly flags which roles the immersive scene actually draws
     // — the same `isRenderedAsSpotlight` predicate that would have made the original "valid look that
@@ -1126,6 +1342,11 @@ struct LumaStageCoreSmokeTests {
 
         expect(snapshot.cueId == cue.id, "snapshot should carry the cue id")
         expect(snapshot.rows.count == cue.fixtureGroups.count, "snapshot should have one row per fixture")
+        // Each row carries its 1-based "Light N" number in cue order — the SAME numbering the on-stage
+        // floating label, the voice/deterministic commands, and the iPad panel all use, so the debug row
+        // can be cross-referenced to a command.
+        expect(snapshot.rows.map(\.number) == Array(1...cue.fixtureGroups.count),
+               "rows should carry 1-based Light N numbers in cue order")
         // The dynamic rig relights EVERY fixture now (`RelightDebugSnapshot.make` flags them all), so
         // renderedCount equals the fixture count — including non-spotlight roles like the laser's `.spot`.
         // (The `isRenderedAsSpotlight` predicate above is now vestigial metadata, not a render gate.)
@@ -1137,6 +1358,9 @@ struct LumaStageCoreSmokeTests {
         expect(frontRow?.hex == front.color.value, "row hex should mirror the fixture color")
         expect(frontRow?.intensityPercent == Int((front.intensity * 100).rounded()), "row intensity% should mirror the fixture")
         expect(frontRow?.isRendered == true, "the frontLight row should be flagged rendered")
+        // With no manual overrides passed, rows resolve to the raw cue values and read as un-overridden.
+        expect(snapshot.rows.allSatisfy { !$0.isOverridden && !$0.isManuallyOff },
+               "with no overrides, no row should be flagged manual")
 
         // A1 dynamic effects surface in the snapshot via the shared LightEffectPlan, so the in-app debug
         // readout matches what the renderer animates. mvpDemo's opening averages ≥ 0.6 → high energy.
@@ -1145,6 +1369,65 @@ struct LumaStageCoreSmokeTests {
         expect(frontRow?.effectKind == LightEffectKind.none, "a front fresnel stays steady even on a high-energy cue")
         let laserRow = snapshot.rows.first(where: { $0.fixtureId == "laser_fan" })
         expect(laserRow?.effectKind == LightEffectKind.none, "the laser stays still — its visible aerial beam fan isn't animated — even on a high-energy cue")
+    }
+
+    // The debug panel must resolve the manual override + group-master layers exactly like the renderer, so
+    // a hands-on edit (pinch/card/voice/fader ride) shows its EFFECTIVE value in 偵錯台 — not the raw cue
+    // value (the "偵錯台 doesn't change when I adjust a light by gesture" bug).
+    private static func relightDebugSnapshotResolvesManualOverrides() throws {
+        let look = LightingLook.mvpDemo()
+        let cue = try look.requireCue(id: look.selectedCueId)
+
+        // Light 1 recoloured + dimmed by hand; Light 2 manually blacked out; Light 3 ridden by a group at 50%.
+        let overrides: [Int: LightOverride] = [
+            1: LightOverride(isOff: false, colorHex: "#FF0000", intensity: 0.2),
+            2: LightOverride(isOff: true, colorHex: nil, intensity: nil)
+        ]
+        let masters: [Int: Double] = [3: 0.5]
+        let snapshot = RelightDebugSnapshot.make(from: cue, overrides: overrides, groupMasters: masters)
+
+        let row1 = snapshot.rows[0]
+        expect(row1.hex == "#FF0000", "row 1 should show the manual override colour, not the cue colour")
+        expect(row1.intensityPercent == 20, "row 1 should show the manual override intensity, not the cue value")
+        expect(row1.isOverridden, "row 1 should be flagged as manually overridden")
+        expect(!row1.isManuallyOff, "row 1 is dimmed by hand, not blacked out")
+
+        let row2 = snapshot.rows[1]
+        expect(row2.intensityPercent == 0, "a manually blacked-out light resolves to 0%")
+        expect(row2.isManuallyOff, "row 2 should be flagged as manually off")
+
+        let cue3Intensity = cue.fixtureGroups[2].intensity
+        let row3 = snapshot.rows[2]
+        expect(row3.intensityPercent == Int((cue3Intensity * 0.5 * 100).rounded()),
+               "a group master ride should scale the row's intensity like the renderer")
+        expect(row3.isOverridden, "a light pulled off 1.0 by a group ride should be flagged")
+    }
+
+    // An authoritative cue-layer edit (iPad panel / direct per-fixture edit) supersedes the matching
+    // component of a light's manual override, so the new cue value renders instead of being masked by a
+    // stale override — the "平板改變的內容沒有更新到燈光上" fix. (AppModel isn't in the smoke set, so pin
+    // the Foundation-only `LightOverride.superseded` logic AppModel delegates to.)
+    private static func cueEditSupersedesMaskingOverride() {
+        let full = LightOverride(isOff: true, colorHex: "#00FF00", intensity: 0.9)
+
+        // An intensity edit drops the manual level + blackout but keeps an unrelated colour override.
+        let afterIntensity = full.superseded(clearing: .intensity)
+        expect(afterIntensity?.intensity == nil, "an intensity edit should clear the manual level")
+        expect(afterIntensity?.isOff == false, "an intensity edit should un-blackout the light")
+        expect(afterIntensity?.colorHex == "#00FF00", "an intensity edit should keep an unrelated colour override")
+
+        // A colour edit drops the manual colour but keeps an unrelated intensity/blackout override.
+        let afterColor = full.superseded(clearing: .color)
+        expect(afterColor?.colorHex == nil, "a colour edit should clear the manual colour")
+        expect(afterColor?.intensity == 0.9, "a colour edit should keep an unrelated intensity override")
+        expect(afterColor?.isOff == true, "a colour edit should not touch a blackout")
+
+        // When the edited component was the ONLY thing the override carried, it drops entirely so the light
+        // follows the cue again.
+        let colorOnly = LightOverride(isOff: false, colorHex: "#0000FF", intensity: nil)
+        expect(colorOnly.superseded(clearing: .color) == nil, "clearing the only component should drop the override")
+        let intensityOnly = LightOverride(isOff: false, colorHex: nil, intensity: 0.3)
+        expect(intensityOnly.superseded(clearing: .intensity) == nil, "clearing the only component should drop the override")
     }
 
     // Deterministic single-light command parsing (the Action-Phrase-style precise control layer):
@@ -1188,6 +1471,44 @@ struct LumaStageCoreSmokeTests {
         // Role-only phrase (no colour) must NOT false-match — it falls through to the AI/other paths.
         expect(LightCommand.parse("把前光調暗一點") == nil,
                "a role phrase with no colour must not parse as a role recolor")
+    }
+
+    // SPEC 13: "Light N turn right/left/up/down M degrees" parses to `.rotate` (one axis at a time), the
+    // aim-offset clamp holds, and rotate must NOT eat "turn off"/"turn on" (no direction word → close/open).
+    private static func parsesLightRotationCommands() {
+        expect(LightCommand.parse("Light 6 turn right 60 degrees") == .rotate(6, panDeltaDegrees: 60, tiltDeltaDegrees: 0),
+               "turn right N° should pan +N on the named light")
+        expect(LightCommand.parse("turn light 2 left 45 degrees") == .rotate(2, panDeltaDegrees: -45, tiltDeltaDegrees: 0),
+               "turn left N° should pan −N")
+        expect(LightCommand.parse("tilt light 3 up 20 degrees") == .rotate(3, panDeltaDegrees: 0, tiltDeltaDegrees: 20),
+               "tilt up N° should tilt +N")
+        expect(LightCommand.parse("rotate light 4 down 30") == .rotate(4, panDeltaDegrees: 0, tiltDeltaDegrees: -30),
+               "rotate down N (no 'degrees') should tilt −N")
+        expect(LightCommand.parse("pan light 1 right") == .rotate(1, panDeltaDegrees: 45, tiltDeltaDegrees: 0),
+               "a rotation with no magnitude should default to 45°")
+
+        // Regression: on/off are not direction words, so a rotation verb ("turn") must not swallow them.
+        expect(LightCommand.parse("turn off light 2") == .close(2), "rotate must not eat 'turn off'")
+        expect(LightCommand.parse("turn on light 4") == .open(4), "rotate must not eat 'turn on'")
+
+        // FixtureAimOffset.adding clamps to the valid range (pan ±180, tilt ±90).
+        expect(FixtureAimOffset.zero.adding(panDelta: 200, tiltDelta: 0).panDegrees == 180, "pan clamps to 180")
+        expect(FixtureAimOffset.zero.adding(panDelta: 0, tiltDelta: -200).tiltDegrees == -90, "tilt clamps to −90")
+        expect(FixtureAimOffset.zero.adding(panDelta: -300, tiltDelta: 0).panDegrees == -180, "pan clamps to −180")
+
+        // Old JSON with no `aimOffset` key decodes to nil (synthesized decoder defaults optionals to nil),
+        // and a set aimOffset survives a Codable round-trip (mirrors the manualPosition back-compat test).
+        let legacyJSON = """
+        {"id":"f1","name":"燈具 1","role":"frontLight","zone":"stageFront",
+         "enabled":true,"intensity":0.6,"color":{"mode":"rgb","value":"#FFFFFF"}}
+        """
+        let decoded = try! JSONDecoder().decode(FixtureGroup.self, from: Data(legacyJSON.utf8))
+        expect(decoded.aimOffset == nil, "A FixtureGroup decoded from JSON without an aimOffset key must yield nil")
+
+        var placed = decoded
+        placed.aimOffset = FixtureAimOffset(panDegrees: 60, tiltDegrees: -12)
+        let roundTripped = try! JSONDecoder().decode(FixtureGroup.self, from: try! JSONEncoder().encode(placed))
+        expect(roundTripped.aimOffset == placed.aimOffset, "aimOffset must survive a Codable round-trip")
     }
 
     private static func resolvesLightOverridesOntoCueValues() {
@@ -1266,6 +1587,26 @@ struct LumaStageCoreSmokeTests {
         // Round-trip: a set manualPosition survives encode/decode.
         let roundTripped = try JSONDecoder().decode(FixtureGroup.self, from: JSONEncoder().encode(placed))
         expect(roundTripped.manualPosition == manual, "manualPosition must survive a Codable round-trip")
+    }
+
+    private static func fixtureSupportPolicyClassifiesTrussVsStand() {
+        let layout = StageLayout.defaultStudentOutdoor()
+        // Use placement to produce each zone's actual position, then ask support:
+        let back  = RigPlacement.placement(zone: .stageBack,  slot: 0, count: 1, layout: layout).position
+        let left  = RigPlacement.placement(zone: .stageLeft,  slot: 0, count: 2, layout: layout).position
+        let front = RigPlacement.placement(zone: .stageFront, slot: 0, count: 2, layout: layout).position
+        expect(RigPlacement.support(forPosition: back,  layout: layout) == .hangFromTruss, "上舞台 truss 位吊掛")
+        expect(RigPlacement.support(forPosition: left,  layout: layout).isFloorStand,      "側台 boom 落地燈架")
+        expect(RigPlacement.support(forPosition: front, layout: layout).isFloorStand,      "FOH 落地燈架")
+        // 手動位置：truss 正下方且高 → 吊掛；台前高處（footprint 外）→ 落地。
+        if let f = RigPlacement.trussFootprint(in: layout) {
+            let underTruss = Vector3Meters(x: (f.minX + f.maxX)/2, y: f.topY - 0.2, z: (f.minZ + f.maxZ)/2)
+            expect(RigPlacement.support(forPosition: underTruss, layout: layout) == .hangFromTruss, "truss 正下方高處吊掛")
+        }
+        let floatingDownstage = Vector3Meters(x: 0, y: 3.0, z: 5.0)  // 台前遠處高空
+        if case .floorStand(let topY) = RigPlacement.support(forPosition: floatingDownstage, layout: layout) {
+            expect(topY > 0.3 && topY <= 3.0, "落地柱頂在燈下")
+        } else { fatalError("台前高空應落地燈架，不可浮空") }
     }
 
     private static func surroundingsLightPolicyGatesOpaqueVenue() throws {

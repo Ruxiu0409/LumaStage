@@ -533,9 +533,27 @@ struct VisionAIComposerBox: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
+                    // The addressable "Light N" id — the same vocabulary as the on-stage floating label and
+                    // the voice/deterministic commands, so a debug row can be cross-referenced to a command.
+                    Text(StageLightLabel.displayName(number: row.number))
+                        .font(.caption2.weight(.bold))
+                        .monospaced()
+                        .foregroundStyle(LumaStageDesign.coolBlue)
+
                     Text(row.name)
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(LumaStageDesign.textPrimary)
+
+                    if row.isManuallyOff {
+                        Text("手動關閉")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(LumaStageDesign.warmAmber)
+                    } else if row.isOverridden {
+                        Text("手動")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(LumaStageDesign.warmAmber)
+                    }
+
                     if !row.isRendered {
                         Text("未渲染")
                             .font(.caption2.weight(.semibold))

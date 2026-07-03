@@ -5,9 +5,19 @@ import FoundationModels
 
 /// On-device lighting generation backed by Apple's Foundation Models framework.
 ///
-/// Uses `LanguageModelSession` with compile-time structured output (`@Generable`) so the
-/// model fills in a constrained `GeneratedLightingLook`, which is then assembled and
-/// validated by `LightingLookDraft.makeValidatedLook()`. No network, no API key.
+/// Uses `LanguageModelSession` with compile-time structured output (`@Generable`) in TWO staged passes
+/// (SPEC 14) so each model call's OUTPUT stays bounded — the on-device model shares one ~4096-token
+/// window across input + output, and a single-shot "whole show" output (fixtures × cues states) blows it
+/// for larger rigs / longer shows (`contextSizeExceeded`).
+///
+/// - **Pass 1 — rig plan**: one call yields `GeneratedRigPlan` (name, mood, the ordered cue LABELS, and
+///   the WHOLE rig as `{name,type,zone}` fixtures — no colours/intensities). Output ≈ N fixtures.
+/// - **Pass 2..(M+1) — per-cue design**: for each cue, a FRESH `LanguageModelSession` yields a
+///   `GeneratedCueDesign` (one `GeneratedFixtureState` per fixture, in rig order). Output ≈ N states.
+///
+/// Each pass's output is ≈ N and decoupled from M, so more cues just means more (bounded) calls. The
+/// results are joined + validated by the Foundation-only `LightingLookDraft.makeValidatedStagedLook(…)`.
+/// No network, no API key.
 struct FoundationModelsLightingService: LightingLookGenerating {
     private let model: SystemLanguageModel
 
@@ -53,49 +63,98 @@ struct FoundationModelsLightingService: LightingLookGenerating {
             throw LightingGenerationError.modelUnavailable(availability.unavailableReason ?? "Apple Intelligence 無法使用。")
         }
 
-        let session = LanguageModelSession(
-            model: model,
-            instructions: Instructions(Self.instructions)
-        )
-
         // Randomized (nucleus) sampling with NO fixed seed so each generation differs — choosing a
-        // lighting look is a creative act, not extraction. `.greedy` made every run byte-identical
-        // for a given prompt (and ignores `temperature` entirely), which read as "the output is
-        // always the same". The `@Generable` schema still pins the overall shape (2–3 cues, a 4–6
-        // fixture rig, one state per cue), so randomness varies the cue count, fixture mix, colors,
-        // intensities, mood and wording within those bounds. Pass a `seed:` here only if you need
-        // reproducible output for debugging.
+        // lighting look is a creative act, not extraction. `.greedy` made every run byte-identical for a
+        // given prompt (and ignores `temperature` entirely), which read as "the output is always the
+        // same". The `@Generable` schemas still pin the structure (2–6 cues, a 4–12 fixture rig, one state
+        // per fixture per cue), so randomness only varies the cue count, fixture mix, colors, intensities,
+        // mood and wording within those bounds. Reused across both passes. Pass a `seed:` here only if you
+        // need reproducible output for debugging.
         let options = GenerationOptions(samplingMode: .random(probabilityThreshold: 0.9), temperature: 0.9)
 
         #if DEBUG
-        // Diagnostic only (SPEC 11 work item D): the on-device model's context window is shared by
-        // input + output, so log the budget (`contextSize`) against the INPUT token cost (instructions
-        // + this prompt) to see how much room is left for the structured output. Best-effort, never
-        // gates generation. `tokenCount(...)` excludes the @Generable schema text since we pass
-        // `includeSchemaInPrompt: false`.
+        // Diagnostic only (SPEC 11 work item D): the on-device model's context window is shared by input +
+        // output, so log the budget (`contextSize`) against the INPUT token cost of Pass 1 (rig-plan
+        // instructions + the user prompt) to see how much room is left for the structured output. Staged
+        // generation keeps EACH pass's output bounded (≈ N), so Pass 1 is the representative budget check.
+        // Best-effort, never gates generation. `tokenCount(...)` excludes the @Generable schema text since
+        // we pass `includeSchemaInPrompt: false`.
         do {
             let contextSize = model.contextSize
-            let instructionTokens = try await model.tokenCount(for: Instructions(Self.instructions))
+            let instructionTokens = try await model.tokenCount(for: Instructions(Self.rigPlanInstructions))
             let promptTokens = try await model.tokenCount(for: Prompt(trimmedPrompt))
-            print("[LumaStage FM] contextSize=\(contextSize) inputTokens=\(instructionTokens + promptTokens) (instructions=\(instructionTokens), prompt=\(promptTokens))")
+            print("[LumaStage FM] staged pass1 contextSize=\(contextSize) inputTokens=\(instructionTokens + promptTokens) (instructions=\(instructionTokens), prompt=\(promptTokens))")
         } catch {
             print("[LumaStage FM] token diagnostic unavailable: \(error)")
         }
         #endif
 
         do {
-            let generated = try await session.respond(
+            // ── Pass 1: rig plan (one call, small output) ──────────────────────────────────────────────
+            let planSession = LanguageModelSession(
+                model: model,
+                instructions: Instructions(Self.rigPlanInstructions)
+            )
+            let plan = try await planSession.respond(
                 to: Prompt(trimmedPrompt),
-                generating: GeneratedLightingLook.self,
-                // The @Generable schema is large (a 4–6 fixture rig × up-to-3 per-cue states); its textual
-                // description alone can blow the on-device model's context window (contextSizeExceeded).
-                // Constrained decoding still enforces the structure, so omit the schema text from the
-                // prompt to reclaim that context.
+                generating: GeneratedRigPlan.self,
+                // Constrained decoding still enforces the structure, so omit the (large) schema text from
+                // the prompt to reclaim context — same as SPEC 11's single-shot path.
                 includeSchemaInPrompt: false,
                 options: options
             ).content
 
-            let look = try generated.makeValidatedLook()
+            let rig = plan.fixtures.enumerated().map { index, fixture -> LightingLookDraft.RigFixture in
+                let model = fixture.type.visualModel
+                let name = fixture.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? "燈具 \(index + 1)"
+                    : fixture.name
+                return LightingLookDraft.RigFixture(
+                    id: "fixture_\(index)",
+                    name: name,
+                    role: model.derivedRole,
+                    zone: fixture.zone.stageZone,
+                    model: model
+                )
+            }
+            let cueNames = plan.cues.map(\.name)
+
+            // ── Pass 2..(M+1): per-cue design (one FRESH session per cue, sequential) ───────────────────
+            // Sequential `await`s (naturally cancellable). A fresh session per cue keeps the growing
+            // transcript from feeding back into the shared context window — each cue's output stays ≈ N.
+            var cueStates: [[LightingLookDraft.StagedState]] = []
+            cueStates.reserveCapacity(cueNames.count)
+            for cueIndex in cueNames.indices {
+                let cueSession = LanguageModelSession(
+                    model: model,
+                    instructions: Instructions(Self.cueDesignInstructions)
+                )
+                let cuePrompt = Self.cueDesignPrompt(
+                    request: trimmedPrompt,
+                    rig: rig,
+                    cueNames: cueNames,
+                    cueIndex: cueIndex
+                )
+                let design = try await cueSession.respond(
+                    to: Prompt(cuePrompt),
+                    generating: GeneratedCueDesign.self,
+                    includeSchemaInPrompt: false,
+                    options: options
+                ).content
+                cueStates.append(design.states.map(\.stagedState))
+            }
+
+            let look = try LightingLookDraft.makeValidatedStagedLook(
+                lookName: plan.lookName,
+                mood: plan.mood,
+                rig: rig,
+                cueNames: cueNames,
+                cueStates: cueStates,
+                explanationTerm: plan.explanation.term,
+                explanationPlainText: plan.explanation.plainText,
+                explanationActionSummary: plan.explanation.actionSummary,
+                explanationRationale: plan.explanation.rationale
+            )
             return LightingGenerationResult(look: look, source: .foundationModels)
         } catch let error as LightingGenerationError {
             throw error
@@ -104,25 +163,83 @@ struct FoundationModelsLightingService: LightingLookGenerating {
         }
     }
 
+    // MARK: - Staged prompts / instructions (English — the on-device model wants an English environment)
+
     // Kept deliberately SHORT: the on-device model has a small context window, and a long instructions
     // block plus the structured-output schema can exceed it (contextSizeExceeded). The fixture-type and
     // zone vocabularies are enforced by the @Generable enums, so they don't need re-listing here.
-    private static let instructions = """
-    You design a full stage lighting look for a night outdoor student event. Match the request's event and mood.
+    //
+    // Pass 1 — rig plan ONLY: name the show, name the cue arc, and design the rig (types/zones). Do NOT
+    // pick colours or intensities here (those come per-cue in Pass 2).
+    private static let rigPlanInstructions = """
+    You plan a stage lighting rig and show structure for a night outdoor student event. Match the request's event and mood.
 
-    Design a SHOW: an ordered list of 2 to 3 cues the operator steps through with GO, telling a short arc
-    (e.g. Opening → Build → Finale). The first cue is the soft establishing look; later cues escalate so the
-    sequence clearly progresses.
+    Design the RIG once. FIRST choose HOW MANY fixtures (4 to 12) from the event's scale and energy — do NOT default
+    to the minimum. Use 10 to 12 for a big or energetic show (dance showcase, concert, festival, or when the request
+    says "large rig" / "lots of lights" / "big"); 6 to 9 for a typical event; only 4 to 5 for a small, intimate set
+    (a quiet talk, an acoustic solo). When unsure, lean toward a fuller rig. Prefer an EVEN count so left/right
+    fixtures pair up symmetrically. Mix fixture types and zones to suit — energetic shows lean on moving beams, a
+    strobe and a laser; talks use a few gentle front fresnels and washes. Give each fixture a short name, a type, and
+    a mount zone. Do NOT choose colours or intensities here.
 
-    Define the rig ONCE as 4 to 6 fixtures, a mix of types/zones suiting the request — energetic shows lean on
-    moving beams, a strobe and a laser with bold saturated colours; talks use a few gentle front washes. For
-    EVERY fixture give a `states` array with exactly one entry per cue, IN THE SAME ORDER as the cue list. Each
-    state: enabled, intensity 0.0–1.0, an RGB hex of exactly six digits like #FFD1A3 (no trailing text).
-    Contrast warm front vs. cool/coloured back so it looks designed; a fixture may be off in some cues.
-
-    The explanation teaches one beginner lighting term tied to this look, and also gives a short teaching
-    rationale tying the look's choices to one or two lighting principles. Prompts may mix Chinese and English.
+    Name the SHOW as an ordered list of cues telling a short arc: use 4 to 6 cues for a show with a real build
+    (e.g. Opening → Build → Chorus → Finale), 2 to 3 only for a simple look. Give only each cue's short label. Also
+    teach one beginner lighting term with a one-sentence rationale. Prompts may mix Chinese and English.
     """
+
+    // Pass 2 — design ONE cue's states for the already-fixed rig. Only the per-cue look (on/off, brightness,
+    // colour) is chosen here; the rig is fixed and must not be re-listed by the model.
+    private static let cueDesignInstructions = """
+    The lighting rig is already fixed. For the ONE cue named in the prompt, set each fixture's state: whether it is
+    on (enabled), its brightness (intensity 0.0–1.0), and its colour as an RGB hex of exactly six digits like
+    #FFD1A3 (no trailing text). Give exactly one state per fixture, IN THE LISTED FIXTURE ORDER.
+
+    Make it look designed: contrast a warm front wash against a cooler or more saturated background; some fixtures
+    may be OFF in some cues. Follow the cue's place in the arc — earlier cues are softer, later cues escalate.
+    """
+
+    /// Builds the compact English prompt for designing cue `cueIndex`: the original request, the fixed rig
+    /// (numbered, human-readable `type (zone)` lines the model must design in order), the full cue arc for
+    /// narrative context, and the instruction to design just this cue. Kept small — it restates the rig
+    /// (≤12 lines) rather than accumulating a transcript, which is the point of a fresh session per cue.
+    static func cueDesignPrompt(
+        request: String,
+        rig: [LightingLookDraft.RigFixture],
+        cueNames: [String],
+        cueIndex: Int
+    ) -> String {
+        let rigLines = rig.enumerated().map { index, fixture in
+            "\(index + 1). \(fixture.name) (\(Self.promptLabel(for: fixture.zone)))"
+        }.joined(separator: "; ")
+
+        let arc = cueNames.enumerated().map { index, name in
+            let label = name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Cue \(index + 1)" : name
+            return "\(index + 1) \(label)"
+        }.joined(separator: ", ")
+
+        let thisCueRaw = cueIndex < cueNames.count ? cueNames[cueIndex] : ""
+        let thisCue = thisCueRaw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "Cue \(cueIndex + 1)"
+            : thisCueRaw
+
+        return """
+        Request: \(request)
+        Rig (\(rig.count) fixtures, design in this order): \(rigLines)
+        Cues: \(arc)
+        Now design cue \(cueIndex + 1) "\(thisCue)": give one state per fixture, in order.
+        """
+    }
+
+    /// Human-readable mount-zone name for the compact per-cue prompt's rig listing (e.g. "front of house").
+    private static func promptLabel(for zone: StageZone) -> String {
+        switch zone {
+        case .stageFront: return "front of house"
+        case .stageBack: return "upstage truss"
+        case .stageLeft: return "stage left"
+        case .stageRight: return "stage right"
+        case .fullStage: return "floor"
+        }
+    }
 
     private static func describe(_ reason: SystemLanguageModel.Availability.UnavailableReason) -> String {
         switch reason {
@@ -185,57 +302,41 @@ struct FoundationModelsLightingService: LightingLookGenerating {
     }
 }
 
-// MARK: - Structured output schema (dynamic rig)
+// MARK: - Structured output schemas (staged generation)
 
-/// Compile-time structured-output schema the model fills in. The model designs a SHOW: an ordered list
-/// of cues plus the WHOLE rig — a variable list of fixtures, each with a type, a stage zone, and a
-/// `states` array carrying its state in EACH cue (aligned by index to the cue list). Defining the rig
-/// once and giving each fixture one state per cue keeps rig identity stable across the whole sequence.
-/// Cue ids are fixed downstream (`cue_0`, `cue_1`, …) in `makeValidatedLook()`.
+/// Pass 1 output: the SHOW SKELETON. Names the look, the mood, the ordered cue LABELS, and the WHOLE rig
+/// (each fixture's name/type/zone — NO per-cue colour/intensity), plus one teaching explanation. Small,
+/// bounded output that decouples the rig/cue structure from the per-cue design, so a large rig or a long
+/// show never blows the on-device context window in one shot. Per-cue states come from `GeneratedCueDesign`
+/// (Pass 2), and the two are joined by `LightingLookDraft.makeValidatedStagedLook(…)`.
 @Generable
-struct GeneratedLightingLook {
+struct GeneratedRigPlan {
     @Guide(description: "Human-friendly name for this lighting look, e.g. 'Dance Crew Showcase'")
     var lookName: String
 
     @Guide(description: "Short mood summary, e.g. 'high-energy, colorful, dance crew finale'")
     var mood: String
 
-    @Guide(description: "The ordered cue list — 2 to 3 cues the operator steps through with GO, telling a short arc (e.g. Opening, Build, Finale). The first is the establishing look; later cues escalate or change energy.", .count(2...3))
-    var cues: [GeneratedCue]
+    @Guide(description: "The ordered cue list (2 to 6) telling a short arc — use 4–6 cues for a show with a real build (Opening → Build → … → Finale), 2–3 only for a simple look. The first is the establishing look; later cues escalate or change energy. Give only each cue's short label.", .count(2...6))
+    var cues: [GeneratedCueLabel]
 
-    @Guide(description: "The whole lighting rig: the fixtures that together light this event. Pick a count and a mix of fixture types and zones that suit the request — e.g. moving heads + a strobe + colored washes for a dance showcase; a few gentle front fresnels and washes for a talk.", .count(4...6))
-    var fixtures: [GeneratedFixture]
+    @Guide(description: "The whole lighting rig — CHOOSE HOW MANY fixtures (4 to 12) from the event's scale, do not default to the minimum: 10–12 for a big/energetic show or when the request asks for a large rig or lots of lights, 6–9 for a typical event, 4–5 only for a small intimate one; prefer an even count so left/right pair up. Mix fixture types and zones — e.g. moving heads + a strobe + a laser + colored washes for a dance showcase; a few gentle front fresnels and washes for a talk.", .count(4...12))
+    var fixtures: [GeneratedRigFixture]
 
     @Guide(description: "One short teaching note about an industry lighting term used in this look")
     var explanation: GeneratedExplanation
 
+    /// One cue in the ordered show — just its display label. Its per-fixture states are designed in a
+    /// separate Pass 2 call (`GeneratedCueDesign`), aligned to this cue's index.
     @Generable
-    struct GeneratedExplanation {
-        @Guide(description: "Industry term being taught, e.g. 'Wash', 'Gobo', 'Key Light', or 'Color Temperature'")
-        var term: String
-
-        @Guide(description: "ONE short beginner-friendly sentence explaining the term")
-        var plainText: String
-
-        @Guide(description: "One sentence summarizing what this look does")
-        var actionSummary: String
-
-        @Guide(description: "ONE short sentence of design rationale a beginner can learn from (e.g. why the front is warm or how contrast builds mood)")
-        var rationale: String
-    }
-
-    /// One cue in the ordered show — just its display label (its fixture states live on each fixture's
-    /// `states` array at the matching index).
-    @Generable
-    struct GeneratedCue {
+    struct GeneratedCueLabel {
         @Guide(description: "Short human label for this cue, e.g. 'Opening', 'Build', 'Chorus', 'Finale'")
         var name: String
     }
 
-    /// One fixture in the rig: its type and mounting zone, plus a `states` array with one entry per cue
-    /// (same order as the cue list).
+    /// One fixture in the rig: just its label, type, and mount zone (NO per-cue state — that's Pass 2).
     @Generable
-    struct GeneratedFixture {
+    struct GeneratedRigFixture {
         @Guide(description: "Short label, e.g. 'Front Fresnel L' or 'Upstage Moving Head 2'")
         var name: String
 
@@ -244,112 +345,79 @@ struct GeneratedLightingLook {
 
         @Guide(description: "Where the fixture is mounted on the stage")
         var zone: GeneratedZone
-
-        @Guide(description: "This fixture's state in each cue, IN THE SAME ORDER as the cue list: states[0] is the first cue, states[1] the second, and so on. Provide exactly one state per cue.", .count(2...3))
-        var states: [GeneratedFixtureState]
-    }
-
-    @Generable
-    struct GeneratedFixtureState {
-        @Guide(description: "Whether this fixture is on in this cue")
-        var enabled: Bool
-
-        @Guide(description: "Brightness from 0.0 (off) to 1.0 (full)", .range(0.0...1.0))
-        var intensity: Double
-
-        @Guide(description: "RGB hex color as exactly six hex digits like #FFD1A3 — no trailing comma or extra characters")
-        var colorHex: String
-    }
-
-    @Generable
-    enum GeneratedFixtureType {
-        case frontFresnel
-        case ledFresnel
-        case spotBarrel
-        case washBar
-        case backgroundBatten
-        case movingHeadBeam
-        case ledStrobeBar
-        case ledPar
-        case audienceBlinder
-        case laser
-    }
-
-    @Generable
-    enum GeneratedZone {
-        case frontOfHouse
-        case upstageTruss
-        case sideStageLeft
-        case sideStageRight
-        case floor
-    }
-
-}
-
-extension GeneratedLightingLook {
-    /// Maps the dynamic model output into a validated multi-cue `LightingLook`. The rig is defined once;
-    /// for each cue (in playback order) every fixture contributes its state at the matching index, so the
-    /// same physical fixture (stable `fixture_<i>` id) stays addressable across the whole show. Counts are
-    /// reconciled defensively — a fixture that supplied fewer states than there are cues reuses its last
-    /// state; extra states are ignored — so a slightly off-count generation still assembles a valid show.
-    func makeValidatedLook() throws -> LightingLook {
-        let cueCount = max(cues.count, 1)
-        let draftCues: [LightingLookDraft.Cue] = (0..<cueCount).map { cueIndex in
-            let rawName = cueIndex < cues.count ? cues[cueIndex].name : ""
-            let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                ? "Cue \(cueIndex + 1)"
-                : rawName
-            let cueFixtures = fixtures.enumerated().map { index, fixture in
-                fixture.draftFixture(index: index, cueIndex: cueIndex)
-            }
-            return LightingLookDraft.Cue(id: "cue_\(cueIndex)", name: name, fixtures: cueFixtures)
-        }
-
-        return try LightingLookDraft.makeValidatedLook(
-            lookName: lookName,
-            mood: mood,
-            cues: draftCues,
-            explanationTerm: explanation.term,
-            explanationPlainText: explanation.plainText,
-            explanationActionSummary: explanation.actionSummary,
-            explanationRationale: explanation.rationale
-        )
     }
 }
 
-private extension GeneratedLightingLook.GeneratedFixture {
-    /// This fixture's draft entry for `cueIndex`, picking the matching `states` entry (clamped: a short
-    /// `states` array reuses its last entry). Guards an empty `states` (impossible under the
-    /// `.count(2...3)` guide, but a degenerate decode must never crash) with an off state.
-    func draftFixture(index: Int, cueIndex: Int) -> LightingLookDraft.Fixture {
-        let model = type.visualModel
-        let resolvedName = name.isEmpty ? "燈具 \(index + 1)" : name
+/// Pass 2 output: ONE cue's design over the already-fixed rig — exactly one `GeneratedFixtureState` per
+/// fixture, IN THE LISTED FIXTURE ORDER. Generated in its own fresh session per cue so the output stays
+/// bounded by the fixture count (≈ N), never the show length (M).
+@Generable
+struct GeneratedCueDesign {
+    @Guide(description: "One state per fixture, IN THE LISTED FIXTURE ORDER. Provide exactly one per fixture.", .count(1...12))
+    var states: [GeneratedFixtureState]
+}
 
-        guard !states.isEmpty else {
-            return LightingLookDraft.Fixture(
-                id: "fixture_\(index)", name: resolvedName, role: model.derivedRole,
-                zone: zone.stageZone, enabled: false, intensity: 0, colorHex: "#000000", model: model
-            )
-        }
+/// One short teaching note carried through to `LightingExplanation`. Reused by Pass 1's `GeneratedRigPlan`.
+@Generable
+struct GeneratedExplanation {
+    @Guide(description: "Industry term being taught, e.g. 'Wash', 'Gobo', 'Key Light', or 'Color Temperature'")
+    var term: String
 
-        let state = states[min(max(cueIndex, 0), states.count - 1)]
-        return LightingLookDraft.Fixture(
-            id: "fixture_\(index)",
-            name: resolvedName,
-            role: model.derivedRole,
-            zone: zone.stageZone,
-            enabled: state.enabled,
-            intensity: state.intensity,
-            // Self-heal a bad colour at the AI boundary (a colour NAME, #FFF, RGBA, or prose) to white, so
-            // one un-normalizable colour dims just this light instead of failing validate() and rejecting
-            // the WHOLE generated look — likelier now that includeSchemaInPrompt:false drops the hex hint.
-            colorHex: FixtureColor.normalizedHex(state.colorHex) ?? "#FFFFFF",
-            model: model
-        )
+    @Guide(description: "ONE short beginner-friendly sentence explaining the term")
+    var plainText: String
+
+    @Guide(description: "One sentence summarizing what this look does")
+    var actionSummary: String
+
+    @Guide(description: "ONE short sentence of design rationale a beginner can learn from (e.g. why the front is warm or how contrast builds mood)")
+    var rationale: String
+}
+
+/// One fixture's per-cue state. Reused by Pass 2's `GeneratedCueDesign`.
+@Generable
+struct GeneratedFixtureState {
+    @Guide(description: "Whether this fixture is on in this cue")
+    var enabled: Bool
+
+    @Guide(description: "Brightness from 0.0 (off) to 1.0 (full)", .range(0.0...1.0))
+    var intensity: Double
+
+    @Guide(description: "RGB hex color as exactly six hex digits like #FFD1A3 — no trailing comma or extra characters")
+    var colorHex: String
+}
+
+@Generable
+enum GeneratedFixtureType {
+    case frontFresnel
+    case ledFresnel
+    case spotBarrel
+    case washBar
+    case backgroundBatten
+    case movingHeadBeam
+    case ledStrobeBar
+    case ledPar
+    case audienceBlinder
+    case laser
+}
+
+@Generable
+enum GeneratedZone {
+    case frontOfHouse
+    case upstageTruss
+    case sideStageLeft
+    case sideStageRight
+    case floor
+}
+
+extension GeneratedFixtureState {
+    /// Foundation-only mirror for `LightingLookDraft.makeValidatedStagedLook`. `colorHex` is self-healed
+    /// there (`normalizedHex(...) ?? "#FFFFFF"`), so it passes the raw model string through unchanged.
+    var stagedState: LightingLookDraft.StagedState {
+        LightingLookDraft.StagedState(enabled: enabled, intensity: intensity, colorHex: colorHex)
     }
 }
 
-private extension GeneratedLightingLook.GeneratedFixtureType {
+extension GeneratedFixtureType {
     var visualModel: LightingFixtureVisualModel {
         switch self {
         case .frontFresnel: return .frontFresnel
@@ -366,7 +434,7 @@ private extension GeneratedLightingLook.GeneratedFixtureType {
     }
 }
 
-private extension GeneratedLightingLook.GeneratedZone {
+extension GeneratedZone {
     var stageZone: StageZone {
         switch self {
         case .frontOfHouse: return .stageFront
