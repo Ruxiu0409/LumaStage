@@ -85,6 +85,12 @@ class AppModel {
     /// list). Set to `.stage` when a project opens, `.tabletopEditor` while editing the stage on the table.
     var desiredImmersiveScene: ImmersiveScene = .none
     var stageImmersionMode: StageImmersionMode = .fullStage
+    /// One-shot guard letting the windowed AI composer distinguish a *programmatic* dismiss (set true
+    /// right before the app dismisses the composer window — e.g. `ImmersiveView.onDisappear`) from a
+    /// *user* dismiss via the system close button. Consumed by the composer's `onDisappear`; when it's
+    /// false and the stage is still the open/desired scene, the composer vanishing means the user closed
+    /// it, so we return to the project list (issue #7). Reset when the composer is (re)opened.
+    var expectedComposerDismiss = false
 
     /// Whether the in-app relight debug panel (toggled from the AI composer) is showing. Off by default.
     var isDebugPanelVisible = false

@@ -8,6 +8,11 @@ struct VisionAIComposerBox: View {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isShowingMusicSheet = false
+    /// True only for the floating window instance (opened by `ImmersiveView` with the stage space),
+    /// false for the copy embedded in `ContentView`. Only the windowed instance treats a system-close
+    /// (X button) as "return to projects" (issue #7); the embedded copy's disappearance is just a
+    /// normal view swap.
+    var isWindowed = false
 
     var body: some View {
         @Bindable var appModel = appModel
@@ -45,6 +50,22 @@ struct VisionAIComposerBox: View {
         // smoothly as the prompt field grows. The system supplies the move bar; no custom handle.
         .frame(width: 640, alignment: .leading)
         .lumaFloatingPanel()
+        // Issue #7: when the user closes the floating composer window with the system X button, there
+        // is no other UI in the immersive stage — so treat it exactly like the 返回專案 button. We can
+        // only detect this on the windowed instance, and must not fire on a *programmatic* dismiss
+        // (closing the stage, entering the tabletop editor, or 返回專案 itself all dismiss this window
+        // via ImmersiveView.onDisappear). Two guards: `expectedComposerDismiss` (set true right before
+        // any app-initiated dismiss, consumed here) and the invariant that the app never dismisses the
+        // composer while the stage is still the open/desired scene — so a disappearance with the stage
+        // still up can only be a user close.
+        .onDisappear {
+            guard isWindowed else { return }
+            if appModel.expectedComposerDismiss {
+                appModel.expectedComposerDismiss = false
+            } else if appModel.desiredImmersiveScene == .stage && appModel.immersiveSpaceState == .open {
+                returnToProjects()
+            }
+        }
     }
 
     /// A top row above the prompt field. Hosts the entry point to the volumetric tabletop stage

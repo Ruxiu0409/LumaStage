@@ -50,7 +50,7 @@ struct LumaStageApp: App {
         // (issue #11). A `Window` is a singleton scene — `openWindow` just brings the one instance
         // forward instead of duplicating it.
         Window("AI 對話框", id: AppModel.aiComposerWindowID) {
-            VisionAIComposerBox()
+            VisionAIComposerBox(isWindowed: true)
                 .environment(appModel)
         }
         .windowStyle(.plain)

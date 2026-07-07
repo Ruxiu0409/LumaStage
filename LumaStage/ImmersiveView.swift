@@ -142,6 +142,9 @@ struct ImmersiveView: View {
         // so it's opened with the space here and dismissed when the space closes.
         .onAppear {
             appModel.immersiveSpaceState = .open
+            // Fresh stage session: clear any stale programmatic-dismiss guard so the windowed
+            // composer's user-close detection (issue #7) starts from a known state.
+            appModel.expectedComposerDismiss = false
             openWindow(id: AppModel.aiComposerWindowID)
             // Dismiss the launch/project window for the duration of the stage. It's otherwise left
             // behind the immersive scene as nothing but its empty, draggable system bar (ContentView
@@ -152,6 +155,9 @@ struct ImmersiveView: View {
         }
         .onDisappear {
             appModel.immersiveSpaceState = .closed
+            // Mark this composer dismiss as programmatic so its onDisappear doesn't mistake the
+            // normal stage teardown for a user closing the window (issue #7).
+            appModel.expectedComposerDismiss = true
             dismissWindow(id: AppModel.aiComposerWindowID)
             // Also dismiss the per-light control window so it doesn't leak when leaving the stage.
             dismissWindow(id: AppModel.lightControlWindowID)
