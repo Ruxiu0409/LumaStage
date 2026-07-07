@@ -7,7 +7,6 @@ struct VisionAIComposerBox: View {
     @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
     @Environment(\.openWindow) private var openWindow
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var isShowingPatchSheet = false
     @State private var isShowingMusicSheet = false
 
     var body: some View {
@@ -35,10 +34,6 @@ struct VisionAIComposerBox: View {
         }
         .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: appModel.isDebugPanelVisible)
         .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: appModel.selectedCueId)
-        .sheet(isPresented: $isShowingPatchSheet) {
-            PatchSheetExportView()
-                .environment(appModel)
-        }
         .sheet(isPresented: $isShowingMusicSheet) {
             MusicShowSheet()
                 .environment(appModel)
@@ -60,14 +55,6 @@ struct VisionAIComposerBox: View {
                 .buttonStyle(.bordered)
                 .buttonBorderShape(.capsule)
                 .help("在桌面模型上編輯舞台佈局")
-
-            Button("配接表", systemImage: "tablecells") {
-                isShowingPatchSheet = true
-            }
-            .buttonStyle(.bordered)
-            .buttonBorderShape(.capsule)
-            .help("檢視並匯出 DMX 配接表 / 燈位表 — 交給真實場地的燈光技師")
-            .accessibilityLabel("檢視 DMX 配接表")
 
             Button("音樂", systemImage: "music.note") {
                 isShowingMusicSheet = true

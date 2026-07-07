@@ -72,7 +72,6 @@ struct LumaStageCoreSmokeTests {
         musicBeatClockGridIsCorrect()
         musicBeatSyncLocksEffectsToBeat()
         demoTrackSynthRendersBeatMatchedAudibleWav()
-        try patchPlannerAssignsSequentialDMXAndBuildsSheet()
         parsesStageVoiceCommands()
         stageLightAccessibilityLabelsAreLocalized()
         try relightDebugSnapshotMapsCueFixtures()
@@ -2018,37 +2017,6 @@ struct LumaStageCoreSmokeTests {
         try state.removeCue(id: "cue_highlight")
         expectThrows(ValidationError.cannotRemoveLastCue) { try state.removeCue(id: "cue_opening") }
         expect(state.cueOrder == ["cue_opening"], "the final cue must remain")
-    }
-
-    // Patch planning makes the (previously dead) DMXPatch field live: sequential, non-colliding
-    // addresses written onto every cue, and a printable sheet summary.
-    private static func patchPlannerAssignsSequentialDMXAndBuildsSheet() throws {
-        let look = LightingLook.showcaseDemo()   // 9 fixtures
-        let patched = DMXPatchPlanner.patched(look)
-
-        let rig = patched.cues.first!.fixtureGroups
-        let addresses = rig.compactMap { $0.dmx?.address }
-        expect(addresses == [1, 5, 9, 13, 17, 21, 25, 29, 33], "fixtures should patch sequentially in 4-channel steps from address 1")
-        expect(rig.allSatisfy { $0.dmx?.universe == 1 }, "nine fixtures fit in one universe")
-        expect(Set(addresses).count == addresses.count, "patched DMX addresses must not collide")
-
-        // The same patch is written onto the fixture in EVERY cue (rig identity across cues).
-        for cue in patched.cues {
-            expect(cue.fixtureGroups.allSatisfy { $0.dmx != nil }, "every fixture in every cue should carry a patch")
-        }
-        try patched.validate()
-
-        let sheet = LightingPatchSheet.make(from: look)
-        expect(sheet.fixtureCount == 9, "sheet should list every fixture")
-        expect(sheet.universeCount == 1, "sheet should report one universe for nine fixtures")
-        expect(sheet.channelCount == 36, "nine fixtures × 4 channels = 36 DMX channels")
-        expect(sheet.rows.first?.number == 1, "rows should be 1-based, matching on-stage Light N")
-        expect(sheet.rows.first?.channelSpan == "1–4", "first fixture should span channels 1–4")
-        expect(sheet.rows.allSatisfy { !$0.fixtureType.isEmpty }, "every row should name a fixture type")
-
-        // Idempotent: re-patching an already-patched look yields the same addresses.
-        let twice = DMXPatchPlanner.patched(patched)
-        expect(twice.cues.first!.fixtureGroups.compactMap { $0.dmx?.address } == addresses, "re-patching should be stable")
     }
 
     // The hands-free show-driving voice layer: cue navigation + narration in English and Chinese, while

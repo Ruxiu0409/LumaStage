@@ -265,12 +265,6 @@ class AppModel {
         stageState.selectedCueIndex + 1
     }
 
-    /// The current look's DMX patch sheet — the load-in paperwork (fixtures get real universe/address
-    /// assigned as it's built). Computed on demand; also the source for the PDF export.
-    var patchSheet: LightingPatchSheet {
-        LightingPatchSheet.make(from: lightingLook)
-    }
-
     /// What the relight debug panel renders: how the selected cue's fixtures map onto the scene
     /// (color/intensity/beam per fixture, and which roles actually light the stage). `nil` with no cue.
     /// Resolves through the SAME manual-override + group-master layers the renderer applies, so the panel
