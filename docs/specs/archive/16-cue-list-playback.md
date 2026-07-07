@@ -1,6 +1,6 @@
 # SPEC 16 — GO 升為「播放」：cue list 自動連續走場（issue #6）
 
-> Status: in-progress
+> Status: done（實作完成、smoke 綠、完整 visionOS build `** BUILD SUCCEEDED **`；已封存）
 
 **Goal**：按下「播放」後，非音樂的一般 look 像真實數位控台的 cue list playback 一樣**自動連續跑**：每個 cue 停留其 follow/hold 時間後自動 follow 到下一個，跑到最後一個 cue 停止（不迴繞），不需每次手動按 GO。提供播放/停止控制；播放中操作者仍可手動 GO。對應 issue #6。
 
