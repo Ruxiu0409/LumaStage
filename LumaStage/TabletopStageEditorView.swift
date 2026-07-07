@@ -178,28 +178,32 @@ struct TabletopStageEditorView: View {
             }
     }
 
-    /// Drag a piece across the tabletop. Movement is constrained to the ground plane (the piece's height
-    /// stays fixed). As a truss nears another truss's connector node it snaps onto it live — a glowing
-    /// marker shows the node it locked onto — instead of only snapping on release. On release the final
-    /// position is snapped + persisted by `AppModel` (same `trussNodeSnap` rule, so the commit matches the
-    /// preview).
+    /// Drag a piece across the tabletop, constrained to the ground plane in XZ. A truss/deck piece keeps its
+    /// height and snaps onto a nearby connector node live (a glowing marker shows the node) — the commit
+    /// matches the preview via the same `trussNodeSnap` rule. A light proxy instead has its Y decided by the
+    /// dragged XZ (#19 Option A): inside the truss footprint it auto-snaps up to hanging height (and hangs),
+    /// outside it drops to floor-stand height — the shared `RigPlacement.resolvedDragPosition` rule, so the
+    /// live preview matches what `AppModel.moveFixture` persists on release.
     private var moveDrag: some Gesture {
         DragGesture()
             .targetedToAnyEntity()
             .updating($dragGrabOffset) { value, state, _ in
-                // A light proxy: free ground-plane drag (no truss node-snap), height preserved.
+                // A light proxy: free XZ drag (no truss node-snap); the dragged XZ decides Y (#19 Option A).
                 if let fixtureContainer = TabletopStageScene.fixtureContainer(of: value.entity),
                    let parent = fixtureContainer.parent {
                     let grab = value.convert(value.location3D, from: .local, to: parent)
                     let offset = state ?? (fixtureContainer.position - grab)
                     state = offset
                     let target = grab + offset
-                    fixtureContainer.position = SIMD3<Float>(target.x, fixtureContainer.position.y, target.z)
-                    // #15: re-evaluate hang↔floor-stand live as the light is dragged (Y is preserved, so the
-                    // post height doesn't change — what toggles is the stand appearing/disappearing when the
-                    // light crosses in/out of the truss footprint), matching the on-release `syncFixtures`.
+                    // #19: inside the truss footprint the light auto-snaps up to hanging height (and hangs);
+                    // outside it drops to floor-stand height. Same pure rule the on-release commit uses, so
+                    // the live preview (position + #15 hang↔stand toggle) matches what gets persisted.
+                    let draggedXZ = TabletopStageScene.sceneToMeters(target)
+                    let resolved = RigPlacement.resolvedDragPosition(x: draggedXZ.x, z: draggedXZ.z,
+                                                                     layout: appModel.stageLayout)
+                    fixtureContainer.position = TabletopStageScene.scenePoint(resolved)
                     TabletopStageScene.syncFixtureStand(in: fixtureContainer,
-                                                        position: TabletopStageScene.sceneToMeters(fixtureContainer.position),
+                                                        position: resolved,
                                                         layout: appModel.stageLayout)
                     return
                 }
@@ -218,13 +222,15 @@ struct TabletopStageEditorView: View {
             }
             .onEnded { value in
                 TabletopStageScene.updateSnapIndicator(in: turntable, at: nil)
-                // Light proxy: commit its scene position back to model metres in every cue. The proxy
-                // keeps its built Y during the drag, so `sceneToMeters(...).y` round-trips the resolved
-                // model Y — pass x/y/z straight through.
+                // Light proxy: commit the footprint-aware Y (hang vs floor) from the final XZ, in every cue.
+                // Recompute via the shared `resolvedDragPosition` so the persisted Y matches the live preview.
+                // Lasers are unaffected — `AppModel.moveFixture` re-clamps them onto the truss (stay hanging).
                 if let fixtureContainer = TabletopStageScene.fixtureContainer(of: value.entity),
                    let fixtureId = TabletopStageScene.fixtureId(of: value.entity) {
                     let meters = TabletopStageScene.sceneToMeters(fixtureContainer.position)
-                    appModel.moveFixture(id: fixtureId, toX: meters.x, y: meters.y, z: meters.z)
+                    let resolved = RigPlacement.resolvedDragPosition(x: meters.x, z: meters.z,
+                                                                     layout: appModel.stageLayout)
+                    appModel.moveFixture(id: fixtureId, toX: resolved.x, y: resolved.y, z: resolved.z)
                     return
                 }
                 guard let container = TabletopStageScene.objectContainer(of: value.entity),

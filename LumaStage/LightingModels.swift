@@ -2059,21 +2059,43 @@ extension RigPlacement {
                 pts.map(\.y).max()!)
     }
 
-    /// 一盞燈在解析位置的支撐方式。吊掛需同時：XZ 在 footprint±margin 內、且離甲板 >= hangMinAboveDeck。
-    static func support(forPosition position: Vector3Meters, layout: StageLayout) -> FixtureSupport {
-        // topY 用與 placement 相同的 stageBase 推法。
+    /// 甲板頂面高度（model 公尺），與 `placement`/`support` 用同一套 stageBase 推法。吊掛/落地門檻都以此為基準。
+    static func deckTopY(in layout: StageLayout) -> Double {
         let stageBase = layout.objects.first { $0.type == .stageBase }
         let size = stageBase?.size ?? StageObjectSize(width: 6, depth: 3, height: 0.8)
-        let topY = (stageBase?.position.y ?? size.height / 2) + size.height / 2
+        return (stageBase?.position.y ?? size.height / 2) + size.height / 2
+    }
 
+    /// XZ 是否落在 truss footprint±`trussHangMarginMeters` 內（吊掛的水平條件，與 `support` 同一判準）。
+    /// 無 truss → false。抽成共用函式，讓 `support` 與 `resolvedDragPosition` 共用同一組門檻常數、不重複一份。
+    static func isWithinTrussFootprint(x: Double, z: Double, layout: StageLayout) -> Bool {
+        guard let f = trussFootprint(in: layout) else { return false }
         let m = trussHangMarginMeters
-        if let f = trussFootprint(in: layout),
-           position.x >= f.minX - m, position.x <= f.maxX + m,
-           position.z >= f.minZ - m, position.z <= f.maxZ + m,
+        return x >= f.minX - m && x <= f.maxX + m && z >= f.minZ - m && z <= f.maxZ + m
+    }
+
+    /// 一盞燈在解析位置的支撐方式。吊掛需同時：XZ 在 footprint±margin 內、且離甲板 >= hangMinAboveDeck。
+    static func support(forPosition position: Vector3Meters, layout: StageLayout) -> FixtureSupport {
+        let topY = deckTopY(in: layout)
+        if isWithinTrussFootprint(x: position.x, z: position.z, layout: layout),
            position.y >= topY + hangMinAboveDeckMeters {
             return .hangFromTruss
         }
         return .floorStand(topY: max(0.3, position.y - standTopGapMeters))
+    }
+
+    /// #19 Option A：桌面編輯器把一盞燈拖到某個 XZ 時應提交的 (x, y, z)（model 公尺）——用拖曳落點的 XZ 決定 Y：
+    /// - XZ 落在 truss footprint±margin 內 → Y 吸附到桁架吊掛高度（`clampedToTruss` 同款 `topY - standTopGap`），
+    ///   使 `support` 對結果回傳 `.hangFromTruss`（真的吊上桁架，不再浮在半空）。
+    /// - 否則 → Y 落到落地燈架高度（甲板頂 + `hangMinAboveDeckMeters`），使 `support` 回傳 `.floorStand`。
+    /// 只吃 XZ、Y 由 XZ 決定 → idempotent（把結果的 XZ 餵回來得到同一個 Y）。無 truss 時一律落地。
+    /// 判定沿用 `support` 的 footprint 測試與門檻常數（`isWithinTrussFootprint` / `trussFootprint` / 那三個
+    /// 可調常數），不另立一份 ±0.35／1.0m。
+    static func resolvedDragPosition(x: Double, z: Double, layout: StageLayout) -> Vector3Meters {
+        if isWithinTrussFootprint(x: x, z: z, layout: layout), let f = trussFootprint(in: layout) {
+            return Vector3Meters(x: x, y: f.topY - standTopGapMeters, z: z)
+        }
+        return Vector3Meters(x: x, y: deckTopY(in: layout) + hangMinAboveDeckMeters, z: z)
     }
 
     /// Mirrors a fixture across the stage centerline (x=0) for symmetrical rigs.

@@ -91,6 +91,7 @@ struct LumaStageCoreSmokeTests {
         rigPlacementSpreadsFixturesAcrossZone()
         try fixtureManualPositionOverridesZonePlacement()
         fixtureSupportPolicyClassifiesTrussVsStand()
+        dragResolvedPositionSnapsHangVsFloorAndIsIdempotent()
         tabletopLabelFormatsNumberAndModel()
         tabletopNudgeStepsAndFormatsReadout()
         duplicatedFixtureCopiesStateAndOffsetsManualPosition()
@@ -1686,6 +1687,38 @@ struct LumaStageCoreSmokeTests {
         if case .floorStand(let topY) = RigPlacement.support(forPosition: floatingDownstage, layout: layout) {
             expect(topY > 0.3 && topY <= 3.0, "落地柱頂在燈下")
         } else { fatalError("台前高空應落地燈架，不可浮空") }
+    }
+
+    // #19 Option A：桌面拖曳的 XZ 決定 Y——落在 truss footprint 內吸附成吊掛、footprint 外落地，且冪等。
+    private static func dragResolvedPositionSnapsHangVsFloorAndIsIdempotent() {
+        let layout = StageLayout.defaultStudentOutdoor()
+        guard let f = RigPlacement.trussFootprint(in: layout) else {
+            fatalError("預設舞台應有 truss footprint")
+        }
+        // footprint 中心 → 吊掛。
+        let insideX = (f.minX + f.maxX) / 2
+        let insideZ = (f.minZ + f.maxZ) / 2
+        let hang = RigPlacement.resolvedDragPosition(x: insideX, z: insideZ, layout: layout)
+        expect(RigPlacement.support(forPosition: hang, layout: layout) == .hangFromTruss,
+               "拖進 truss footprint 的燈應吸附成吊掛")
+
+        // footprint 外遠處 → 落地。
+        let outsideZ = f.maxZ + 5.0
+        let floor = RigPlacement.resolvedDragPosition(x: 0, z: outsideZ, layout: layout)
+        expect(RigPlacement.support(forPosition: floor, layout: layout).isFloorStand,
+               "拖離 truss footprint 的燈應落地")
+
+        // 冪等：把解析出的位置 XZ 餵回去，Y 與分類都不變。
+        let hangAgain = RigPlacement.resolvedDragPosition(x: hang.x, z: hang.z, layout: layout)
+        expect(abs(hangAgain.y - hang.y) < 0.0001 && hangAgain.x == hang.x && hangAgain.z == hang.z,
+               "吊掛結果餵回應穩定")
+        expect(RigPlacement.support(forPosition: hangAgain, layout: layout) == .hangFromTruss,
+               "吊掛結果餵回仍為吊掛")
+        let floorAgain = RigPlacement.resolvedDragPosition(x: floor.x, z: floor.z, layout: layout)
+        expect(abs(floorAgain.y - floor.y) < 0.0001 && floorAgain.x == floor.x && floorAgain.z == floor.z,
+               "落地結果餵回應穩定")
+        expect(RigPlacement.support(forPosition: floorAgain, layout: layout).isFloorStand,
+               "落地結果餵回仍為落地")
     }
 
     private static func surroundingsLightPolicyGatesOpaqueVenue() throws {
