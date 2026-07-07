@@ -205,6 +205,12 @@ struct TabletopStageEditorView: View {
                     TabletopStageScene.syncFixtureStand(in: fixtureContainer,
                                                         position: resolved,
                                                         layout: appModel.stageLayout)
+                    // #20: show the translucent "hangable region" volume so the user can see where the
+                    // dragged light will hang (inside) vs stand (outside). Idempotent — only fades in on the
+                    // first frame of the drag; Reduce Motion hard-toggles it (no fade), like the sweep/spin.
+                    TabletopStageScene.setHangZoneVisible(true, in: turntable,
+                                                          layout: appModel.stageLayout,
+                                                          animated: !reduceMotion)
                     return
                 }
                 // Otherwise a truss/deck piece: ground-plane drag with live connector-node snapping.
@@ -222,6 +228,10 @@ struct TabletopStageEditorView: View {
             }
             .onEnded { value in
                 TabletopStageScene.updateSnapIndicator(in: turntable, at: nil)
+                // #20: hide the hangable-region volume on any drag end (it's only ever shown during a
+                // fixture drag; hiding unconditionally here mirrors the snap indicator's instant hide).
+                TabletopStageScene.setHangZoneVisible(false, in: turntable,
+                                                      layout: appModel.stageLayout, animated: false)
                 // Light proxy: commit the footprint-aware Y (hang vs floor) from the final XZ, in every cue.
                 // Recompute via the shared `resolvedDragPosition` so the persisted Y matches the live preview.
                 // Lasers are unaffected — `AppModel.moveFixture` re-clamps them onto the truss (stay hanging).
@@ -722,6 +732,79 @@ enum TabletopStageScene {
         }
         indicator.position = scenePosition
         indicator.isEnabled = true
+    }
+
+    private static let hangZoneName = "tabletop_hang_zone"
+
+    /// #20: Shows/hides a faint translucent volume marking the region where a dragged light HANGS from the
+    /// truss (versus dropping to a floor stand). Its extent replicates the exact SPEC 15 support rule —
+    /// horizontal = the truss footprint (`RigPlacement.trussFootprint`) expanded by the same
+    /// `trussHangMarginMeters` `isWithinTrussFootprint` uses; vertical = the hang band from
+    /// `deckTopY + hangMinAboveDeckMeters` up to the truss top (`footprint.topY`) — all Foundation-only
+    /// `RigPlacement` geometry, converted to scene units via `scenePoint`/`sceneLength`. Parented to the
+    /// assembly (like the snap indicator) so it shares the diorama's scene-unit space and the seat offset,
+    /// and survives the drag (the assembly isn't rebuilt while the layout signature is unchanged).
+    ///
+    /// `animated` fades the volume in (via `OpacityComponent`); callers pass `false` under Reduce Motion for
+    /// an instant toggle. Showing is idempotent — once visible it isn't re-faded each drag frame (the
+    /// footprint is stable mid-drag). Hiding is an instant `isEnabled = false`, mirroring the snap indicator.
+    static func setHangZoneVisible(_ visible: Bool, in root: Entity, layout: StageLayout, animated: Bool) {
+        let host = root.children.first(where: { $0.name.hasPrefix("tabletop_layout_") }) ?? root
+        let existing = host.findEntity(named: hangZoneName)
+
+        guard visible else {
+            existing?.isEnabled = false
+            return
+        }
+        // Already shown for this drag — don't restart the fade (footprint doesn't move mid-drag).
+        if let existing, existing.isEnabled { return }
+
+        guard let f = RigPlacement.trussFootprint(in: layout) else { return }
+        let margin = RigPlacement.trussHangMarginMeters
+        let bandBottom = RigPlacement.deckTopY(in: layout) + RigPlacement.hangMinAboveDeckMeters
+        let bandTop = f.topY
+        let heightMeters = bandTop - bandBottom
+        guard heightMeters > 0 else { return } // truss lower than the hang-min band → nothing to mark
+
+        let widthMeters = (f.maxX - f.minX) + 2 * margin
+        let depthMeters = (f.maxZ - f.minZ) + 2 * margin
+        let center = Vector3Meters(x: (f.minX + f.maxX) / 2,
+                                   y: (bandBottom + bandTop) / 2,
+                                   z: (f.minZ + f.maxZ) / 2)
+        let mesh = MeshResource.generateBox(width: sceneLength(widthMeters),
+                                            height: sceneLength(heightMeters),
+                                            depth: sceneLength(depthMeters))
+
+        let volume: ModelEntity
+        if let box = existing as? ModelEntity {
+            box.model?.mesh = mesh // reuse across drags; the stage may have been resized between them
+            volume = box
+        } else {
+            volume = ModelEntity(mesh: mesh, materials: [hangZoneMaterial()])
+            volume.name = hangZoneName
+            host.addChild(volume)
+        }
+        volume.position = scenePoint(center)
+        volume.isEnabled = true
+
+        if animated {
+            volume.components.set(OpacityComponent(opacity: 0))
+            let fade = FromToByAnimation(from: Float(0), to: Float(1),
+                                         duration: 0.22, timing: .easeInOut,
+                                         bindTarget: .opacity)
+            if let resource = try? AnimationResource.generate(with: fade) {
+                volume.playAnimation(resource)
+            }
+            volume.components.set(OpacityComponent(opacity: 1))
+        } else {
+            volume.components.set(OpacityComponent(opacity: 1))
+        }
+    }
+
+    /// Soft translucent fill for the hang-zone volume — the snap-marker cyan (#3FB6FF) at low alpha so it
+    /// reads as a highlight, not a solid box. Unlit so it doesn't pick up scene shading.
+    private static func hangZoneMaterial() -> UnlitMaterial {
+        UnlitMaterial(color: UIColor(red: 0.25, green: 0.71, blue: 1.0, alpha: 0.14))
     }
 
     /// Walks up from a hit entity to its owning `stageobj_<id>` container.
