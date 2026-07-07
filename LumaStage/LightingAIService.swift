@@ -4,10 +4,9 @@ import Foundation
 
 /// Anything that can turn a natural-language prompt into a validated `LightingLook`.
 ///
-/// The concrete on-device implementation lives in `FoundationModelsLightingService`
-/// (guarded by `#if canImport(FoundationModels)`). This protocol and the supporting
-/// value types stay Foundation-only on purpose so the headless smoke tests can exercise
-/// the AI → domain boundary without linking FoundationModels or running a model.
+/// The concrete implementation is `OpenAILightingService` (cloud OpenAI Responses API).
+/// This protocol and the supporting value types stay Foundation-only on purpose so the
+/// headless smoke tests can exercise the AI → domain boundary without a live network call.
 protocol LightingLookGenerating {
     /// Whether the underlying model can currently produce a look.
     var availability: LightingModelAvailability { get }

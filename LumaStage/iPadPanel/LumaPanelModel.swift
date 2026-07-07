@@ -164,6 +164,9 @@ final class LumaPanelModel {
             }
         case .resetSelectedCue, .setFrontLightDimmer, .setBackgroundWashColor:
             break   // no baseline / legacy single-light paths in the mock
+        case .setGroupMaster, .bumpGroup:
+            break   // group masters live on the host (`AppModel.groupMasters`), not in `LumaHostState`,
+                    // so the mock has nowhere to reflect them — the faders still send, just don't relight
         }
         host = state
     }

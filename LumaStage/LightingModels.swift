@@ -52,8 +52,8 @@ enum StageZone: String, Codable, CaseIterable {
 
 /// Optional projected light pattern (digital gobo) cast through a fixture's beam — the software
 /// equivalent of a metal gobo in a real moving head. A `nil` gobo means a plain, unbroken beam.
-/// Mirrored by `GeneratedLightingLook.GeneratedGobo` in the on-device `@Generable` schema and
-/// rendered via `SpotLightComponent.ProjectiveTexture` in `ImmersiveView`.
+/// Data-only on visionOS 26: validated and persisted, but not projected (rendering it needs the
+/// visionOS 27 `SpotLightComponent.ProjectiveTexture` API).
 enum GoboPattern: String, Codable, CaseIterable {
     case breakup
     case stripes

@@ -423,7 +423,7 @@ struct VisionAIComposerBox: View {
                 return ComposerFeedback(
                     icon: "exclamationmark.circle",
                     tint: LumaStageDesign.warmAmber,
-                    title: "Apple Intelligence 無法使用",
+                    title: "AI 生成尚未就緒",
                     detail: appModel.generationStatus
                 )
             }

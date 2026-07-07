@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-**Platforms / OS versions:** **visionOS 27** (main app, deploy target 27.0) + **iPadOS 27** (the optional "LumaStage Control" iPad companion target). Both require **Xcode 27** (OS 27 SDK + on-device Foundation Models).
+**Platforms / OS versions:** **visionOS 26** (main app, deploy target 26.0) + **iPadOS 26** (the optional "LumaStage Control" iPad companion target). Both require **Xcode 26** (OS 26 SDK). (AI generation is cloud OpenAI — no on-device model SDK needed.) This is a visionOS-26 port of what was originally a visionOS-27 app: three visionOS-27-only RealityKit rendering features degrade gracefully — see "visionOS 26 rendering degradations" below.
 
-LumaStage is a **visionOS** AI stage-lighting design app. It opens an immersive 1:1 night-outdoor stage digital twin (`ImmersiveView`, RealityKit) with a floating AI conversation box: a voice/typed prompt → on-device Apple Foundation Models → a cue-based lighting look applied with animated transitions. An optional **iPad control-panel companion target** (real-time remote over Multipeer Connectivity) mirrors the conversation and edits the live look — see "iPad control panel" below; the visionOS app is the single source of truth and works standalone without it.
+LumaStage is a **visionOS** AI stage-lighting design app. It opens an immersive 1:1 night-outdoor stage digital twin (`ImmersiveView`, RealityKit) with a floating AI conversation box: a voice/typed prompt → the OpenAI API (cloud) → a cue-based lighting look applied with animated transitions. An optional **iPad control-panel companion target** (real-time remote over Multipeer Connectivity) mirrors the conversation and edits the live look — see "iPad control panel" below; the visionOS app is the single source of truth and works standalone without it.
 
 The immersive scene has **two modes** (`StageImmersionMode`): `.fullStage` (default — `.full` immersion, opaque night-stage venue) and `.roomSpill` (`.mixed` passthrough, where the virtual spotlights illuminate the user's real room). See "Dual immersion modes" below.
 
@@ -14,23 +14,23 @@ A **tabletop stage editor** (the AI composer's "Edit Stage" button) lets the use
 
 > A former `LumaStage iPad` companion target (3D stage builder + per-cue micro-controls) was removed, so the cue-switching and dimmer/color controls — which lived only on iPad — are no longer surfaced in any view. `AppModel` still exposes those mutation methods (and `StageBuilderModels` still holds the builder's Foundation-only helpers), covered by the smoke tests, as reusable logic. New views use `#if os(visionOS)` / `#if canImport(...)` where platform-specific.
 
-The product spec and MVP scope live in `docs/` (Traditional Chinese): `system-spec.md`, `demo-runbook.md`, `foundation-models-setup.md`. Code identifiers stay English, but user-facing strings are **Traditional Chinese (繁體中文)** — UI labels, status/feedback text, `aiUnderstoodCommand`/`LightingExplanation` copy, fixture-catalog names & descriptions, error messages, and the Info.plist permission strings (in `project.pbxproj`). Exceptions that stay English on purpose: the Foundation Models system prompt + `@Guide` descriptions in `FoundationModelsLightingService.swift` (the on-device model needs an English environment), the `LightCommand`/color-name parsing keywords and speech `contextualStrings` (they match English voice/text input), the cue `.name` data values `"Opening"`/`"Highlight"` (pinned by tests; mapped to 開場/重點 via `LightingCue.localizedDisplayName`), and `englishName` in the fixture catalog (shown as the English reference term beside the Chinese name). Voice input supports mixed Chinese/English. When translating, keep `localizedDisplayName` and the smoke-test–pinned English data in sync.
+The product spec and MVP scope live in `docs/` (Traditional Chinese): `system-spec.md`, `demo-runbook.md`, `foundation-models-setup.md`. Code identifiers stay English, but user-facing strings are **Traditional Chinese (繁體中文)** — UI labels, status/feedback text, `aiUnderstoodCommand`/`LightingExplanation` copy, fixture-catalog names & descriptions, error messages, and the Info.plist permission strings (in `project.pbxproj`). Exceptions that stay English on purpose: the OpenAI system `instructions` + strict-schema field wording in `OpenAILightingService.swift` (the model works best in an English environment), the `LightCommand`/color-name parsing keywords and speech `contextualStrings` (they match English voice/text input), the cue `.name` data values `"Opening"`/`"Highlight"` (pinned by tests; mapped to 開場/重點 via `LightingCue.localizedDisplayName`), and `englishName` in the fixture catalog (shown as the English reference term beside the Chinese name). Voice input supports mixed Chinese/English. When translating, keep `localizedDisplayName` and the smoke-test–pinned English data in sync.
 
 ## Commands
 
-### Build / run the app (requires Xcode 27)
+### Build / run the app (requires Xcode 26)
 
-The app uses on-device Apple Foundation Models and deploys to **visionOS 27**, so it needs **Xcode 27** (FoundationModels macro plugin + OS 27 SDK). `xcodebuild` is not available with Command Line Tools alone; point a build at an Xcode 27 install via `xcode-select` or a one-off `DEVELOPER_DIR`:
+The app deploys to **visionOS 26**, so it needs **Xcode 26** (OS 26 SDK). AI generation is cloud OpenAI, so no on-device model SDK is required to compile. `xcodebuild` is not available with Command Line Tools alone; point a build at an Xcode 26 install via `xcode-select` or a one-off `DEVELOPER_DIR`:
 
 ```bash
-export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer   # an Xcode 27 install
+export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer   # an Xcode 26 install
 ```
 
-Single scheme/target: `LumaStage` (visionOS, deploy 27.0). It links the local SwiftPM package `Packages/RealityKitContent`.
+Single scheme/target: `LumaStage` (visionOS, deploy 26.0). It links the local SwiftPM package `Packages/RealityKitContent`.
 
 ```bash
 # Pick a concrete destination from: xcodebuild -showdestinations -scheme LumaStage
-xcodebuild -scheme "LumaStage" -destination 'platform=visionOS Simulator,name=Apple Vision Pro,OS=27.0' build
+xcodebuild -scheme "LumaStage" -destination 'platform=visionOS Simulator,name=Apple Vision Pro,OS=26.0' build
 ```
 
 Day to day, building/running in the Xcode GUI is the normal path. The scene is a small plain window (`ContentView`) plus a full `ImmersiveSpace` (`ImmersiveView`). On-device generation only runs where Apple Intelligence is enabled; otherwise the AI box shows an unavailable state and generation is blocked.
@@ -68,11 +68,11 @@ swiftc \
 
 `Tests/LumaStageCoreSmokeTests.swift` runs every check sequentially from `static func main()` using `expect` / `expectThrows` (failures call `fatalError`). To add a test: write a `private static func` and **register the call in `main()`** — there is no auto-discovery. To run one test, temporarily comment out the others in `main()`.
 
-**Keep FoundationModels out of the smoke-test compile set.** `canImport(FoundationModels)` is true even under Command Line Tools, so all FoundationModels references live in `FoundationModelsLightingService.swift` and `AppModel.swift` (which the harness does **not** compile). `LightingAIService.swift` stays Foundation-only; the smoke tests cover the AI→domain boundary via `LightingLookDraft`, not the model call.
+**The AI engine is cloud-only (OpenAI) and needs no special SDK to compile.** The on-device Foundation Models path was removed, so there is no `import FoundationModels` anywhere; `OpenAILightingService.swift` is Foundation-only (`URLSession` behind the injectable `HTTPSend`) and compiles in the smoke set. `LightingAIService.swift` stays Foundation-only; the smoke tests cover the AI→domain boundary via `LightingLookDraft` and the `OpenAILightingService` request/parse, not a live network call.
 
-### Apple Foundation Models (on-device, no key)
+### AI engine: OpenAI cloud (API key required)
 
-AI generation runs entirely on-device via Apple Foundation Models — **no API key, no network**. It requires Apple Intelligence to be available (supported device/simulator, enabled in Settings, model downloaded). When unavailable, the AI box surfaces the reason and Send/mic are disabled — there is **no local fallback**. See `docs/foundation-models-setup.md`.
+AI generation runs against the **OpenAI Responses API** (`OpenAILightingService`) — it needs a network connection and an API key. The key is entered in-app (`OpenAISettingsView`, reachable from `ProjectSelectionView`) and stored **only in the device Keychain** (`OpenAIKeychain`, service `tw.iosclub.LumaStage.openai-key`) — never in the binary, never in `UserDefaults`. With no key set, `OpenAILightingService.availability` is `.unavailable` and the AI box surfaces "尚未設定 OpenAI API 金鑰。請在設定中輸入。" with Send/mic disabled. There is **no on-device fallback** — the previous Apple Foundation Models path was removed.
 
 ## Architecture
 
@@ -81,8 +81,8 @@ AI generation runs entirely on-device via Apple Foundation Models — **no API k
 The defining convention: **all pure logic — data models, validation, geometry, render order, layout math, AI parsing — lives in `Foundation`-only files**, and SwiftUI views are thin consumers. This is what lets the smoke tests run headlessly without a simulator.
 
 - **`LightingModels.swift`** — `LightingLook` / `LightingCue` / `FixtureGroup` / `FixtureColor` / `FixtureFineControl`, the `CuePatch` enum, `StageState`, `LumaStageProject`, and `ValidationError`.
-- **`LightingAIService.swift`** — Foundation-only generation contract (`LightingLookGenerating`, `LightingModelAvailability`, `LightingGenerationResult`) and the testable AI→domain assembler `LightingLookDraft.makeValidatedLook()`. No FoundationModels import.
-- **`FoundationModelsLightingService.swift`** — on-device implementation: an `@Generable GeneratedLightingLook` filled by `LanguageModelSession`, mapped into `LightingLookDraft`. Guarded by `#if canImport(FoundationModels)`.
+- **`LightingAIService.swift`** — Foundation-only generation contract (`LightingLookGenerating`, `LightingModelAvailability`, `LightingGenerationResult`) and the testable AI→domain assembler `LightingLookDraft.makeValidatedLook()`. Also holds `UnavailableLightingLookService` (always-unavailable stub, used by tests). No network import.
+- **`OpenAILightingService.swift`** — the sole generation engine: builds a strict-`json_schema` OpenAI Responses request, decodes the returned `output_text` JSON into a Foundation DTO, and assembles it through the SAME `LightingLookDraft.makeValidatedLook()`. Foundation-only (`URLSession` via the injectable `HTTPSend`), reads the key via `OpenAIKeychain`. `FallbackLightingService.swift` (an "OpenAI-primary, secondary-fallback" composer) still exists and is smoke-tested, but `AppModel` no longer wires a secondary, so it is currently unused by the app.
 - **`StageBuilderModels.swift`** (largest file) — the shared stage geometry the visionOS renderer consumes: `StageLayout` / `StageObject` / truss geometry / presets / `ImmersiveStageGeometryPlan`. Also holds the immersion-mode policy: `StageImmersionMode` and the Foundation-only `SurroundingsLightPolicy` (pinned by `surroundingsLightPolicyGatesOpaqueVenue`). The tabletop editor's pure logic lives here too: `StageLayout.trussNodeSnap` → `TrussNodeSnap` (the connector-node snap rule, shared by the live drag and the committed `snappedObject`), `TabletopStageEditing` (preset swaps), and `TabletopSurfaceSelection` + `DetectedHorizontalSurface` (which real table to rest the diorama on). It also still holds the pure-logic layout/policy helpers from the removed iPad stage builder (`StageBuilderPanelLayout`, `IPadRootLayout`, `StageBuilderZoom`, `StageBuilderToolbarLayout`, `StageBuilderViewportGround`, `StageBuilderRenderOrder`, `StageBuilderInspectorPolicy`, `StageBuilderSelectionPolicy`, `StageBuilderDropPlanner`) — no view consumes them now, but the smoke tests still pin them, so they remain as tested, reusable logic.
 - **`LightingFixtureCatalog.swift`** — fixture vocabulary metadata.
 - **`StageLightAccessibility.swift`** — Foundation-only VoiceOver copy for the on-stage lights (`identityLabel`/`stateValue`, plus a hex→繁中 colour-name bucketer keyed on chroma, not HSL saturation, so `#FFE9C8` reads as 暖白 not orange). `ImmersiveView` sets these as the `AccessibilityComponent` label/value on each light's `lightpick_<n>` pick proxy (identity at build, `value` refreshed every relight in `apply`), so VoiceOver can sweep the rig and hear "第 3 盞燈，搖頭光束燈" → "藍色，亮度 60%" / "已關閉". Smoke-tested (`stageLightAccessibilityLabelsAreLocalized`).
@@ -94,19 +94,19 @@ When adding behavior to a view, **extract the decidable part into one of these m
 `AppModel` (`@MainActor @Observable`) is the single source of truth, injected via `.environment(appModel)` from `LumaStageApp`. Views never mutate lighting state directly — they call `AppModel` methods, which delegate to `StageState`, which **re-validates on every mutation**. `SpeechTranscriber` (also `@Observable`) feeds transcripts in.
 
 ```
-voice/typed prompt → AppModel.generate → FoundationModelsLightingService → LightingLook
+voice/typed prompt → AppModel.generate → OpenAILightingService → LightingLook
   → StageState.replaceLightingLook (validates) → AppModel (Observable) → views re-render
 cue edit (AppModel.set…/selectCue) → StageState.patchSelectedCue (validates) → AppModel → ImmersiveView update
 ```
 
 ### Lighting look invariants (enforced in `LightingLook.validate()`)
 
-The `@Generable GeneratedLightingLook` schema constrains the model, and `LightingLookDraft.makeValidatedLook()` runs `validate()` on the result — keep the two in sync if you touch either:
+The OpenAI strict `json_schema` (`OpenAILightingService.jsonSchema`) constrains the model, and `LightingLookDraft.makeValidatedLook()` runs `validate()` on the result — the validator stays the authority, so keep the two in sync if you touch either:
 
 - `schemaVersion == "1.0"`, `ambient.preset == standardNight`.
 - Both cues `cue_opening` (**Opening**) and `cue_highlight` (**Highlight**) must be present and `selectedCueId` must resolve (`validate()`); the AI schema additionally caps the look at exactly those two.
 - `intensity` in `0.0...1.0`; `color.mode == rgb`; color is `#RRGGBB` hex.
-- Fixture roles (`wash`, `spot`, `frontLight`, `backgroundWash`) **no longer gate rendering** — the rig is dynamic and the renderer relights *every* fixture in the cue (`ImmersiveView.syncRig` builds one `SpotLight` per fixture and rebuilds when the fixture set changes; `apply` iterates them all). Role is now derived metadata for fine-control defaults and the relight debug panel (`LightingFixtureVisualModel.derivedRole`); a fixture's `renderModel` (its explicit `model`, else `.derived(role:zone:)`) picks the geometry + lumens. On-device generation produces a **dynamic rig of 4–12 fixtures** (`@Generable GeneratedLightingLook.fixtures: [GeneratedFixture]`, `.count(4...12)`), each carrying a fixture type + mount zone + inline per-cue (`opening`/`highlight`) state. The Foundation-only two-fixture `LightingLookDraft.RenderableCue` path (forces a `frontLight` + `backgroundWash`, smoke-tested by `aiDraftGuaranteesRenderableFrontAndBackgroundFixtures`) still exists, but it now backs templates / mvpDemo / legacy looks, **not** generation.
+- Fixture roles (`wash`, `spot`, `frontLight`, `backgroundWash`) **no longer gate rendering** — the rig is dynamic and the renderer relights *every* fixture in the cue (`ImmersiveView.syncRig` builds one `SpotLight` per fixture and rebuilds when the fixture set changes; `apply` iterates them all). Role is now derived metadata for fine-control defaults and the relight debug panel (`LightingFixtureVisualModel.derivedRole`); a fixture's `renderModel` (its explicit `model`, else `.derived(role:zone:)`) picks the geometry + lumens. OpenAI generation produces a **dynamic rig** (the strict `json_schema` hints 4–8 fixtures and 2–4 cues; `validate()` remains the real authority via `LightingLookDraft.makeValidatedLook()`), each fixture carrying a type + mount zone + one state per cue in cue order (`OpenAILightingService.LookDTO`). The Foundation-only two-fixture `LightingLookDraft.RenderableCue` path (forces a `frontLight` + `backgroundWash`, smoke-tested by `aiDraftGuaranteesRenderableFrontAndBackgroundFixtures`) still exists, but it now backs templates / mvpDemo / legacy looks, **not** generation.
 
 ### Editing model: cue patches, not look replacement
 
@@ -114,7 +114,7 @@ Cue edits go through `CuePatch` + `StageState.patchSelectedCue` and **only ever 
 
 ### AI service shape
 
-`AppModel` holds a `LightingLookGenerating` (default `FoundationModelsLightingService`, injectable for tests/previews). Before generating, `AppModel.generate` refreshes `modelAvailability` from `SystemLanguageModel.default.availability`; if unavailable it surfaces the reason and **does not generate** (no fallback). The service runs a `LanguageModelSession` with `@Generable` structured output. Sampling is **randomized nucleus sampling with no fixed seed** (`GenerationOptions(samplingMode: .random(probabilityThreshold: 0.9), temperature: 0.9)`) so each generation differs — an earlier `.greedy` setting made every run for a given prompt byte-identical (and silently ignored `temperature`), which surfaced as "the output is always the same"; the `@Generable` schema still pins the structure, so randomness only varies colors/intensities/mood/wording. It maps the result through `LightingLookDraft.makeValidatedLook()`, and presents user-facing errors via the OS 27 `LanguageModelError` cases. On-device generation can't run headlessly, so the smoke tests cover the `LightingLookDraft` assembler/validation boundary instead of the model call.
+`AppModel` holds a `LightingLookGenerating` (default `OpenAILightingService`, injectable for tests/previews — pass any `aiClient` into `AppModel.init`). Before generating, `AppModel.generate` refreshes `modelAvailability` from `aiClient.availability` (for OpenAI: is a non-empty Keychain key set?); if unavailable it surfaces the reason and **does not generate**. The service POSTs to the OpenAI Responses API with a strict `json_schema` and `temperature: 0.9`, so each generation differs while the schema pins the structure (randomness only varies colors/intensities/mood/wording). It maps the returned `output_text` JSON through `LightingLookDraft.makeValidatedLook()`, and surfaces all failures as `LightingGenerationError.generationFailed(<繁中>)` (never `.modelUnavailable`, whose copy is Apple-Intelligence-specific). A live network call can't run headlessly, so the smoke tests cover the `LightingLookDraft` assembler/validation boundary and the `OpenAILightingService` request-build / envelope-parse via a stubbed `HTTPSend`, not a real call.
 
 ### Shared stage geometry
 
@@ -163,6 +163,16 @@ An optional **iPad app target** ("LumaStage Control") is a thin real-time remote
 - **`MultipeerSyncTransport.swift`** — the real impl (host advertises, panel browses, reliable `MCSession`). **Not** in the smoke set (imports MultipeerConnectivity). The project builds with `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`, so this `@MainActor` type marks its MC delegate methods (invoked off-main) `nonisolated` and hops to main via `onMain`; the `MCSession` is `nonisolated(unsafe)` because it's thread-safe and the delegates need it off-main.
 - **Host (`LumaSyncCoordinator.swift`, visionOS only)** — owns the transport, observes `AppModel` via `withObservationTracking` (no edits to the mutation methods — it re-arms and republishes the full `LumaHostState` on any change), and applies inbound `LumaControlCommand`s by calling `AppModel`. Chat history is derived from the same observable state the composer drives (`conversationState`/`transcript`/`aiUnderstoodCommand`/`lastExplanation`); a `lastPromptEmitted` guard stops manual cue edits (which change `aiUnderstoodCommand` but not `transcript`) from replaying a stale user bubble. Started by `AppModel.startIPadSync()` from `LumaStageApp`'s main-window `.task` (idempotent).
 - **Panel (`iPadPanel/`, all `#if os(iOS)`)** — `LumaPanelApp` (`@main`), `LumaPanelModel` (`@Observable`; holds the last `LumaHostState`, sends commands), `PanelRootView` (TabView: Chat + Lighting), `PanelChatView`, `PanelLightingView`. These stay in the visionOS target harmlessly (the `#if os(iOS)` makes them empty there). The host publishes full snapshots (the `.conversation`/`.lighting` delta cases exist for a future optimization); the panel's Lighting tab drives the existing cue API — the newer per-light overrides (`AppModel.lightOverrides`) aren't surfaced yet.
+
+## visionOS 26 rendering degradations
+
+This is a visionOS-26 port of an app first written against visionOS 27. Three visionOS-27-only RealityKit rendering features were removed and degrade **silently** (no crash, data still validated/persisted) on 26. The core rig — real `SpotLight`/`SpotLightComponent` illumination, `SpotLightComponent.Shadow()` shadows via `DynamicLightShadowComponent`, `ManipulationComponent` (a 26 API), and the per-cue color/intensity cross-fade — is unaffected and works fully on 26.
+
+- **Real-room spill lighting** — `SpotLightComponent.SurroundingsLight()` (27-only) was removed from `addStageSpotLight`. In `.roomSpill` (mixed passthrough) mode the scene still switches to passthrough with the `.dim` effect, but the virtual spotlights **no longer illuminate the real room**.
+- **Digital gobos** — `SpotLightComponent.ProjectiveTexture` (27-only) and the procedural gobo-texture generation were removed from `updateSpotLight`. `GoboPattern` is now **data-only**: validated, persisted, and still in the OpenAI schema, but **not projected** (plain beams).
+- **Soft-shadow tuning** — `Shadow.lightSize` (beam-width penumbra) + per-role `Shadow.quality` (27-only refinements) were removed. Only the default `SpotLightComponent.Shadow()` set at fixture creation remains; shadows still render, without beam-width penumbra or per-role quality.
+
+> The dense "Shared stage geometry" and "Dual immersion modes" paragraphs below still describe some of these features as active (`SpotLightComponent.Shadow.lightSize`, `ProjectiveTexture` gobos, `SurroundingsLight`) — that prose predates the 26 port and is a known docs-drift follow-up. This section is the authority for what actually renders on 26.
 
 ## Conventions
 

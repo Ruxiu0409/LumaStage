@@ -204,12 +204,11 @@ class AppModel {
     }
 
     private static func makeDefaultLightingClient() -> any LightingLookGenerating {
-        let openAI = OpenAILightingService()
-#if canImport(FoundationModels)
-        return FallbackLightingService(primary: openAI, secondary: FoundationModelsLightingService())
-#else
-        return FallbackLightingService(primary: openAI, secondary: UnavailableLightingLookService())
-#endif
+        // Cloud-only: on-device Foundation Models was removed, so OpenAI is the sole engine.
+        // The key lives in the Keychain (`OpenAISettingsView`); with no key set,
+        // `OpenAILightingService.availability` is `.unavailable` and the composer gate surfaces
+        // the "尚未設定 OpenAI API 金鑰" reason instead of generating.
+        OpenAILightingService()
     }
 
     var lightingLook: LightingLook {
@@ -824,7 +823,7 @@ class AppModel {
 
         refreshModelAvailability()
         guard modelAvailability.isAvailable else {
-            fail(modelAvailability.unavailableReason ?? "Apple Intelligence 無法使用。")
+            fail(modelAvailability.unavailableReason ?? "AI 生成目前無法使用。")
             return
         }
 
@@ -858,7 +857,7 @@ class AppModel {
         }
 
         // Deterministic single-light commands ("close the light 1", "set light 2 to blue") bypass AI
-        // generation — instant, predictable, and they work even when Apple Intelligence is unavailable.
+        // generation — instant, predictable, and they work even when the cloud AI is unavailable.
         // A prompt without a light number (e.g. "change the light to yellow") returns nil and falls
         // through to generative look design below.
         if let command = LightCommand.parse(prompt) {
@@ -868,7 +867,7 @@ class AppModel {
 
         refreshModelAvailability()
         guard modelAvailability.isAvailable else {
-            fail(modelAvailability.unavailableReason ?? "Apple Intelligence 無法使用。")
+            fail(modelAvailability.unavailableReason ?? "AI 生成目前無法使用。")
             return
         }
 
