@@ -329,6 +329,19 @@ struct TabletopStageEditorView: View {
             .disabled(appModel.selectedFixtureId == nil || rigIsFull)
             .help(rigIsFull ? "燈具數量已達上限" : "以舞台中線為軸，鏡像複製選取的燈具")
 
+            // #17: precise direction-nudge keys for the selected light — each press shifts it a fixed
+            // 0.25 m along ±X/±Z via the shared `moveFixture`, so exact placement doesn't rely on dragging
+            // the tiny diorama. Only shown when a fixture is selected.
+            if appModel.selectedFixtureId != nil {
+                Divider().frame(height: 26)
+                HStack(spacing: 6) {
+                    nudgeButton("−X", axis: .x, sign: -1, help: "所選燈具往 −X 方向移動 0.25 公尺")
+                    nudgeButton("+X", axis: .x, sign: 1, help: "所選燈具往 +X 方向移動 0.25 公尺")
+                    nudgeButton("−Z", axis: .z, sign: -1, help: "所選燈具往 −Z 方向移動 0.25 公尺")
+                    nudgeButton("+Z", axis: .z, sign: 1, help: "所選燈具往 +Z 方向移動 0.25 公尺")
+                }
+            }
+
             // Turntable: spin the WHOLE model so the user can look at any side (distinct from "旋轉所選",
             // which rotates only the selected piece). 45° steps → 8 covers a full turn.
             Button("舞台左轉", systemImage: "arrow.counterclockwise.circle") {
@@ -420,10 +433,20 @@ struct TabletopStageEditorView: View {
             Image(systemName: hasSelection ? "checkmark.circle.fill" : "hand.tap")
                 .font(.callout)
                 .foregroundStyle(hasSelection ? LumaStageDesign.coolBlue : LumaStageDesign.textSecondary)
-            Text(statusText)
-                .font(.callout.weight(.semibold))
-                .foregroundStyle(LumaStageDesign.textPrimary)
-                .lineLimit(1)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(statusText)
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(LumaStageDesign.textPrimary)
+                    .lineLimit(1)
+                // #17: numeric feedback — the selected fixture's resolved model-metre X/Z, so the user
+                // knows where the light actually sits (drag has no readout on the tiny diorama).
+                if let position = selectedFixtureResolvedPosition {
+                    Text(TabletopNudge.readout(x: position.x, z: position.z))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(LumaStageDesign.textSecondary)
+                        .lineLimit(1)
+                }
+            }
         }
     }
 
@@ -437,6 +460,47 @@ struct TabletopStageEditorView: View {
         guard let index = fixtures.firstIndex(where: { $0.id == id }) else { return nil }
         let modelName = LightingFixtureCatalog.item(for: fixtures[index].renderModel)?.displayName ?? fixtures[index].renderModel.rawValue
         return StageLightLabel.tabletopLabel(number: index + 1, modelName: modelName)
+    }
+
+    /// The selected fixture's RESOLVED model-metre position — the SAME `RigPlacement.resolvedPlacement`
+    /// the renderer (`ImmersiveView.syncRig`) and `TabletopStageScene.syncFixtures` seat it at, so the
+    /// readout and the nudge buttons operate on exactly where the light sits (its `manualPosition` if it
+    /// was dragged, else the zone-derived slot). The per-zone slot/count counting mirrors `syncFixtures`.
+    private var selectedFixtureResolvedPosition: Vector3Meters? {
+        guard let id = appModel.selectedFixtureId else { return nil }
+        let look = appModel.lightingLook
+        let fixtures = (look.cues.first(where: { $0.id == look.selectedCueId }) ?? look.cues.first)?.fixtureGroups ?? []
+        guard let index = fixtures.firstIndex(where: { $0.id == id }) else { return nil }
+        let fixture = fixtures[index]
+        var zoneTotals: [StageZone: Int] = [:]
+        for f in fixtures { zoneTotals[f.zone, default: 0] += 1 }
+        var slot = 0
+        for f in fixtures.prefix(index) where f.zone == fixture.zone { slot += 1 }
+        return RigPlacement.resolvedPlacement(
+            fixture: fixture,
+            slot: slot,
+            count: zoneTotals[fixture.zone] ?? 1,
+            layout: appModel.stageLayout
+        ).position
+    }
+
+    /// Moves the selected fixture one fixed step along X or Z via the shared `AppModel.moveFixture`
+    /// (rig identity → validated + persisted; lasers re-clamped to the truss). Starts from the fixture's
+    /// current RESOLVED position, so the first press nudges from where it visually sits (#17).
+    private func nudgeSelectedFixture(axis: TabletopNudge.Axis, sign: Double) {
+        guard let id = appModel.selectedFixtureId, let position = selectedFixtureResolvedPosition else { return }
+        let moved = TabletopNudge.nudged(x: position.x, z: position.z, axis: axis, sign: sign)
+        appModel.moveFixture(id: id, toX: moved.x, y: position.y, z: moved.z)
+    }
+
+    /// One compact ±X/±Z nudge key for the control bar (#17).
+    private func nudgeButton(_ title: String, axis: TabletopNudge.Axis, sign: Double, help: String) -> some View {
+        Button(title) {
+            nudgeSelectedFixture(axis: axis, sign: sign)
+        }
+        .buttonStyle(.bordered)
+        .lumaGazeTarget()
+        .help(help)
     }
 
     /// The selected `StageObject`'s type rendered in Traditional Chinese, or `nil` when nothing is

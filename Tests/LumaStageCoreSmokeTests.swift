@@ -90,6 +90,7 @@ struct LumaStageCoreSmokeTests {
         try fixtureManualPositionOverridesZonePlacement()
         fixtureSupportPolicyClassifiesTrussVsStand()
         tabletopLabelFormatsNumberAndModel()
+        tabletopNudgeStepsAndFormatsReadout()
         duplicatedFixtureCopiesStateAndOffsetsManualPosition()
         try surroundingsLightPolicyGatesOpaqueVenue()
         immersiveSceneReopenPolicyBacksOffThenGivesUp()
@@ -2972,6 +2973,26 @@ struct LumaStageCoreSmokeTests {
                "tabletopLabel must format as 'N · 型號'")
         expect(StageLightLabel.displayName(number: 3) == "Light 3",
                "displayName must stay 'Light N' (regression)")
+    }
+
+    // #17: the tabletop editor's direction-nudge buttons + coordinate readout are pure logic.
+    private static func tabletopNudgeStepsAndFormatsReadout() {
+        // Stepping: ±X / ±Z move by exactly stepMeters, leaving the other axis untouched.
+        expect(TabletopNudge.stepMeters == 0.25, "The nudge step must be 0.25 model metres")
+        let plusX = TabletopNudge.nudged(x: 1.0, z: 2.0, axis: .x, sign: 1)
+        expect(plusX.x == 1.25 && plusX.z == 2.0, "+X must add one step to x and leave z alone")
+        let minusX = TabletopNudge.nudged(x: 1.0, z: 2.0, axis: .x, sign: -1)
+        expect(minusX.x == 0.75 && minusX.z == 2.0, "−X must subtract one step from x and leave z alone")
+        let plusZ = TabletopNudge.nudged(x: 1.0, z: 2.0, axis: .z, sign: 1)
+        expect(plusZ.x == 1.0 && plusZ.z == 2.25, "+Z must add one step to z and leave x alone")
+        let minusZ = TabletopNudge.nudged(x: 1.0, z: 2.0, axis: .z, sign: -1)
+        expect(minusZ.x == 1.0 && minusZ.z == 1.75, "−Z must subtract one step from z and leave x alone")
+
+        // Readout: 2 decimals, CJK separator, a real minus sign for negatives, no "−0.00".
+        expect(TabletopNudge.readout(x: 1.5, z: -2.0) == "x 1.50・z −2.00",
+               "Readout must format as 'x 1.50・z −2.00' with a U+2212 minus sign")
+        expect(TabletopNudge.readout(x: -0.004, z: 0) == "x 0.00・z 0.00",
+               "Rounding must clamp a tiny negative to a plain 0.00, never '−0.00'")
     }
 
     // SPEC 17 #18: `FixtureGroup.duplicated` copies all visual/aim state under a new id, offsets a SET

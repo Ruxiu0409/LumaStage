@@ -539,6 +539,41 @@ enum TabletopStageEditing {
     }
 }
 
+/// Foundation-only：桌面編輯器「方向微調鍵 + 座標讀數」的純邏輯（#17）。
+/// 小尺度 diorama（scale 0.07）上要拖到精準位置很難，也沒有數值回饋，故提供：
+///   1. 固定步距的軸向位移（現位置 + 帶號步距 → 新位置），落地交給 `AppModel.moveFixture`。
+///   2. 座標讀數字串（model 公尺 x/z → 「x 1.50・z −2.00」，2 位小數、負號用真正的減號 U+2212）。
+/// view（`TabletopStageEditorView`）只是薄消費者：微調鍵用 `nudged` 算出新 x/z 再呼叫 `moveFixture`，
+/// 選取狀態列用 `readout` 顯示目前解析位置。
+enum TabletopNudge {
+    /// 每按一次微調鍵的位移量（model 公尺）。
+    static let stepMeters: Double = 0.25
+
+    enum Axis { case x, z }
+
+    /// 目前座標沿指定軸位移 `sign * stepMeters`（`sign` 只看正負，>=0 視為 +1，其餘 -1），
+    /// 未指定的軸原樣保留。
+    static func nudged(x: Double, z: Double, axis: Axis, sign: Double) -> (x: Double, z: Double) {
+        let delta = sign >= 0 ? stepMeters : -stepMeters
+        switch axis {
+        case .x: return (x + delta, z)
+        case .z: return (x, z + delta)
+        }
+    }
+
+    /// 「x 1.50・z −2.00」——2 位小數、CJK 間隔號分隔、負號用真正的 U+2212 減號（比 hyphen 好讀）。
+    static func readout(x: Double, z: Double) -> String {
+        "x \(component(x))・z \(component(z))"
+    }
+
+    /// 單一座標分量：四捨五入到 2 位後再判號，避免出現 "−0.00"；負值前綴真正的減號 U+2212。
+    private static func component(_ value: Double) -> String {
+        let rounded = (value * 100).rounded() / 100
+        let magnitude = String(format: "%.2f", abs(rounded))
+        return rounded < 0 ? "−\(magnitude)" : magnitude
+    }
+}
+
 struct StageEditingSnapshot: Equatable {
     var layout: StageLayout
     var lightingLook: LightingLook
