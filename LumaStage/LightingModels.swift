@@ -384,6 +384,21 @@ struct FixtureGroup: Codable, Equatable, Identifiable {
     }
 }
 
+extension FixtureGroup {
+    /// 「複製此燈具」用的拷貝：換上新 `id`，其餘視覺/朝向狀態（color/intensity/model/role/zone/enabled/
+    /// fineControl/gobo/dmx/target/effect/aimOffset）全數保留；若來源有明確 `manualPosition`，把該位置
+    /// 沿 X/Z 位移 (dx,dz) 模型公尺，避免複製體與原件完全重疊。來源 `manualPosition == nil`（zone 推算）
+    /// 則維持 nil——靠 zone slot 分散兩者。`name` 維持與來源相同（呼叫端可另行覆寫編號）。
+    func duplicated(newId: String, nudgeX dx: Double, nudgeZ dz: Double) -> FixtureGroup {
+        var copy = self
+        copy.id = newId
+        if let pos = manualPosition {
+            copy.manualPosition = FixturePosition(x: pos.x + dx, y: pos.y, z: pos.z + dz)
+        }
+        return copy
+    }
+}
+
 struct LightingCue: Codable, Equatable, Identifiable {
     var id: String
     var name: String
@@ -507,6 +522,9 @@ struct RelightDebugSnapshot: Equatable {
 /// appear in the cue's `fixtureGroups`, so "Light 3" is the third fixture — dynamic over any rig size.
 enum StageLightLabel {
     static func displayName(number: Int) -> String { "Light \(number)" }
+    /// 桌面代理／選取狀態用的標籤：可定址編號 + 燈具繁中型號名，例如 "3 · 搖頭光束燈"。
+    /// 與 1:1 舞台的 `Light N` 同一編號（cue 順序 index+1）。型號名由呼叫端從 catalog 取後傳入。
+    static func tabletopLabel(number: Int, modelName: String) -> String { "\(number) · \(modelName)" }
 }
 
 /// A per-light manual override layered ON TOP of the cue's group values — the deterministic control

@@ -87,6 +87,8 @@ struct LumaStageCoreSmokeTests {
         rigPlacementSpreadsFixturesAcrossZone()
         try fixtureManualPositionOverridesZonePlacement()
         fixtureSupportPolicyClassifiesTrussVsStand()
+        tabletopLabelFormatsNumberAndModel()
+        duplicatedFixtureCopiesStateAndOffsetsManualPosition()
         try surroundingsLightPolicyGatesOpaqueVenue()
         immersiveSceneReopenPolicyBacksOffThenGivesUp()
         try humanoidFigurePlanIsAnatomicallyOrdered()
@@ -2950,6 +2952,49 @@ struct LumaStageCoreSmokeTests {
         } catch {
             fatalError("protected item must throw SongSourceError.protected, got \(error)")
         }
+    }
+
+    // SPEC 17: the tabletop editor's "N · 型號" caption/selection label (Foundation string builder) and the
+    // 1:1-stage "Light N" label share `StageLightLabel`; pin both so the tabletop label reads correctly and
+    // the existing one doesn't regress.
+    private static func tabletopLabelFormatsNumberAndModel() {
+        expect(StageLightLabel.tabletopLabel(number: 3, modelName: "搖頭光束燈") == "3 · 搖頭光束燈",
+               "tabletopLabel must format as 'N · 型號'")
+        expect(StageLightLabel.displayName(number: 3) == "Light 3",
+               "displayName must stay 'Light N' (regression)")
+    }
+
+    // SPEC 17 #18: `FixtureGroup.duplicated` copies all visual/aim state under a new id, offsets a SET
+    // manualPosition by (dx,dz) keeping y, and leaves a nil (zone-derived) manualPosition nil.
+    private static func duplicatedFixtureCopiesStateAndOffsetsManualPosition() {
+        var src = FixtureGroup(
+            id: "fixture_src", name: "燈具 1", role: .spot, zone: .stageBack,
+            enabled: true, intensity: 0.42, color: FixtureColor(mode: .rgb, value: "#2E6BFF"),
+            model: .movingHeadBeam
+        )
+        src.manualPosition = FixturePosition(x: 1, y: 4, z: -2)
+        src.aimOffset = FixtureAimOffset(panDegrees: 20, tiltDegrees: -12)
+        src.effect = LightEffect(kind: .panSweep, speedHz: 0.5, sizeDegrees: 26, phase: 0.2)
+
+        let dup = src.duplicated(newId: "fixture_dup", nudgeX: 0.5, nudgeZ: 0)
+        expect(dup.id == "fixture_dup", "duplicated must take the new id")
+        expect(dup.id != src.id, "duplicated id must differ from the source")
+        expect(dup.color == src.color, "duplicated must copy the colour")
+        expect(dup.intensity == src.intensity, "duplicated must copy the intensity")
+        expect(dup.model == src.model, "duplicated must copy the model")
+        expect(dup.role == src.role, "duplicated must copy the role")
+        expect(dup.zone == src.zone, "duplicated must copy the zone")
+        expect(dup.aimOffset == src.aimOffset, "duplicated must copy the aimOffset")
+        expect(dup.effect == src.effect, "duplicated must copy the effect")
+        expect(dup.manualPosition == FixturePosition(x: 1.5, y: 4, z: -2),
+               "duplicated must offset a set manualPosition by (dx,dz), keeping y")
+
+        // A zone-derived source (nil manualPosition) stays nil so the zone slots spread the two copies.
+        var zoned = src
+        zoned.manualPosition = nil
+        let zonedDup = zoned.duplicated(newId: "fixture_dup2", nudgeX: 0.5, nudgeZ: 0)
+        expect(zonedDup.manualPosition == nil,
+               "duplicating a zone-derived fixture (nil manualPosition) must keep it nil")
     }
 
     private static func expect(_ condition: @autoclosure () -> Bool, _ message: String) {

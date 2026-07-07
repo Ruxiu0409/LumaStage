@@ -572,6 +572,41 @@ class AppModel {
         }
     }
 
+    /// 複製目前選取的燈具：新 id、逐 cue 保留該 cue 的色/亮度、位置沿 X 位移一小段（雷射夾回桁架），
+    /// 寫回每個 cue、re-validate + persist，並選取新燈。滿 `maxRigFixtureCount` 時拒絕。
+    func duplicateSelectedFixture() {
+        guard let sourceId = selectedFixtureId else { return }
+        var look = stageState.lightingLook
+        guard let largest = look.cues.map(\.fixtureGroups.count).max(),
+              largest < Self.maxRigFixtureCount else {
+            fail("燈具數量已達上限（\(Self.maxRigFixtureCount) 盞），無法再複製。")
+            return
+        }
+        let newId = "fixture_\(UUID().uuidString.prefix(6).lowercased())"
+        let newName = "燈具 \(largest + 1)"
+        var duplicatedAny = false
+        for cueIndex in look.cues.indices {
+            guard let src = look.cues[cueIndex].fixtureGroups.first(where: { $0.id == sourceId }) else { continue }
+            var dup = src.duplicated(newId: newId, nudgeX: 0.5, nudgeZ: 0.0)
+            dup.name = newName
+            // 雷射只能掛桁架：位移後夾回 footprint（與 moveFixture 同一套規則）。
+            if RigPlacement.mountsOnTrussOnly(dup.renderModel), let pos = dup.manualPosition {
+                let clamped = RigPlacement.clampedToTruss(Vector3Meters(x: pos.x, y: pos.y, z: pos.z), layout: stageLayout)
+                dup.manualPosition = FixturePosition(x: clamped.x, y: clamped.y, z: clamped.z)
+            }
+            look.cues[cueIndex].fixtureGroups.append(dup)
+            duplicatedAny = true
+        }
+        guard duplicatedAny else { fail("找不到要複製的燈具。"); return }
+        do {
+            try stageState.replaceLightingLook(look)
+            persistCurrentProjectState()
+            selectedFixtureId = newId
+        } catch {
+            fail(error.localizedDescription)
+        }
+    }
+
     /// Removes the selected fixture from EVERY cue, re-validates + persists, and clears the selection.
     /// Refuses to remove if doing so would leave any cue with no fixtures (a cue must stay lit).
     func removeSelectedFixture() {
