@@ -96,12 +96,18 @@ struct LumaStageApp: App {
         // presented with its 3D model on the left and its info card on the right. The model window
         // opens the card from its own onAppear (see `FixtureObservatoryView`), so the model window is
         // already registered in `context.windows` when this placement runs; if it isn't found, fall
-        // back to the system's default placement.
+        // back to a utility panel in front of the user.
         .defaultWindowPlacement { _, context in
             if let observatory = context.windows.first(where: { $0.id == AppModel.fixtureObservatoryWindowID }) {
+                #if DEBUG
+                print("Fixture info card placement: found observatory -> trailing")
+                #endif
                 return WindowPlacement(.trailing(observatory))
             }
-            return WindowPlacement(nil)
+            #if DEBUG
+            print("Fixture info card placement: fallback -> utilityPanel")
+            #endif
+            return WindowPlacement(.utilityPanel)
         }
 
         // Tabletop stage editor: a small editable stage model that ARKit rests on the user's real table.
