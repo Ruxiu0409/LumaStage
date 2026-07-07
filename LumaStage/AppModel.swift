@@ -166,6 +166,11 @@ class AppModel {
     @ObservationIgnored
     let musicSyncEngine = MusicSyncEngine()
 
+    /// Drives cue-list auto-playback (SPEC 16) — the non-music "press 播放 and the show runs itself" path.
+    /// A hold-driven timer that follows cue to cue; `AppModel` supplies the advance logic via `onFollow`.
+    @ObservationIgnored
+    let cuePlaybackEngine = CuePlaybackEngine()
+
     /// The most recent analysis + plan, retained so `setRigConstraint` can rebuild the show in place.
     @ObservationIgnored
     private var lastAnalysis: SongAnalysis?
@@ -184,6 +189,9 @@ class AppModel {
     var isMusicShowActive = false
     /// Mirrors `musicSyncEngine.isPlaying` so the UI can observe it on `AppModel`.
     var isMusicPlaying = false
+    /// Whether cue-list auto-playback is running (SPEC 16). Distinct from `isMusicPlaying`: the two are
+    /// mutually exclusive drivers of cue advance (a music show uses `musicSyncEngine`).
+    var isPlayingCueList = false
     /// The analyzed tempo of the loaded song (nil when no tempo could be derived / no song loaded).
     var musicBPM: Double?
     /// Title of the loaded song (for the music status row).
@@ -832,6 +840,7 @@ class AppModel {
     /// directly so the render-thread effect system still beat-locks even though no audio plays.
     func playMusicShow() {
         guard isMusicShowActive else { return }
+        stopCueList()   // mutually exclusive drivers of cue advance — never let both run at once
         musicSyncEngine.play()
         if musicShowIsClockOnly, let clock = lastClock {
             // The audio engine has no player to start; anchor the shared beat clock ourselves so the visuals
@@ -858,6 +867,73 @@ class AppModel {
         let stack = cues
         guard index >= 0, index < stack.count else { return }
         selectCue(id: stack[index].id)
+    }
+
+    // MARK: - Cue-list auto-playback (SPEC 16 — GO 升為「播放」)
+
+    /// Whether a show is auto-running (music show OR cue list) — the unified state the headset play/stop
+    /// control reflects, so one button reads correctly whichever kind of show is loaded.
+    var isShowRunning: Bool { isMusicPlaying || isPlayingCueList }
+
+    /// Starts cue-list auto-playback: each cue holds for its follow time, then follows to the next, running
+    /// once to the last cue and stopping there (manual GO still wraps). No-op — with friendly feedback —
+    /// when a music show drives the cues instead, or the look has too few cues to advance.
+    func playCueList() {
+        guard !isMusicShowActive else {
+            aiUnderstoodCommand = "目前是音樂演出，請用音樂面板的播放控制。"
+            conversationState = .explaining
+            return
+        }
+        guard CuePlayback.canAutoPlay(cueCount: cues.count) else {
+            aiUnderstoodCommand = "至少需要兩個場景才能自動播放。"
+            conversationState = .explaining
+            return
+        }
+
+        cuePlaybackEngine.onFollow = { [weak self] in self?.followToNextCueDuringPlayback() }
+        isPlayingCueList = true
+        cuePlaybackEngine.start(initialHold: CuePlayback.holdDuration(for: cues[stageState.selectedCueIndex]))
+
+        aiUnderstoodCommand = "開始播放，共 \(cues.count) 個場景會自動依序切換。"
+        lastExplanation = LightingExplanation(
+            term: "播放走場",
+            plainText: "播放會像真實燈控台的 cue list，依每個場景的停留時間自動 follow 到下一個，一路跑完整場。播放中你仍可手動 GO 跳到下一個場景。",
+            actionSummary: aiUnderstoodCommand
+        )
+        conversationState = .explaining
+        lastError = nil
+        narrateIfEnabled(aiUnderstoodCommand)
+    }
+
+    /// Stops cue-list auto-playback, holding the current cue. Silent + idempotent so reset paths and the
+    /// music-show takeover can call it without clobbering their own status text.
+    func stopCueList() {
+        cuePlaybackEngine.stop()
+        isPlayingCueList = false
+    }
+
+    /// The headset/voice unified play-or-stop entry point: drives the music show when one is loaded,
+    /// otherwise the cue list.
+    func togglePlayback() {
+        if isMusicShowActive {
+            if isMusicPlaying { stopMusicShow() } else { playMusicShow() }
+        } else {
+            if isPlayingCueList { stopCueList() } else { playCueList() }
+        }
+    }
+
+    /// `cuePlaybackEngine.onFollow`: advance to the next cue and return its hold to schedule the following
+    /// follow, or `nil` to stop (reached the last cue — no wrap, so the show ends holding it).
+    private func followToNextCueDuringPlayback() -> Double? {
+        guard isPlayingCueList else { return nil }
+        guard let next = CuePlayback.nextIndex(after: stageState.selectedCueIndex, count: cues.count) else {
+            isPlayingCueList = false
+            aiUnderstoodCommand = "已播放完整場演出，停在最後一個場景。"
+            conversationState = .explaining
+            return nil
+        }
+        selectCue(id: cues[next].id)
+        return CuePlayback.holdDuration(for: cues[next])
     }
 
     /// Updates the locked-rig constraint: stores it on the model, persists it to the current project, and
@@ -894,6 +970,10 @@ class AppModel {
     /// the observable music state. Called on project open/close and before a manual generation so a stale
     /// show never lingers. The applied look is left untouched (the next caller replaces it).
     func clearMusicShow() {
+        // Cue-list auto-playback is the non-music peer driver of cue advance (SPEC 16); this method is the
+        // shared teardown hook at every reset point (openProject/closeProject/generate), so end it here too
+        // — a new project/generation replaces the cues out from under a running show. Idempotent.
+        stopCueList()
         musicSyncEngine.stop()
         musicSyncEngine.onSectionBoundary = nil
         // Clock-only demo anchors the source itself, so make sure it's cleared on teardown.
@@ -1121,6 +1201,15 @@ class AppModel {
         case .previousCue: goToPreviousCue()
         case .addCue: appendCue()
         case .readExplanation: readCurrentExplanationAloud()
+        case .playShow:
+            // Route by what's loaded: a music show plays its audio + beat-locked advance; otherwise the
+            // cue list auto-plays. Both surface their own feedback (playCueList speaks; music is audible).
+            if isMusicShowActive { playMusicShow() } else { playCueList() }
+        case .stopShow:
+            if isMusicShowActive { stopMusicShow() } else { stopCueList() }
+            aiUnderstoodCommand = "已停止播放。"
+            conversationState = .explaining
+            narrateIfEnabled(aiUnderstoodCommand)
         }
     }
 
@@ -1128,11 +1217,20 @@ class AppModel {
     /// it over that cue's transition (the renderer relights whenever the selected cue changes).
     func goToNextCue() {
         announce(stageState.goToNextCue(), verb: "前往")
+        rescheduleCuePlaybackIfPlaying()
     }
 
     /// GO back: step the cue stack to the previous cue (wraps at the start).
     func goToPreviousCue() {
         announce(stageState.goToPreviousCue(), verb: "返回")
+        rescheduleCuePlaybackIfPlaying()
+    }
+
+    /// After a manual GO taken mid-playback, restart the follow countdown from the now-current cue so the
+    /// operator's jump doesn't leave a stale hold running (SPEC 16 — "playing 中仍可手動 GO").
+    private func rescheduleCuePlaybackIfPlaying() {
+        guard isPlayingCueList else { return }
+        cuePlaybackEngine.start(initialHold: CuePlayback.holdDuration(for: cues[stageState.selectedCueIndex]))
     }
 
     private func announce(_ cue: LightingCue, verb: String) {

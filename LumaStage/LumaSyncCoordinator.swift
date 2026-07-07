@@ -118,6 +118,10 @@ final class LumaSyncCoordinator {
             appModel.setGroupMaster(id: groupId, level: level)
         case .bumpGroup(let groupId, let on):
             appModel.bumpGroup(id: groupId, on: on)
+        case .playCueList:
+            appModel.playCueList()
+        case .stopCueList:
+            appModel.stopCueList()
         }
     }
 
@@ -137,6 +141,7 @@ final class LumaSyncCoordinator {
             _ = appModel.stageImmersionMode
             _ = appModel.selectedCueId
             _ = appModel.groupMasters
+            _ = appModel.isPlayingCueList
         } onChange: { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
@@ -154,7 +159,8 @@ final class LumaSyncCoordinator {
         LumaHostState(
             conversation: currentConversation(),
             lighting: appModel.lightingLook,
-            immersionMode: appModel.stageImmersionMode.rawValue
+            immersionMode: appModel.stageImmersionMode.rawValue,
+            isPlayingCueList: appModel.isPlayingCueList
         )
     }
 

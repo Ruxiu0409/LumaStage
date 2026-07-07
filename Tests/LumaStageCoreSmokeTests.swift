@@ -76,6 +76,7 @@ struct LumaStageCoreSmokeTests {
         musicBeatSyncLocksEffectsToBeat()
         demoTrackSynthRendersBeatMatchedAudibleWav()
         parsesStageVoiceCommands()
+        parsesPlayStopVoiceCommands()
         stageLightAccessibilityLabelsAreLocalized()
         try relightDebugSnapshotMapsCueFixtures()
         try relightDebugSnapshotResolvesManualOverrides()
@@ -750,6 +751,11 @@ struct LumaStageCoreSmokeTests {
         try roundTrip(.control(.removeCue(id: "cue_highlight")))
         try roundTrip(.control(.setGroupMaster(groupId: "group_front", level: 0.5)))
         try roundTrip(.control(.bumpGroup(groupId: "group_movers", on: true)))
+        try roundTrip(.control(.playCueList))
+        try roundTrip(.control(.stopCueList))
+
+        // SPEC 16: the cue-list playback flag survives on the host-state snapshot (true and default-false).
+        try roundTrip(.hostState(LumaHostState(conversation: conversation, lighting: look, immersionMode: "roomSpill", isPlayingCueList: true)))
 
         for role in LumaPeerRole.allCases {
             try roundTrip(.hello(role: role))
@@ -2111,6 +2117,31 @@ struct LumaStageCoreSmokeTests {
         // Anchored true positives still parse (with a particle / filler around them).
         expect(StageVoiceCommand.parse("請下一個") == .nextCue, "a Chinese command with a particle still parses")
         expect(StageVoiceCommand.parse("read it aloud") == .readExplanation, "the exact narration command still parses")
+    }
+
+    // SPEC 16: 播放/停止 (play/stop) voice commands parse in English + Chinese, stay anchored (a design
+    // prompt embedding "play"/"停止" falls through), and never eat cue navigation.
+    private static func parsesPlayStopVoiceCommands() {
+        expect(StageVoiceCommand.parse("play the show") == .playShow, "'play the show' should start playback")
+        expect(StageVoiceCommand.parse("run the show") == .playShow, "'run the show' should start playback")
+        expect(StageVoiceCommand.parse("play") == .playShow, "a bare 'play' should start playback")
+        expect(StageVoiceCommand.parse("auto play") == .playShow, "'auto play' should start playback")
+        expect(StageVoiceCommand.parse("播放") == .playShow, "Chinese '播放' should start playback")
+        expect(StageVoiceCommand.parse("自動播放") == .playShow, "Chinese '自動播放' should start playback")
+        expect(StageVoiceCommand.parse("跑全場") == .playShow, "Chinese '跑全場' should start playback")
+
+        expect(StageVoiceCommand.parse("stop the show") == .stopShow, "'stop the show' should stop playback")
+        expect(StageVoiceCommand.parse("stop playback") == .stopShow, "'stop playback' should stop playback")
+        expect(StageVoiceCommand.parse("stop") == .stopShow, "a bare 'stop' should stop playback")
+        expect(StageVoiceCommand.parse("停止播放") == .stopShow, "Chinese '停止播放' should stop playback")
+        expect(StageVoiceCommand.parse("停止") == .stopShow, "Chinese '停止' should stop playback")
+
+        // Cue navigation and design prompts must NOT be hijacked.
+        expect(StageVoiceCommand.parse("next cue") == .nextCue, "'next cue' must still advance, not play")
+        expect(StageVoiceCommand.parse("下一個場景") == .nextCue, "Chinese 'next scene' must still advance")
+        expect(StageVoiceCommand.parse("play with warm sunset colors") == nil, "an embedded 'play' in a design prompt must fall through")
+        expect(StageVoiceCommand.parse("把燈光調成停止前的暖色") == nil, "embedded 停止 in a design prompt must fall through")
+        expect(StageVoiceCommand.parse("make it warm and moody") == nil, "a plain design prompt should not parse as play/stop")
     }
 
     private static func stageLightAccessibilityLabelsAreLocalized() {
