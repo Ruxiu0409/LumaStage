@@ -539,6 +539,32 @@ enum TabletopStageEditing {
     }
 }
 
+struct StageEditingSnapshot: Equatable {
+    var layout: StageLayout
+    var lightingLook: LightingLook
+}
+
+struct StageEditingUndoStack: Equatable {
+    private var latestSnapshot: StageEditingSnapshot?
+
+    var canUndo: Bool {
+        latestSnapshot != nil
+    }
+
+    mutating func push(layout: StageLayout, lightingLook: LightingLook) {
+        latestSnapshot = StageEditingSnapshot(layout: layout, lightingLook: lightingLook)
+    }
+
+    mutating func pop() -> StageEditingSnapshot? {
+        defer { latestSnapshot = nil }
+        return latestSnapshot
+    }
+
+    mutating func clear() {
+        latestSnapshot = nil
+    }
+}
+
 enum StageBuilderStageLibraryAssets {
     static let stageTab: [StageAssetId] = [.stageBase]
 }

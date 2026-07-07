@@ -122,6 +122,10 @@ class AppModel {
     /// The rig fixture (by `id`) currently selected in the tabletop editor for move/remove. Reset to nil
     /// whenever the rig changes out from under it (project open / AI regenerate), mirroring `lightOverrides`.
     var selectedFixtureId: String? = nil
+    private var stageEditingUndoStack = StageEditingUndoStack()
+    var canUndoStageEdit: Bool {
+        stageEditingUndoStack.canUndo
+    }
     var conversationState: ConversationState = .idle
     var projects = LumaStageProject.defaultProjects()
     var selectedProjectId: String?
@@ -359,6 +363,8 @@ class AppModel {
     private func clearTabletopEditingState() {
         isEditingTabletopStage = false
         selectedStageObjectId = nil
+        selectedFixtureId = nil
+        stageEditingUndoStack.clear()
     }
 
     /// Selects (or, on a miss, deselects) the tapped stage object — routed through the shared
@@ -381,6 +387,7 @@ class AppModel {
         object.position = Vector3Meters(x: x, y: object.position.y, z: z)
         do {
             try layout.updateObject(layout.snappedObject(object))
+            recordStageEditingUndoSnapshot()
             saveStageLayout(layout)
         } catch {
             fail(error.localizedDescription)
@@ -403,6 +410,7 @@ class AppModel {
         object.rotation = Vector3Degrees(x: object.rotation.x, y: nextY, z: object.rotation.z)
         do {
             try layout.updateObject(layout.snappedObject(object))
+            recordStageEditingUndoSnapshot()
             saveStageLayout(layout)
         } catch {
             fail(error.localizedDescription)
@@ -426,6 +434,7 @@ class AppModel {
 
         do {
             try layout.addObject(object)
+            recordStageEditingUndoSnapshot()
             saveStageLayout(layout)
             selectedStageObjectId = object.id
         } catch {
@@ -443,6 +452,7 @@ class AppModel {
         var layout = stageLayout
         do {
             try layout.removeObject(id: id)
+            recordStageEditingUndoSnapshot()
             saveStageLayout(layout)
             selectedStageObjectId = nil
         } catch {
@@ -496,6 +506,7 @@ class AppModel {
             return
         }
         do {
+            recordStageEditingUndoSnapshot()
             try stageState.replaceLightingLook(look)
             persistCurrentProjectState()
         } catch {
@@ -564,6 +575,7 @@ class AppModel {
         }
 
         do {
+            recordStageEditingUndoSnapshot()
             try stageState.replaceLightingLook(look)
             persistCurrentProjectState()
             selectedFixtureId = id
@@ -599,6 +611,7 @@ class AppModel {
         }
         guard duplicatedAny else { fail("找不到要複製的燈具。"); return }
         do {
+            recordStageEditingUndoSnapshot()
             try stageState.replaceLightingLook(look)
             persistCurrentProjectState()
             selectedFixtureId = newId
@@ -627,6 +640,7 @@ class AppModel {
         }
 
         do {
+            recordStageEditingUndoSnapshot()
             try stageState.replaceLightingLook(look)
             persistCurrentProjectState()
             selectedFixtureId = nil
@@ -637,12 +651,14 @@ class AppModel {
 
     /// Swaps the stage platform footprint (small / medium / large) and persists it.
     func setStagePlatformPreset(_ preset: StagePlatformPreset) {
+        recordStageEditingUndoSnapshot()
         saveStageLayout(TabletopStageEditing.applyingStagePlatformPreset(preset, to: stageLayout))
         reconcileStageSelection()
     }
 
     /// Swaps the truss portal (4x3 / 6x5 / 8x4) and persists it.
     func setTrussPortalPreset(_ preset: StagePortalPreset) {
+        recordStageEditingUndoSnapshot()
         saveStageLayout(TabletopStageEditing.applyingTrussPortalPreset(preset, to: stageLayout))
         reconcileStageSelection()
     }
@@ -679,6 +695,7 @@ class AppModel {
         stageState = StageState(lightingLook: project.lightingLook)
         lightOverrides = [:]
         selectedFixtureId = nil
+        stageEditingUndoStack.clear()
         resetGroups()
         // A different project is a different rig; drop any stale per-light selection so the control card
         // can't index a fixture that no longer exists. Mirrors generate's reset.
@@ -987,6 +1004,7 @@ class AppModel {
             try stageState.replaceLightingLook(enforced)
             lightOverrides = [:]
             selectedFixtureId = nil
+            stageEditingUndoStack.clear()
             resetGroups()
             selectedLightNumber = nil
             persistCurrentProjectState()
@@ -1601,6 +1619,13 @@ class AppModel {
         }
     }
 
+    func undoStageEdit() {
+        guard let snapshot = stageEditingUndoStack.pop() else {
+            return
+        }
+        restoreStageEditingSnapshot(snapshot, status: "已撤銷上一個舞台編輯")
+    }
+
     func saveStageLayout(_ layout: StageLayout) {
         do {
             try layout.validate()
@@ -1621,7 +1646,14 @@ class AppModel {
     }
 
     func resetStageLayoutToDefault() {
-        saveStageLayout(.defaultStudentOutdoor())
+        recordStageEditingUndoSnapshot()
+        restoreStageEditingSnapshot(
+            StageEditingSnapshot(
+                layout: .defaultStudentOutdoor(),
+                lightingLook: defaultStageEditingLook()
+            ),
+            status: "已重置舞台與燈具"
+        )
     }
 
     func selectedFixture(role: FixtureRole) -> FixtureGroup? {
@@ -1639,6 +1671,54 @@ class AppModel {
     private func fail(_ message: String) {
         lastError = message
         conversationState = .error
+    }
+
+    private func recordStageEditingUndoSnapshot() {
+        stageEditingUndoStack.push(layout: stageLayout, lightingLook: stageState.lightingLook)
+    }
+
+    private func defaultStageEditingLook() -> LightingLook {
+        rigConstraint.enforce(on: LightingLook.showcaseDemo()).enforcingTrussMountedLasers()
+    }
+
+    private func restoreStageEditingSnapshot(_ snapshot: StageEditingSnapshot, status: String) {
+        do {
+            try snapshot.layout.validate()
+            try snapshot.lightingLook.validate()
+            guard let selectedProjectId,
+                  let projectIndex = projects.firstIndex(where: { $0.id == selectedProjectId }) else {
+                fail("請先選擇專案，再更新舞台。")
+                return
+            }
+
+            try stageState.replaceLightingLook(snapshot.lightingLook)
+            projects[projectIndex].stageLayout = snapshot.layout
+            projects[projectIndex].lightingLook = stageState.lightingLook
+            projects[projectIndex].lastEditedDescription = status
+            lightOverrides = [:]
+            selectedLightNumber = nil
+            resetGroups()
+            reconcileStageSelection()
+            reconcileFixtureSelection()
+            aiUnderstoodCommand = status
+            lastExplanation = stageState.lightingLook.explanation
+            lastError = nil
+            conversationState = .idle
+        } catch {
+            fail(error.localizedDescription)
+        }
+    }
+
+    private func reconcileFixtureSelection() {
+        guard let selectedFixtureId else {
+            return
+        }
+        let stillExists = stageState.lightingLook.cues.contains { cue in
+            cue.fixtureGroups.contains { $0.id == selectedFixtureId }
+        }
+        if !stillExists {
+            self.selectedFixtureId = nil
+        }
     }
 
     private func persistCurrentProjectState() {

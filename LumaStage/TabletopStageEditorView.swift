@@ -367,6 +367,17 @@ struct TabletopStageEditorView: View {
             .accessibilityHint("刪除目前選取的物件；尚未選取物件時無法使用")
             .accessibilityValue(selectionAccessibilityValue)
 
+            Button("撤銷上一個編輯", systemImage: "arrow.uturn.backward") {
+                appModel.undoStageEdit()
+            }
+            .labelStyle(.iconOnly)
+            .buttonStyle(.bordered)
+            .buttonBorderShape(.circle)
+            .lumaGazeTarget()
+            .disabled(!appModel.canUndoStageEdit)
+            .help("撤銷上一個舞台或燈具編輯")
+            .accessibilityHint("還原上一個舞台或燈具編輯；沒有可撤銷項目時無法使用")
+
             Button("重置舞台", systemImage: "arrow.counterclockwise") {
                 appModel.resetStageLayoutToDefault()
             }
@@ -374,8 +385,8 @@ struct TabletopStageEditorView: View {
             .buttonStyle(.bordered)
             .buttonBorderShape(.circle)
             .lumaGazeTarget()
-            .help("還原成預設的舞台佈局")
-            .accessibilityHint("將整個舞台佈局還原成預設值")
+            .help("還原成預設的舞台佈局與燈具")
+            .accessibilityHint("將整個舞台佈局與燈具還原成預設值")
 
             Button("完成", systemImage: "checkmark") {
                 finishEditing()

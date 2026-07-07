@@ -39,6 +39,7 @@ struct LumaStageCoreSmokeTests {
         try connectorSnappingAlignsNearbyTrussEnds()
         try tabletopEditingSwapsStagePlatformPreset()
         try tabletopEditingSwapsTrussPortalPreset()
+        try stageEditingUndoStackRestoresLayoutAndLook()
         try movingTrussDoesNotSnapBackOntoItsOwnEndpoints()
         try trussNodeSnapMarksActiveConnectorNode()
         tabletopSurfaceSelectionPrefersNearestLargestTable()
@@ -1758,6 +1759,29 @@ struct LumaStageCoreSmokeTests {
         try reSwapped.validate()
         let trussIds = reSwapped.objects.filter { $0.type == .trussSegment }.map(\.id)
         expect(Set(trussIds).count == trussIds.count, "Re-applying a portal preset must keep truss ids unique")
+    }
+
+    private static func stageEditingUndoStackRestoresLayoutAndLook() throws {
+        let originalLayout = StageLayout.defaultStudentOutdoor()
+        let originalLook = LightingLook.mvpDemo()
+        let editedLayout = TabletopStageEditing.applyingStagePlatformPreset(.large8x4, to: originalLayout)
+        var editedLook = originalLook
+        editedLook.cues[0].fixtureGroups[0].intensity = 0.25
+
+        var stack = StageEditingUndoStack()
+        expect(!stack.canUndo, "A fresh stage editing undo stack should start empty")
+
+        stack.push(layout: originalLayout, lightingLook: originalLook)
+        expect(stack.canUndo, "Pushing a stage editing snapshot should enable undo")
+
+        stack.push(layout: editedLayout, lightingLook: editedLook)
+        let snapshot = stack.pop()
+        expect(snapshot?.layout == editedLayout, "Stage editing undo should restore the last layout snapshot")
+        expect(snapshot?.lightingLook == editedLook, "Stage editing undo should restore the last look snapshot")
+        expect(!stack.canUndo, "Popping the single undo snapshot should clear the stack")
+        expect(stack.pop() == nil, "Stage editing undo should be single-step")
+        try snapshot?.layout.validate()
+        try snapshot?.lightingLook.validate()
     }
 
     private static func movingTrussDoesNotSnapBackOntoItsOwnEndpoints() throws {
