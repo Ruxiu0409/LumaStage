@@ -6,3 +6,6 @@ DerivedData/
 xcuserdata/
 *.xcuserstate
 .swiftpm/
+
+# Local timestamped backups (created before editing non-git-tracked files)
+*.bak.*
