@@ -195,6 +195,12 @@ struct TabletopStageEditorView: View {
                     state = offset
                     let target = grab + offset
                     fixtureContainer.position = SIMD3<Float>(target.x, fixtureContainer.position.y, target.z)
+                    // #15: re-evaluate hang↔floor-stand live as the light is dragged (Y is preserved, so the
+                    // post height doesn't change — what toggles is the stand appearing/disappearing when the
+                    // light crosses in/out of the truss footprint), matching the on-release `syncFixtures`.
+                    TabletopStageScene.syncFixtureStand(in: fixtureContainer,
+                                                        position: TabletopStageScene.sceneToMeters(fixtureContainer.position),
+                                                        layout: appModel.stageLayout)
                     return
                 }
                 // Otherwise a truss/deck piece: ground-plane drag with live connector-node snapping.
@@ -300,6 +306,19 @@ struct TabletopStageEditorView: View {
             .accessibilityHint("刪除目前選取的燈具；尚未選取燈具時無法使用")
             .accessibilityValue(selectedFixtureAccessibilityValue)
 
+            Button("複製所選燈具", systemImage: "plus.square.on.square") {
+                appModel.duplicateSelectedFixture()
+            }
+            .labelStyle(.iconOnly)
+            .buttonStyle(.bordered)
+            .buttonBorderShape(.circle)
+            .lumaGazeTarget()
+            .disabled(appModel.selectedFixtureId == nil || rigIsFull)
+            .help(rigIsFull ? "燈具數量已達上限" : "複製選取的燈具")
+            .accessibilityLabel("複製所選燈具")
+            .accessibilityHint(rigIsFull ? "燈具數量已達上限，無法再複製" : "複製目前選取的燈具；尚未選取燈具時無法使用")
+            .accessibilityValue(selectedFixtureAccessibilityValue)
+
             // Turntable: spin the WHOLE model so the user can look at any side (distinct from "旋轉所選",
             // which rotates only the selected piece). 45° steps → 8 covers a full turn.
             Button("舞台左轉", systemImage: "arrow.counterclockwise.circle") {
@@ -377,17 +396,39 @@ struct TabletopStageEditorView: View {
     /// non-color, VoiceOver-legible signal of selection (on screen it's just the blue 3D highlight).
     /// Combined into one spoken element so it reads as a single phrase.
     private var selectionStatus: some View {
-        HStack(spacing: 6) {
-            Image(systemName: selectedObjectTypeName == nil ? "hand.tap" : "checkmark.circle.fill")
+        // 燈具與物件選取互斥：優先顯示選取的燈具（"N · 型號"），否則回退物件（桁架／台座），皆無 → 未選取。
+        let statusText: String
+        if let fixture = selectedFixtureLabel {
+            statusText = "已選取：\(fixture)"
+        } else if let object = selectedObjectTypeName {
+            statusText = "已選取：\(object)"
+        } else {
+            statusText = "未選取"
+        }
+        let hasSelection = selectedFixtureLabel != nil || selectedObjectTypeName != nil
+        return HStack(spacing: 6) {
+            Image(systemName: hasSelection ? "checkmark.circle.fill" : "hand.tap")
                 .font(.callout)
-                .foregroundStyle(selectedObjectTypeName == nil ? LumaStageDesign.textSecondary : LumaStageDesign.coolBlue)
-            Text(selectedObjectTypeName.map { "已選取：\($0)" } ?? "未選取物件")
+                .foregroundStyle(hasSelection ? LumaStageDesign.coolBlue : LumaStageDesign.textSecondary)
+            Text(statusText)
                 .font(.callout.weight(.semibold))
                 .foregroundStyle(LumaStageDesign.textPrimary)
                 .lineLimit(1)
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(selectedObjectTypeName.map { "已選取 \($0)" } ?? "尚未選取物件")
+        .accessibilityLabel(statusText)
+    }
+
+    /// The selected rig fixture's addressable "N · 型號" label (from the current cue, else the first), or
+    /// nil when no fixture is selected. The number is the fixture's 1-based index in cue order — the SAME
+    /// "Light N" the 1:1 stage, the floating proxy caption, and voice commands use — so all agree.
+    private var selectedFixtureLabel: String? {
+        guard let id = appModel.selectedFixtureId else { return nil }
+        let look = appModel.lightingLook
+        let fixtures = (look.cues.first(where: { $0.id == look.selectedCueId }) ?? look.cues.first)?.fixtureGroups ?? []
+        guard let index = fixtures.firstIndex(where: { $0.id == id }) else { return nil }
+        let modelName = LightingFixtureCatalog.item(for: fixtures[index].renderModel)?.displayName ?? fixtures[index].renderModel.rawValue
+        return StageLightLabel.tabletopLabel(number: index + 1, modelName: modelName)
     }
 
     /// The selected `StageObject`'s type rendered in Traditional Chinese, or `nil` when nothing is
@@ -418,10 +459,10 @@ struct TabletopStageEditorView: View {
         (appModel.lightingLook.cues.map(\.fixtureGroups.count).max() ?? 0) >= AppModel.maxRigFixtureCount
     }
 
-    /// `.accessibilityValue` for the 刪除所選燈具 button — names the selected fixture (otherwise only the
-    /// 3D highlight signals it).
+    /// `.accessibilityValue` for the 刪除所選燈具 / 複製所選燈具 buttons — names the selected fixture (otherwise
+    /// only the 3D highlight signals it).
     private var selectedFixtureAccessibilityValue: String {
-        appModel.selectedFixtureId == nil ? "尚未選取燈具" : "已選取一盞燈具"
+        selectedFixtureLabel.map { "已選取 \($0)" } ?? "尚未選取燈具"
     }
 
     /// A small menu of fixture models the user can drop onto the tabletop rig. A representative spread of
@@ -654,7 +695,7 @@ enum TabletopStageScene {
         }
 
         var zoneSlots: [StageZone: Int] = [:]
-        for fixture in fixtures {
+        for (index, fixture) in fixtures.enumerated() {
             let slot = zoneSlots[fixture.zone, default: 0]
             zoneSlots[fixture.zone] = slot + 1
             let placement = RigPlacement.resolvedPlacement(
@@ -676,6 +717,15 @@ enum TabletopStageScene {
             container.position = scenePos
             container.findEntity(named: "fixture_selection_highlight")?.isEnabled = (fixture.id == selectedFixtureId)
 
+            // #14: recolour the emissive lens to the CURRENT cue's colour on every pass — the proxy is
+            // built once, but the cue colour changes when the user switches cue or recolours the fixture.
+            (container.findEntity(named: "fixture_lens") as? ModelEntity)?.model?.materials = [lensMaterial(hex: fixture.color.value)]
+
+            // #13: a floating "N · 型號" caption. The number is this fixture's 1-based index in cue order —
+            // the SAME "Light N" the 1:1 stage and voice commands use — and the model name is the catalog name.
+            let modelName = LightingFixtureCatalog.item(for: fixture.renderModel)?.displayName ?? fixture.renderModel.rawValue
+            syncFixtureLabel(in: container, text: StageLightLabel.tabletopLabel(number: index + 1, modelName: modelName))
+
             // Same support policy as the 1:1 stage: a fixture under the truss footprint (and high enough)
             // hangs; anything else grows a floor stand up to it — so no light floats on the diorama either.
             // The stand is a child of the container, so it follows XZ drags and stays under the light.
@@ -683,12 +733,72 @@ enum TabletopStageScene {
         }
     }
 
+    /// Builds/refreshes a fixture proxy's floating "N · 型號" caption (#13). The caption faces the viewer
+    /// via `BillboardComponent` (so the turntable spin doesn't turn it away), and — to avoid rebuilding 12
+    /// text meshes every `update:` pass — the wanted string is encoded into the caption child's name
+    /// (`fixture_caption_<want>`): if that child already exists the string is current and we bail; otherwise
+    /// stale captions are removed and the new one is built. The caption carries no `InputTargetComponent`/
+    /// collision, so it never intercepts a tap/drag meant for the fixture body.
+    static func syncFixtureLabel(in container: Entity, text want: String) {
+        let labelHostName = "fixture_label"
+        let host: Entity
+        if let existing = container.findEntity(named: labelHostName) {
+            host = existing
+        } else {
+            let e = Entity()
+            e.name = labelHostName
+            // Above the (downward) cone body, in the un-scaled assembly space (font is a scene-unit size,
+            // not the 0.12 of the 1:1 stage — tune on device, see Caveats).
+            e.position = SIMD3<Float>(0, sceneLength(0.4), 0)
+            e.components.set(BillboardComponent())
+            container.addChild(e)
+            host = e
+        }
+
+        let captionName = "fixture_caption_\(want)"
+        if host.findEntity(named: captionName) != nil {
+            return // the current caption already shows the wanted string — no rebuild
+        }
+        for child in host.children where child.name.hasPrefix("fixture_caption_") {
+            child.removeFromParent()
+        }
+        host.addChild(makeFixtureCaption(named: captionName, text: want))
+    }
+
+    /// One caption entity: unlit white `generateText` glyphs on a dark backing plate, recentred on the
+    /// glyph bounds (mirrors `ImmersiveView.makeLabelEntity`, scaled down for the diorama).
+    private static func makeFixtureCaption(named name: String, text: String) -> Entity {
+        let caption = Entity()
+        caption.name = name
+
+        let mesh = MeshResource.generateText(
+            text,
+            extrusionDepth: 0.002,
+            font: .systemFont(ofSize: 0.02, weight: .semibold),
+            containerFrame: .zero,
+            alignment: .center,
+            lineBreakMode: .byClipping
+        )
+        let textEntity = ModelEntity(mesh: mesh, materials: [UnlitMaterial(color: .white)])
+        let bounds = textEntity.model?.mesh.bounds ?? mesh.bounds
+        textEntity.position = SIMD3<Float>(-bounds.center.x, -bounds.center.y, 0.002)
+        caption.addChild(textEntity)
+
+        let backing = ModelEntity(
+            mesh: .generatePlane(width: bounds.extents.x + 0.012, height: bounds.extents.y + 0.009, cornerRadius: 0.004),
+            materials: [UnlitMaterial(color: UIColor(white: 0.05, alpha: 1.0))]
+        )
+        caption.addChild(backing)
+        return caption
+    }
+
     /// Adds/toggles a `"fixture_stand"` child cylinder on a fixture proxy container per `RigPlacement.support`.
     /// `.floorStand` → a slim grey post from the floor up to the fixture body (height = the container's scene
     /// height above the ground, i.e. `container.position.y`), centred locally so it reaches down to y = 0.
     /// `.hangFromTruss` → the stand is disabled (fixture hangs). Kept as a container child so an XZ drag
-    /// carries it and it stays directly beneath the light.
-    private static func syncFixtureStand(in container: Entity, position: Vector3Meters, layout: StageLayout) {
+    /// carries it and it stays directly beneath the light. `static` (not `private`) so the live drag can
+    /// re-run it mid-gesture (#15), keeping hang↔stand in step with the finger.
+    static func syncFixtureStand(in container: Entity, position: Vector3Meters, layout: StageLayout) {
         let support = RigPlacement.support(forPosition: position, layout: layout)
         switch support {
         case .floorStand:
@@ -831,14 +941,13 @@ enum TabletopStageScene {
         addInteraction(body)
         container.addChild(body)
 
-        // Lens: an emissive disc on the (downward) tip so the proxy glows in its colour.
-        let rgb = RGBComponents(hex: hex) ?? .white
-        var lensMaterial = UnlitMaterial(color: UIColor(red: rgb.red, green: rgb.green, blue: rgb.blue, alpha: 1))
-        lensMaterial.blending = .opaque
+        // Lens: an emissive disc on the (downward) tip so the proxy glows in its colour. Named
+        // `"fixture_lens"` so `syncFixtures` can recolour it to the CURRENT cue's colour every pass (#14).
         let lens = ModelEntity(
             mesh: .generateCylinder(height: sceneLength(0.04), radius: sceneLength(0.16)),
-            materials: [lensMaterial]
+            materials: [lensMaterial(hex: hex)]
         )
+        lens.name = "fixture_lens"
         lens.position = SIMD3<Float>(0, -sceneLength(0.22), 0)
         addInteraction(lens)
         container.addChild(lens)
@@ -943,6 +1052,16 @@ enum TabletopStageScene {
             color: UIColor(red: rgb.red, green: rgb.green, blue: rgb.blue, alpha: 1),
             isMetallic: metallic
         )
+    }
+
+    /// The emissive lens `UnlitMaterial` for a fixture proxy, coloured by the fixture's CURRENT-cue colour
+    /// hex. Shared by `makeFixtureProxy` (build) and `syncFixtures` (per-cue recolour, #14) so the built
+    /// lens and the live recolour never drift.
+    private static func lensMaterial(hex: String) -> UnlitMaterial {
+        let rgb = RGBComponents(hex: hex) ?? .white
+        var m = UnlitMaterial(color: UIColor(red: rgb.red, green: rgb.green, blue: rgb.blue, alpha: 1))
+        m.blending = .opaque
+        return m
     }
 }
 
