@@ -50,8 +50,14 @@ codex exec \
 - `--add-dir /tmp` is required: the smoke test and `xcodebuild` write build
   products under `/tmp`, which is outside the workspace-write sandbox root.
   Without it Codex's self-check compile can be denied by the sandbox.
-- Set a **long Bash timeout** (up to `600000` ms). If the task is large and may
-  exceed that, run the command in the background and poll.
+- **Run `codex exec` in the FOREGROUND, synchronously, with a long Bash timeout
+  (`600000` ms). NEVER run it with `run_in_background: true` and then yield.**
+  You are a subagent: when you stop/yield, your background processes are torn
+  down and you are NOT resumed like the main loop — so a backgrounded Codex is
+  killed mid-run and makes zero changes. Block on the foreground call instead.
+  If it ever hits the timeout, resume with `codex exec resume --last "$PROMPT"`
+  (again foreground) and continue; do not give up until Codex returns its final
+  message and you have the git diff.
 - `codex exec` streams its work to stdout; `--output-last-message` also captures
   the final summary to a file you can read afterwards.
 - Do not add config flags you have not verified. This exact command is known-good.
