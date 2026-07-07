@@ -389,6 +389,11 @@ struct LightingCue: Codable, Equatable, Identifiable {
     var name: String
     var transition: CueTransition
     var fixtureGroups: [FixtureGroup]
+    /// Follow/hold time in seconds — how long this cue holds before cue-list auto-playback advances to the
+    /// next cue (SPEC 16). Additive & optional so old project JSON decodes to `nil` (synthesized Codable uses
+    /// `decodeIfPresent` for Optionals); `nil` means "use `CuePlayback.defaultHoldSeconds`". Resolve it via
+    /// `CuePlayback.holdDuration(for:)`, which floors/caps the value — never read this raw for scheduling.
+    var holdDuration: Double? = nil
 
     var localizedDisplayName: String {
         switch name {
@@ -1102,6 +1107,13 @@ struct LightingLook: Codable, Equatable {
         }
 
         for cue in cues {
+            // A cue's follow/hold time (SPEC 16) is an optional playback hint, but when present it must be a
+            // sane, finite duration so the auto-playback scheduler can trust it. `CuePlayback.holdDuration`
+            // clamps at runtime; validate here keeps malformed data (NaN / negative / absurd) out of a
+            // persisted look in the first place.
+            if let hold = cue.holdDuration, !(hold.isFinite && (0...CuePlayback.maxHoldSeconds).contains(hold)) {
+                throw ValidationError.invalidHoldDuration(hold)
+            }
             for fixture in cue.fixtureGroups {
                 try validate(fixture)
             }
@@ -2016,6 +2028,7 @@ enum ValidationError: Error, Equatable, LocalizedError {
     case invalidHexColor(String)
     case invalidFineControlValue(String, Double)
     case invalidDMXValue(String, Int)
+    case invalidHoldDuration(Double)
 
     var errorDescription: String? {
         switch self {
@@ -2041,6 +2054,8 @@ enum ValidationError: Error, Equatable, LocalizedError {
             return "無效的精細控制參數：\(field)=\(value)。"
         case .invalidDMXValue(let field, let value):
             return "無效的 DMX 參數：\(field)=\(value)。"
+        case .invalidHoldDuration(let value):
+            return "無效的場景停留時間：\(value) 秒。"
         }
     }
 }
