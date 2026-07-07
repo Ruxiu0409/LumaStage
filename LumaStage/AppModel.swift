@@ -537,6 +537,37 @@ class AppModel {
         }
     }
 
+    /// Sets the ABSOLUTE aim offset of the fixture `id` in EVERY cue — rig identity, so the same fixture
+    /// keeps one orientation across the whole show — then re-validates + persists. Unlike `rotateFixture`
+    /// (which accumulates a delta), this REPLACES the fixture's `aimOffset` with a computed pan/tilt: the
+    /// tabletop "瞄準舞台中心" button solves the offset that re-aims the light at the stage centre and writes
+    /// it here. Aim lives on `aimOffset` (NOT `fineControl`) so the zone tilt isn't double-applied.
+    func setFixtureAim(id: String, panDegrees: Double, tiltDegrees: Double) {
+        var look = stageState.lightingLook
+        let offset = FixtureAimOffset(
+            panDegrees: min(max(panDegrees, -180), 180),
+            tiltDegrees: min(max(tiltDegrees, -90), 90)
+        )
+        var found = false
+        for cueIndex in look.cues.indices {
+            if let fixtureIndex = look.cues[cueIndex].fixtureGroups.firstIndex(where: { $0.id == id }) {
+                look.cues[cueIndex].fixtureGroups[fixtureIndex].aimOffset = offset
+                found = true
+            }
+        }
+        guard found else {
+            fail("找不到要瞄準的燈具。")
+            return
+        }
+        do {
+            recordStageEditingUndoSnapshot()
+            try stageState.replaceLightingLook(look)
+            persistCurrentProjectState()
+        } catch {
+            fail(error.localizedDescription)
+        }
+    }
+
     /// Appends a new fixture (of the given visual model + zone) to EVERY cue with sensible defaults and
     /// the same `id` (rig identity), re-validates + persists, and selects it. Refuses to grow the rig past
     /// `maxRigFixtureCount`.

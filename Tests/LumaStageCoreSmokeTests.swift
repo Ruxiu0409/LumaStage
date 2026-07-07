@@ -1,4 +1,5 @@
 import Foundation
+import simd
 
 @main
 struct LumaStageCoreSmokeTests {
@@ -85,6 +86,7 @@ struct LumaStageCoreSmokeTests {
         cueEditSupersedesMaskingOverride()
         parsesSingleLightCommands()
         parsesLightRotationCommands()
+        fixtureAimMathInvertsRestingAimRotation()
         resolvesLightOverridesOntoCueValues()
         rigPlacementSpreadsFixturesAcrossZone()
         try fixtureManualPositionOverridesZonePlacement()
@@ -1580,6 +1582,51 @@ struct LumaStageCoreSmokeTests {
         expect(upstage.position.z < foh0.position.z, "Upstage fixtures should sit behind the FOH line")
         expect(upstage.position.y > 0, "Upstage fixtures should hang above the floor")
         expect(upstage.aim.z < foh0.aim.z, "Upstage fixtures aim upstage; FOH fixtures aim at the performer area")
+    }
+
+    // #23: the tabletop "瞄準舞台中心" button relies on FixtureAimMath.offset being the EXACT inverse of the
+    // renderer's resting-aim rotation (the visionOS `LightEffectSystem.aim` delegates to
+    // `FixtureAimMath.apply`, so pinning `apply` here pins what the stage actually does). For a range of
+    // fixture positions + zone-derived base aims + targets, the offset it solves must — when applied to the
+    // base direction — point back at the target within Float precision, and stay within FixtureAimOffset's
+    // clamps.
+    private static func fixtureAimMathInvertsRestingAimRotation() {
+        func unit(_ v: SIMD3<Float>) -> SIMD3<Float> {
+            let l = simd_length(v)
+            return l > 1e-5 ? v / l : SIMD3<Float>(0, 0, -1)
+        }
+        // (position, zone-derived base-aim point, desired target) triples: FOH / side boom / truss / arbitrary.
+        let cases: [(SIMD3<Float>, SIMD3<Float>, SIMD3<Float>)] = [
+            (SIMD3(2.7, 2.7, 3.55), SIMD3(0, 0.85, 0.36), SIMD3(0, 1.2, 0)),
+            (SIMD3(-3.3, 2.0, 0.5), SIMD3(0, 1.2, 0),     SIMD3(0, 1.2, 0)),
+            (SIMD3(1.5, 4.8, -1.6), SIMD3(0, 2.3, -1.9),  SIMD3(0, 1.2, 0)),
+            (SIMD3(1, 3, 2),        SIMD3(0.5, 0.5, 0.5), SIMD3(-1, 0.5, -1)),
+            (SIMD3(-2, 2.5, -2),    SIMD3(-1, 0, 1),      SIMD3(0.3, 1.0, 0.2)),
+        ]
+        for (i, c) in cases.enumerated() {
+            let base = unit(c.1 - c.0)
+            let desired = unit(c.2 - c.0)
+            let (pan, tilt) = FixtureAimMath.offset(base: base, desired: desired)
+            expect((-180...180).contains(pan) && (-90...90).contains(tilt),
+                   "case \(i): solved aim offset must stay within FixtureAimOffset ranges")
+            let aimed = FixtureAimMath.apply(base: base, panDegrees: pan, tiltDegrees: tilt)
+            expect(simd_dot(aimed, desired) > 0.9999,
+                   "case \(i): applying the solved offset must re-aim the base direction onto the target")
+        }
+
+        // Tie the solver to the real stage geometry: re-aiming a FOH fixture at the stage centre must
+        // round-trip, and the stage-centre target must sit above the deck (a performer torso, not the floor).
+        let layout = StageLayout.defaultStudentOutdoor()
+        let placement = RigPlacement.placement(zone: .stageFront, slot: 0, count: 3, layout: layout)
+        let center = RigPlacement.stageCenterTarget(layout: layout)
+        func vec(_ m: Vector3Meters) -> SIMD3<Float> { SIMD3<Float>(Float(m.x), Float(m.y), Float(m.z)) }
+        let base = unit(vec(placement.aim) - vec(placement.position))
+        let desired = unit(vec(center) - vec(placement.position))
+        let (pan, tilt) = FixtureAimMath.offset(base: base, desired: desired)
+        let aimed = FixtureAimMath.apply(base: base, panDegrees: pan, tiltDegrees: tilt)
+        expect(simd_dot(aimed, desired) > 0.9999,
+               "Aiming a FOH fixture at the stage centre must round-trip through the aim solver")
+        expect(center.y > 0, "The stage-centre aim target must sit above the floor")
     }
 
     private static func fixtureManualPositionOverridesZonePlacement() throws {

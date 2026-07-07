@@ -77,14 +77,10 @@ final class LightEffectSystem: System {
     private static var isRegistered = false
 
     /// Rotates the resting aim by `pan` (about world up) then `tilt` (about the beam's right axis).
+    /// Delegates to the Foundation-only, smoke-tested `FixtureAimMath.apply` so the forward rotation and
+    /// its inverse (used by the tabletop "aim at stage centre" button) can never drift apart.
     static func aim(base: SIMD3<Float>, panDegrees: Double, tiltDegrees: Double) -> SIMD3<Float> {
-        let up = SIMD3<Float>(0, 1, 0)
-        let panned = simd_quatf(angle: Float(panDegrees * .pi / 180), axis: up).act(base)
-        let cross = simd_cross(up, panned)
-        let right = simd_length(cross) > 1e-5 ? simd_normalize(cross) : SIMD3<Float>(1, 0, 0)
-        let tilted = simd_quatf(angle: Float(tiltDegrees * .pi / 180), axis: right).act(panned)
-        let length = simd_length(tilted)
-        return length > 1e-5 ? tilted / length : base
+        FixtureAimMath.apply(base: base, panDegrees: panDegrees, tiltDegrees: tiltDegrees)
     }
 
     /// Orientation that aims a spotlight's local -Z along `forward` (matches `ImmersiveView`'s rig math).

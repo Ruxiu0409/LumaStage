@@ -2002,6 +2002,18 @@ enum RigPlacement {
         }
         return (position, zonePlacement.aim)
     }
+
+    /// The stage-centre point (model metres) the tabletop "瞄準舞台中心" button aims a fixture at: the deck
+    /// centre lifted to a performer's torso height (matching the side-boom zone aim's `topY + 0.4`), so a
+    /// re-aimed light lands on someone standing centre stage rather than on the deck surface.
+    static func stageCenterTarget(layout: StageLayout) -> Vector3Meters {
+        let stageBase = layout.objects.first { $0.type == .stageBase }
+        let size = stageBase?.size ?? StageObjectSize(width: 6, depth: 3, height: 0.8)
+        let centerX = stageBase?.position.x ?? 0
+        let centerZ = stageBase?.position.z ?? 0
+        let topY = (stageBase?.position.y ?? size.height / 2) + size.height / 2
+        return Vector3Meters(x: centerX, y: topY + 0.4, z: centerZ)
+    }
 }
 
 /// Foundation-only：一盞燈在解析位置上如何被物理支撐，讓場上沒有燈浮空。

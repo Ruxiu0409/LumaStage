@@ -1,4 +1,5 @@
 import Foundation
+import simd
 
 // MARK: - Dynamic effects engine (the console "Effects" / movement layer)
 //
@@ -131,5 +132,76 @@ enum LightEffectPlan {
             // rig with no authored movement keeps its existing behaviour (no regression).
             fixture.effect ?? LightEffect.suggested(for: fixture.renderModel, highEnergy: highEnergy, slot: index)
         }
+    }
+}
+
+// MARK: - Aim math (resting-aim rotation + its inverse)
+//
+// The pure rotation that folds a fixture's `FixtureAimOffset` (pan/tilt) onto its zone-derived resting
+// aim, plus the INVERSE that solves for the (pan, tilt) which re-aims a fixture at a chosen target point.
+// Both live here (Foundation-only, smoke-tested) so the renderer and the tabletop "aim at stage centre"
+// button share one source of truth and the inverse can be pinned to round-trip without a simulator.
+// `LightEffectSystem.aim` (the visionOS renderer) delegates to `apply` so the forward math can never drift
+// from what the smoke test exercises.
+enum FixtureAimMath {
+    /// Rotates the resting aim `base` by `pan` (about world up) then `tilt` (about the beam's right axis),
+    /// returning the resulting unit aim direction. This is the exact rotation the renderer applies when it
+    /// folds a fixture's `aimOffset` onto its zone-derived direction (`LightEffectSystem.aim` calls this).
+    static func apply(base: SIMD3<Float>, panDegrees: Double, tiltDegrees: Double) -> SIMD3<Float> {
+        let up = SIMD3<Float>(0, 1, 0)
+        let panned = simd_quatf(angle: Float(panDegrees * .pi / 180), axis: up).act(base)
+        let cross = simd_cross(up, panned)
+        let right = simd_length(cross) > 1e-5 ? simd_normalize(cross) : SIMD3<Float>(1, 0, 0)
+        let tilted = simd_quatf(angle: Float(tiltDegrees * .pi / 180), axis: right).act(panned)
+        let length = simd_length(tilted)
+        return length > 1e-5 ? tilted / length : base
+    }
+
+    /// The INVERSE of `apply`: the `(panDegrees, tiltDegrees)` whose `apply(base:pan:tilt:)` re-aims `base`
+    /// onto `desired`. Derived from the forward rotation's structure — the pan (about world up) only changes
+    /// azimuth while preserving elevation, and the tilt rotates purely in the vertical plane, so:
+    ///   pan  = azimuth(desired) − azimuth(base)      (azimuth = atan2(x, z))
+    ///   tilt = elevation(base) − elevation(desired)  (elevation = atan2(y, horizontalMagnitude))
+    /// (`+tilt` rotates the beam DOWN under this convention — verified by round-trip, not by the doc sign on
+    /// `FixtureAimOffset`.) Clamped to `FixtureAimOffset`'s ranges (pan ±180°, tilt ±90°). Degenerate
+    /// near-vertical inputs (no horizontal projection → undefined azimuth) leave pan at 0 and re-aim with
+    /// tilt alone.
+    static func offset(base: SIMD3<Float>, desired: SIMD3<Float>) -> (panDegrees: Double, tiltDegrees: Double) {
+        let b = normalizedOrForward(base)
+        let d = normalizedOrForward(desired)
+
+        let pan: Double
+        if horizontalMagnitude(b) < 1e-4 || horizontalMagnitude(d) < 1e-4 {
+            pan = 0
+        } else {
+            pan = normalizeDegrees((azimuth(d) - azimuth(b)) * 180 / .pi)
+        }
+        let tilt = (elevation(b) - elevation(d)) * 180 / .pi
+
+        return (min(max(pan, -180), 180), min(max(tilt, -90), 90))
+    }
+
+    /// Convenience: the offset that re-aims a fixture sitting at `position` (with zone-derived aim direction
+    /// `base`) onto the point `target` — all in the same coordinate space (model metres). Directions are
+    /// scale-invariant under normalization, so callers can pass raw model-metre vectors.
+    static func offset(base: SIMD3<Float>, from position: SIMD3<Float>, to target: SIMD3<Float>)
+        -> (panDegrees: Double, tiltDegrees: Double) {
+        offset(base: base, desired: target - position)
+    }
+
+    private static func normalizedOrForward(_ v: SIMD3<Float>) -> SIMD3<Float> {
+        let l = simd_length(v)
+        return l > 1e-5 ? v / l : SIMD3<Float>(0, 0, -1)
+    }
+    private static func horizontalMagnitude(_ v: SIMD3<Float>) -> Double {
+        sqrt(Double(v.x) * Double(v.x) + Double(v.z) * Double(v.z))
+    }
+    private static func azimuth(_ v: SIMD3<Float>) -> Double { atan2(Double(v.x), Double(v.z)) }
+    private static func elevation(_ v: SIMD3<Float>) -> Double { atan2(Double(v.y), horizontalMagnitude(v)) }
+    private static func normalizeDegrees(_ degrees: Double) -> Double {
+        var x = degrees.truncatingRemainder(dividingBy: 360)
+        if x > 180 { x -= 360 }
+        if x < -180 { x += 360 }
+        return x
     }
 }

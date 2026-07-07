@@ -329,6 +329,19 @@ struct TabletopStageEditorView: View {
             .disabled(appModel.selectedFixtureId == nil || rigIsFull)
             .help(rigIsFull ? "燈具數量已達上限" : "以舞台中線為軸，鏡像複製選取的燈具")
 
+            // #23: one-tap re-aim the selected light back at the stage centre. After a manual move the aim
+            // stays zone-derived (often pointing the wrong way), so this solves the `aimOffset` that re-aims
+            // the beam + head at centre stage and writes it (rig identity, all cues).
+            Button("瞄準舞台中心", systemImage: "scope") {
+                aimSelectedFixtureAtStageCenter()
+            }
+            .labelStyle(.iconOnly)
+            .buttonStyle(.bordered)
+            .buttonBorderShape(.circle)
+            .lumaGazeTarget()
+            .disabled(appModel.selectedFixtureId == nil)
+            .help("將選取燈具的光束方向對回舞台中心")
+
             // #17: precise direction-nudge keys for the selected light — each press shifts it a fixed
             // 0.25 m along ±X/±Z via the shared `moveFixture`, so exact placement doesn't rely on dragging
             // the tiny diorama. Only shown when a fixture is selected.
@@ -467,6 +480,13 @@ struct TabletopStageEditorView: View {
     /// readout and the nudge buttons operate on exactly where the light sits (its `manualPosition` if it
     /// was dragged, else the zone-derived slot). The per-zone slot/count counting mirrors `syncFixtures`.
     private var selectedFixtureResolvedPosition: Vector3Meters? {
+        selectedFixtureResolvedPlacement?.position
+    }
+
+    /// The selected fixture's full RESOLVED placement — position AND zone-derived aim point — via the same
+    /// `RigPlacement.resolvedPlacement` the renderer uses. The aim point feeds the "瞄準舞台中心" button:
+    /// its zone-derived direction is the `base` the aim-offset solver rotates onto the stage centre.
+    private var selectedFixtureResolvedPlacement: (position: Vector3Meters, aim: Vector3Meters)? {
         guard let id = appModel.selectedFixtureId else { return nil }
         let look = appModel.lightingLook
         let fixtures = (look.cues.first(where: { $0.id == look.selectedCueId }) ?? look.cues.first)?.fixtureGroups ?? []
@@ -481,7 +501,23 @@ struct TabletopStageEditorView: View {
             slot: slot,
             count: zoneTotals[fixture.zone] ?? 1,
             layout: appModel.stageLayout
-        ).position
+        )
+    }
+
+    /// One-tap re-aim (#23): solve the `aimOffset` that points the selected fixture at the stage centre and
+    /// write it via `AppModel.setFixtureAim` (rig identity → validated + persisted; the live 1:1 stage
+    /// reflects it because `aimOffset` is in `syncRig`'s rebuild signature). The offset comes from the
+    /// Foundation-only `FixtureAimMath.offset` — the mathematical inverse of the renderer's resting-aim
+    /// rotation — using the fixture's zone-derived direction as the base and the stage centre as the target.
+    private func aimSelectedFixtureAtStageCenter() {
+        guard let id = appModel.selectedFixtureId,
+              let placement = selectedFixtureResolvedPlacement else { return }
+        let center = RigPlacement.stageCenterTarget(layout: appModel.stageLayout)
+        func vec(_ m: Vector3Meters) -> SIMD3<Float> { SIMD3<Float>(Float(m.x), Float(m.y), Float(m.z)) }
+        let base = vec(placement.aim) - vec(placement.position)
+        let desired = vec(center) - vec(placement.position)
+        let (pan, tilt) = FixtureAimMath.offset(base: base, desired: desired)
+        appModel.setFixtureAim(id: id, panDegrees: pan, tiltDegrees: tilt)
     }
 
     /// Moves the selected fixture one fixed step along X or Z via the shared `AppModel.moveFixture`
