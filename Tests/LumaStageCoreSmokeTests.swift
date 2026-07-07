@@ -40,6 +40,7 @@ struct LumaStageCoreSmokeTests {
         try tabletopEditingSwapsStagePlatformPreset()
         try tabletopEditingSwapsTrussPortalPreset()
         try stageEditingUndoStackRestoresLayoutAndLook()
+        try fixtureMirroringFlipsXAndPan()
         try movingTrussDoesNotSnapBackOntoItsOwnEndpoints()
         try trussNodeSnapMarksActiveConnectorNode()
         tabletopSurfaceSelectionPrefersNearestLargestTable()
@@ -3067,4 +3068,18 @@ struct LumaStageCoreSmokeTests {
         return value
     }
 
+    private static func fixtureMirroringFlipsXAndPan() throws {
+        var src = FixtureGroup(id: "src", name: "Source", role: .wash, zone: .stageRight, enabled: true, intensity: 1.0, color: FixtureColor(mode: .rgb, value: "#FFFFFF"))
+        src.manualPosition = FixturePosition(x: 2.0, y: 1.0, z: -3.0)
+        src.aimOffset = FixtureAimOffset(panDegrees: 45.0, tiltDegrees: -10.0)
+
+        let mirrored = RigPlacement.mirroredAcrossCenterline(src)
+
+        expect(mirrored.manualPosition?.x == -2.0, "Mirrored X should be negated")
+        expect(mirrored.manualPosition?.y == 1.0, "Mirrored Y should be preserved")
+        expect(mirrored.manualPosition?.z == -3.0, "Mirrored Z should be preserved")
+        expect(mirrored.aimOffset?.panDegrees == -45.0, "Mirrored pan should be negated")
+        expect(mirrored.aimOffset?.tiltDegrees == -10.0, "Mirrored tilt should be preserved")
+        expect(mirrored.zone == StageZone.stageRight, "Mirrored zone should be preserved")
+    }
 }

@@ -620,6 +620,48 @@ class AppModel {
         }
     }
 
+    /// 鏡射目前選取的燈具：以舞台中線 (x=0) 鏡像複製出一盞新燈（x 取負、pan 取負），寫回每個 cue。
+    func mirrorSelectedFixture() {
+        guard let sourceId = selectedFixtureId else { return }
+        var look = stageState.lightingLook
+        guard let largest = look.cues.map(\.fixtureGroups.count).max(),
+              largest < Self.maxRigFixtureCount else {
+            fail("燈具數量已達上限（\(Self.maxRigFixtureCount) 盞），無法再鏡射。")
+            return
+        }
+        let newId = "fixture_\(UUID().uuidString.prefix(6).lowercased())"
+        let newName = "燈具 \(largest + 1)"
+        var mirroredAny = false
+        for cueIndex in look.cues.indices {
+            guard let src = look.cues[cueIndex].fixtureGroups.first(where: { $0.id == sourceId }) else { continue }
+            var mirrored = RigPlacement.mirroredAcrossCenterline(src)
+            mirrored.id = newId
+            mirrored.name = newName
+            
+            // 如果來源燈具沒有 manualPosition，我們還是需要給定一個 manualPosition 來確保它確實被鏡射
+            // 若為 nil 表示它依賴 zone 預設位置。為了確保對稱，我們需要鎖死其絕對位置。
+            // 但問題中提到「新 manualPosition（x 取負）＋ aimOffset（pan 取負）」，如果原本是 zone 預設，怎麼辦？
+            // 原則上 tabletop editor 如果沒拖曳，可能不會有 manualPosition。若要求強對稱，我們可以強制給定。
+            // 不過 issue 寫「x 取負、pan 取負、其餘照抄」，如果原本是 nil 那就沿用 nil。
+            // 我們直接透過 mirroredAcrossCenterline 處理，這裡只需考慮夾回桁架的邏輯。
+            if RigPlacement.mountsOnTrussOnly(mirrored.renderModel), let pos = mirrored.manualPosition {
+                let clamped = RigPlacement.clampedToTruss(Vector3Meters(x: pos.x, y: pos.y, z: pos.z), layout: stageLayout)
+                mirrored.manualPosition = FixturePosition(x: clamped.x, y: clamped.y, z: clamped.z)
+            }
+            look.cues[cueIndex].fixtureGroups.append(mirrored)
+            mirroredAny = true
+        }
+        guard mirroredAny else { fail("找不到要鏡射的燈具。"); return }
+        do {
+            recordStageEditingUndoSnapshot()
+            try stageState.replaceLightingLook(look)
+            persistCurrentProjectState()
+            selectedFixtureId = newId
+        } catch {
+            fail(error.localizedDescription)
+        }
+    }
+
     /// Removes the selected fixture from EVERY cue, re-validates + persists, and clears the selection.
     /// Refuses to remove if doing so would leave any cue with no fixtures (a cue must stay lit).
     func removeSelectedFixture() {

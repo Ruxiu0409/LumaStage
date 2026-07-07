@@ -333,6 +333,19 @@ struct TabletopStageEditorView: View {
             .accessibilityHint(rigIsFull ? "燈具數量已達上限，無法再複製" : "複製目前選取的燈具；尚未選取燈具時無法使用")
             .accessibilityValue(selectedFixtureAccessibilityValue)
 
+            Button("鏡射所選燈具", systemImage: "flip.horizontal") {
+                appModel.mirrorSelectedFixture()
+            }
+            .labelStyle(.iconOnly)
+            .buttonStyle(.bordered)
+            .buttonBorderShape(.circle)
+            .lumaGazeTarget()
+            .disabled(appModel.selectedFixtureId == nil || rigIsFull)
+            .help(rigIsFull ? "燈具數量已達上限" : "以舞台中線為軸，鏡像複製選取的燈具")
+            .accessibilityLabel("鏡射所選燈具")
+            .accessibilityHint(rigIsFull ? "燈具數量已達上限，無法再鏡射" : "鏡像複製目前選取的燈具；尚未選取燈具時無法使用")
+            .accessibilityValue(selectedFixtureAccessibilityValue)
+
             // Turntable: spin the WHOLE model so the user can look at any side (distinct from "旋轉所選",
             // which rotates only the selected piece). 45° steps → 8 covers a full turn.
             Button("舞台左轉", systemImage: "arrow.counterclockwise.circle") {

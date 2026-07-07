@@ -2063,6 +2063,19 @@ extension RigPlacement {
         }
         return .floorStand(topY: max(0.3, position.y - standTopGapMeters))
     }
+
+    /// Mirrors a fixture across the stage centerline (x=0) for symmetrical rigs.
+    /// Flips the manual position X and the pan offset, preserving all other properties.
+    static func mirroredAcrossCenterline(_ fixture: FixtureGroup) -> FixtureGroup {
+        var copy = fixture
+        if let manual = copy.manualPosition {
+            copy.manualPosition = FixturePosition(x: -manual.x, y: manual.y, z: manual.z)
+        }
+        if let aim = copy.aimOffset {
+            copy.aimOffset = FixtureAimOffset(panDegrees: -aim.panDegrees, tiltDegrees: aim.tiltDegrees)
+        }
+        return copy
+    }
 }
 
 extension LightingLook {
