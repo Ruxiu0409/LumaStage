@@ -66,7 +66,7 @@ struct TabletopStageEditorView: View {
             placement.addChild(turntable)
             content.add(placement)
             TabletopStageScene.sync(turntable, layout: appModel.stageLayout, selectedId: appModel.selectedStageObjectId)
-            TabletopStageScene.syncFixtures(turntable, look: appModel.lightingLook, layout: appModel.stageLayout, selectedFixtureId: appModel.selectedFixtureId)
+            TabletopStageScene.syncFixtures(turntable, look: appModel.lightingLook, layout: appModel.stageLayout, selectedFixtureId: appModel.selectedFixtureId, dragActive: dragGrabOffset != nil)
             TabletopStageScene.seatAssemblyOnSurface(in: turntable)
 
             if let controls = attachments.entity(for: "controls") {
@@ -77,7 +77,7 @@ struct TabletopStageEditorView: View {
             }
         } update: { _, _ in
             TabletopStageScene.sync(turntable, layout: appModel.stageLayout, selectedId: appModel.selectedStageObjectId)
-            TabletopStageScene.syncFixtures(turntable, look: appModel.lightingLook, layout: appModel.stageLayout, selectedFixtureId: appModel.selectedFixtureId)
+            TabletopStageScene.syncFixtures(turntable, look: appModel.lightingLook, layout: appModel.stageLayout, selectedFixtureId: appModel.selectedFixtureId, dragActive: dragGrabOffset != nil)
             TabletopStageScene.seatAssemblyOnSurface(in: turntable)
         } attachments: {
             Attachment(id: "controls") {
@@ -542,7 +542,13 @@ struct TabletopStageEditorView: View {
     private func nudgeSelectedFixture(axis: TabletopNudge.Axis, sign: Double) {
         guard let id = appModel.selectedFixtureId, let position = selectedFixtureResolvedPosition else { return }
         let moved = TabletopNudge.nudged(x: position.x, z: position.z, axis: axis, sign: sign)
-        appModel.moveFixture(id: id, toX: moved.x, y: position.y, z: moved.z)
+        // E-1: resolve Y from the nudged XZ (the SAME `resolvedDragPosition` rule the drag uses), never
+        // preserve the old Y — otherwise nudging a floor-stand light back inside the truss footprint keeps
+        // its low Y and `RigPlacement.support` classifies it `.hangFromTruss` with the truss far above and no
+        // stand, so the light floats. Re-resolving snaps Y up to hanging height (or down to floor) at the
+        // boundary, matching `moveDrag`'s commit so no floating position is ever produced.
+        let resolved = RigPlacement.resolvedDragPosition(x: moved.x, z: moved.z, layout: appModel.stageLayout)
+        appModel.moveFixture(id: id, toX: resolved.x, y: resolved.y, z: resolved.z)
     }
 
     /// One compact ±X/±Z nudge key for the control bar (#17).
@@ -866,9 +872,17 @@ enum TabletopStageScene {
     /// offset apply identically). Reconciles by fixture id: removes proxies whose fixture is gone, adds new
     /// ones, and repositions surviving ones to their resolved placement (so add/remove/move all reflect).
     /// Cheap to call every `update:` pass.
-    static func syncFixtures(_ root: Entity, look: LightingLook, layout: StageLayout, selectedFixtureId: String?) {
+    static func syncFixtures(_ root: Entity, look: LightingLook, layout: StageLayout, selectedFixtureId: String?, dragActive: Bool) {
         guard let assembly = root.children.first(where: { $0.name.hasPrefix("tabletop_layout_") }) else {
             return
+        }
+
+        // E-5: the #20 hang-zone volume is shown only by an in-flight fixture drag and hidden in the drag's
+        // `.onEnded`; a CANCELLED gesture never fires `.onEnded`, so the volume can linger. Hide it here
+        // whenever no drag is active — cheap (only toggles `isEnabled`) and it can't fight the drag's own
+        // show call, which happens while `dragActive` is true.
+        if !dragActive {
+            setHangZoneVisible(false, in: root, layout: layout, animated: false)
         }
 
         // Fixtures carry rig identity (same set/positions across cues), so any cue gives the same answer;
@@ -902,25 +916,42 @@ enum TabletopStageScene {
             )
             let scenePos = scenePoint(placement.position)
 
+            // Aim the mini model exactly like `ImmersiveView.addRigFixture`: the zone-derived direction
+            // rotated by the fixture's authored `aimOffset` (SPEC 13). Computed EVERY pass (not just at
+            // build) so E-2 can detect an aim change — #23's "瞄準舞台中心", voice `rotateFixture`, and a
+            // drag-changed zone all move it, and the mini model + lens orientation are baked in
+            // `makeFixtureProxy(aim:)` and never mutated in place afterwards.
+            let baseDir = scenePoint(placement.aim) - scenePoint(placement.position)
+            let baseUnit = simd_length(baseDir) > 0.0001 ? simd_normalize(baseDir) : SIMD3<Float>(0, 0, -1)
+            let offset = fixture.aimOffset ?? .zero
+            let aimDir = LightEffectSystem.aim(base: baseUnit,
+                                               panDegrees: offset.panDegrees,
+                                               tiltDegrees: offset.tiltDegrees)
+
             let name = fixtureEntityName(fixture.id)
+            // E-2: mirror `ImmersiveView.syncRig`'s per-fixture signature rebuild. A hidden
+            // `fixture_aim_<sig>` marker child stamps the aim direction + model the proxy was last built at;
+            // reuse the proxy while that signature is unchanged, otherwise rebuild JUST this one proxy so its
+            // baked orientation re-aims. (Position / lens colour / label / stand are re-applied below either
+            // way; selection highlight is re-set right after.) Only rebuilds on an actual aim/model change,
+            // so an unchanged pass stays a cheap no-op — no per-frame churn.
+            let aimSig = fixtureAimSignature(aim: aimDir, model: fixture.renderModel)
+            let existing = assembly.findEntity(named: name)
             let container: Entity
-            if let existing = assembly.findEntity(named: name) {
+            if let existing, existing.findEntity(named: "fixture_aim_\(aimSig)") != nil {
                 container = existing
             } else {
-                // Aim the mini model exactly like `ImmersiveView.addRigFixture`: the zone-derived direction
-                // rotated by the fixture's authored `aimOffset` (SPEC 13). Built once with the proxy — the
-                // model is only rebuilt when the fixture id is new (regeneration), matching the old cone.
-                let baseDir = scenePoint(placement.aim) - scenePoint(placement.position)
-                let baseUnit = simd_length(baseDir) > 0.0001 ? simd_normalize(baseDir) : SIMD3<Float>(0, 0, -1)
-                let offset = fixture.aimOffset ?? .zero
-                let aimDir = LightEffectSystem.aim(base: baseUnit,
-                                                   panDegrees: offset.panDegrees,
-                                                   tiltDegrees: offset.tiltDegrees)
-                container = makeFixtureProxy(named: name,
+                existing?.removeFromParent()
+                let built = makeFixtureProxy(named: name,
                                              model: fixture.renderModel,
                                              hex: fixture.color.value,
                                              aim: aimDir)
-                assembly.addChild(container)
+                let marker = Entity()
+                marker.name = "fixture_aim_\(aimSig)"
+                marker.isEnabled = false // signature stamp only — carries no geometry/collision
+                built.addChild(marker)
+                assembly.addChild(built)
+                container = built
             }
             container.position = scenePos
             container.findEntity(named: "fixture_selection_highlight")?.isEnabled = (fixture.id == selectedFixtureId)
@@ -1278,6 +1309,14 @@ enum TabletopStageScene {
         var m = UnlitMaterial(color: UIColor(red: rgb.red, green: rgb.green, blue: rgb.blue, alpha: 1))
         m.blending = .opaque
         return m
+    }
+
+    /// E-2: a stable signature of a fixture proxy's baked orientation — its aim direction rounded to 0.01
+    /// plus the model type — used as a hidden marker-child name so `syncFixtures` rebuilds the proxy only
+    /// when the aim (or model) actually changes, analogous to `ImmersiveView.syncRig`'s rebuild signature.
+    private static func fixtureAimSignature(aim: SIMD3<Float>, model: LightingFixtureVisualModel) -> String {
+        func r(_ v: Float) -> Int { Int((v * 100).rounded()) }
+        return "\(model.rawValue)_\(r(aim.x))_\(r(aim.y))_\(r(aim.z))"
     }
 }
 

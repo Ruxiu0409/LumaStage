@@ -92,6 +92,7 @@ struct LumaStageCoreSmokeTests {
         try fixtureManualPositionOverridesZonePlacement()
         fixtureSupportPolicyClassifiesTrussVsStand()
         dragResolvedPositionSnapsHangVsFloorAndIsIdempotent()
+        nudgingFixtureAcrossTrussBoundaryReSnapsHeight()
         tabletopLabelFormatsNumberAndModel()
         tabletopNudgeStepsAndFormatsReadout()
         duplicatedFixtureCopiesStateAndOffsetsManualPosition()
@@ -1719,6 +1720,49 @@ struct LumaStageCoreSmokeTests {
                "落地結果餵回應穩定")
         expect(RigPlacement.support(forPosition: floorAgain, layout: layout).isFloorStand,
                "落地結果餵回仍為落地")
+    }
+
+    // E-1：桌面「方向微調鍵」跨越 truss footprint 邊界時，必須用微調後的 XZ 重新解析 Y（同拖曳規則），
+    // 不可沿用舊 Y——否則把 footprint 外落地燈的低 Y 帶進 footprint 內，`support` 會判成吊掛卻停在遠低於
+    // 桁架的高度、又無燈架 → 燈浮空（違反「no fixture ever floats」）。修法：nudge 後走 `resolvedDragPosition`。
+    private static func nudgingFixtureAcrossTrussBoundaryReSnapsHeight() {
+        let layout = StageLayout.defaultStudentOutdoor()
+        guard let f = RigPlacement.trussFootprint(in: layout) else {
+            fatalError("預設舞台應有 truss footprint")
+        }
+
+        // 起點：footprint 外、落地解析（低 Y）。footprint 中心 X，Z 落在 footprint±margin 之外。
+        let centerX = (f.minX + f.maxX) / 2
+        let startZ = f.maxZ + RigPlacement.trussHangMarginMeters + 0.5
+        let start = RigPlacement.resolvedDragPosition(x: centerX, z: startZ, layout: layout)
+        expect(RigPlacement.support(forPosition: start, layout: layout).isFloorStand,
+               "起點在 footprint 外應落地")
+        expect(start.y < f.topY - 1.0, "落地高度應遠低於桁架頂（否則測不出浮空）")
+
+        // 沿 −Z 以 #17 nudge 步距把 XZ 推進 footprint 內。
+        var (x, z) = (start.x, start.z)
+        var steps = 0
+        while !RigPlacement.isWithinTrussFootprint(x: x, z: z, layout: layout) && steps < 200 {
+            (x, z) = TabletopNudge.nudged(x: x, z: z, axis: .z, sign: -1)
+            steps += 1
+        }
+        expect(RigPlacement.isWithinTrussFootprint(x: x, z: z, layout: layout),
+               "多次微調後 XZ 應進入 truss footprint")
+
+        // BUG 重現：保留起點低 Y → 進 footprint 後 support 判成吊掛，卻停在遠低於桁架的高度 → 浮空。
+        let preservedY = Vector3Meters(x: x, y: start.y, z: z)
+        expect(RigPlacement.support(forPosition: preservedY, layout: layout) == .hangFromTruss
+               && preservedY.y < f.topY - 1.0,
+               "保留舊 Y：被判吊掛卻遠低於桁架 → 浮空（重現 E-1）")
+
+        // 修法：微調後 XZ 走 `resolvedDragPosition` 重新決定 Y → 吸附到桁架吊掛高度、吊掛、且不浮空。
+        let resolved = RigPlacement.resolvedDragPosition(x: x, z: z, layout: layout)
+        expect(RigPlacement.support(forPosition: resolved, layout: layout) == .hangFromTruss,
+               "微調進 footprint 後應吸附成吊掛")
+        expect(abs(resolved.y - (f.topY - RigPlacement.standTopGapMeters)) < 0.0001,
+               "吊掛高度應為桁架頂下方 standTopGap，而非沿用的低 Y")
+        expect(resolved.y > start.y,
+               "重新解析後 Y 抬升到桁架高度，證明跨界會重新吸附（不會產生浮空位置）")
     }
 
     private static func surroundingsLightPolicyGatesOpaqueVenue() throws {

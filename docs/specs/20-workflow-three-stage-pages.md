@@ -266,7 +266,7 @@ swiftc \
   LumaStage/LightingModels.swift LumaStage/LightingAIService.swift LumaStage/StageBuilderModels.swift \
   LumaStage/LightingFixtureCatalog.swift LumaStage/LumaSyncProtocol.swift LumaStage/LumaSyncTransport.swift \
   LumaStage/LumaStageDesign.swift LumaStage/StageVoiceCommand.swift \
-  LumaStage/LightEffect.swift LumaStage/MusicBeatClock.swift LumaStage/StageLightAccessibility.swift \
+  LumaStage/LightEffect.swift LumaStage/MusicBeatClock.swift \
   LumaStage/FixtureGroups.swift \
   LumaStage/OpenAILightingService.swift LumaStage/OpenAIKeychain.swift \
   LumaStage/SongAnalysis.swift LumaStage/ShowPlan.swift LumaStage/RigConstraint.swift LumaStage/MusicShowBuilder.swift \
