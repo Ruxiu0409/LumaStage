@@ -223,7 +223,13 @@ struct VisionAIComposerBox: View {
     }
 
     private var statusRow: some View {
-        HStack(spacing: 10) {
+        let statusChips = ComposerStatusChipPolicy.make(
+            projectName: appModel.selectedProject?.name,
+            cueName: appModel.selectedCue?.localizedDisplayName ?? "開場",
+            musicStatusTitle: appModel.isMusicShowActive ? musicStatusChipTitle : nil
+        )
+
+        return HStack(spacing: 10) {
             HStack(spacing: 7) {
                 Image(systemName: stateIcon)
                 Text(stateLabel)
@@ -234,14 +240,13 @@ struct VisionAIComposerBox: View {
             .padding(.vertical, 7)
             .lumaNativeGlass(tint: stateTint.opacity(0.18), radius: 14)
 
-            if let projectName = appModel.selectedProject?.name {
+            if let projectName = statusChips.projectName {
                 LumaStatusChip(title: projectName, tint: LumaStageDesign.coolBlue)
             }
-            LumaStatusChip(title: appModel.selectedCue?.localizedDisplayName ?? "開場", tint: LumaStageDesign.warmAmber)
-            LumaStatusChip(title: "標準夜景", tint: LumaStageDesign.softGreen)
+            LumaStatusChip(title: statusChips.cueName, tint: LumaStageDesign.warmAmber)
 
-            if appModel.isMusicShowActive {
-                LumaStatusChip(title: musicStatusChipTitle, tint: LumaStageDesign.coolBlue)
+            if let musicStatusTitle = statusChips.musicStatusTitle {
+                LumaStatusChip(title: musicStatusTitle, tint: LumaStageDesign.coolBlue)
                     .accessibilityLabel("音樂演出狀態")
                     .accessibilityValue(musicAccessibilityValue)
             }

@@ -839,6 +839,61 @@ struct LightingExplanation: Codable, Equatable {
     }
 }
 
+struct ComposerStatusChipContent: Equatable {
+    var projectName: String?
+    var cueName: String
+    var musicStatusTitle: String?
+
+    var titles: [String] {
+        var result: [String] = []
+        if let projectName {
+            result.append(projectName)
+        }
+        result.append(cueName)
+        if let musicStatusTitle {
+            result.append(musicStatusTitle)
+        }
+        return result
+    }
+}
+
+enum ComposerStatusChipPolicy {
+    static func make(
+        projectName: String?,
+        cueName: String,
+        musicStatusTitle: String?
+    ) -> ComposerStatusChipContent {
+        ComposerStatusChipContent(
+            projectName: sanitizedOptionalTitle(projectName),
+            cueName: sanitizedTitle(cueName, fallback: "開場"),
+            musicStatusTitle: sanitizedOptionalTitle(musicStatusTitle)
+        )
+    }
+
+    static func titles(
+        projectName: String?,
+        cueName: String,
+        musicStatusTitle: String?
+    ) -> [String] {
+        make(
+            projectName: projectName,
+            cueName: cueName,
+            musicStatusTitle: musicStatusTitle
+        ).titles
+    }
+
+    private static func sanitizedOptionalTitle(_ title: String?) -> String? {
+        guard let title else { return nil }
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func sanitizedTitle(_ title: String, fallback: String) -> String {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? fallback : trimmed
+    }
+}
+
 struct LightingLook: Codable, Equatable {
     var schemaVersion: String
     var intent: LightingIntent

@@ -22,6 +22,7 @@ struct LumaStageCoreSmokeTests {
         stageBuilderToolbarHidesLayoutSummaryChips()
         stageBuilderViewportUsesProjectedGroundPlane()
         nativeGlassDesignUsesSystemRadiusHierarchy()
+        composerStatusChipsOmitStaticAmbientPreset()
         stageBuilderRendersBackTrussBehindStageBase()
         visionStageUsesIPadStageLayoutGeometry()
         stageBuilderSelectionPolicyClearsWhenViewportTapMissesObject()
@@ -413,6 +414,26 @@ struct LumaStageCoreSmokeTests {
         // glass-on-glass reads cleanly instead of using one flat custom radius everywhere.
         expect(LumaStageDesign.panelRadius > LumaStageDesign.surfaceRadius, "Floating glass panels should use a larger system-style radius than nested surfaces")
         expect(LumaStageDesign.surfaceRadius > LumaStageDesign.cornerRadius, "Nested glass surfaces should use a softer radius than small repeated cards")
+    }
+
+    private static func composerStatusChipsOmitStaticAmbientPreset() {
+        let activeMusicTitles = ComposerStatusChipPolicy.titles(
+            projectName: "畢業舞台",
+            cueName: "重點",
+            musicStatusTitle: "播放中 · BPM 128"
+        )
+        expect(
+            activeMusicTitles == ["畢業舞台", "重點", "播放中 · BPM 128"],
+            "Composer status chips should keep project, cue, and live music status only"
+        )
+        expect(!activeMusicTitles.contains("標準夜景"), "Composer status chips should not show the static ambient preset")
+
+        let inactiveMusicTitles = ComposerStatusChipPolicy.titles(
+            projectName: nil,
+            cueName: "開場",
+            musicStatusTitle: nil
+        )
+        expect(inactiveMusicTitles == ["開場"], "Composer status chips should omit absent project/music chips")
     }
 
     private static func stageBuilderRendersBackTrussBehindStageBase() {
@@ -3023,4 +3044,3 @@ struct LumaStageCoreSmokeTests {
     }
 
 }
-
