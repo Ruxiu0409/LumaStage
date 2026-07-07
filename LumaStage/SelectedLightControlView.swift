@@ -88,7 +88,6 @@ struct SelectedLightControlView: View {
             .buttonStyle(.bordered)
             .buttonBorderShape(.circle)
             .lumaGazeTarget()
-            .accessibilityLabel("關閉單燈控制")
         }
     }
 
@@ -110,8 +109,6 @@ struct SelectedLightControlView: View {
         .buttonBorderShape(.capsule)
         .lumaGazeTarget()
         .tint(isOff ? LumaStageDesign.warmAmber : LumaStageDesign.softGreen)
-        .accessibilityLabel(isOff ? "開啟第 \(number) 盞燈" : "關閉第 \(number) 盞燈")
-        .accessibilityAddTraits(isOff ? [] : [.isSelected])
     }
 
     /// The dimmer. A continuous `Slider` is the primary control (fine 0–100% trim); the five fade-bumps
@@ -138,8 +135,6 @@ struct SelectedLightControlView: View {
                     in: 0...1
                 )
                 .tint(LumaStageDesign.coolBlue)
-                .accessibilityLabel("亮度")
-                .accessibilityValue(Text(percentText))
                 Text(percentText)
                     .font(.callout.weight(.semibold).monospacedDigit())
                     .foregroundStyle(LumaStageDesign.textSecondary)
@@ -178,8 +173,6 @@ struct SelectedLightControlView: View {
         // evenly, so pinning min*width* too (as `lumaGazeTarget`'s 48 did) would push 5×60 past the card.
         .frame(minHeight: LumaStageDesign.minGazeTarget)
         .tint(isCurrent ? LumaStageDesign.coolBlue : nil)
-        .accessibilityLabel("亮度 \(label)")
-        .accessibilityAddTraits(isCurrent ? [.isSelected] : [])
     }
 
     /// The colour swatches. The active manual colour is ringed + checkmarked (non-colour marks so the
@@ -237,8 +230,6 @@ struct SelectedLightControlView: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(swatch.chinese)
-        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
     }
 
     /// Drops the manual override so the light follows the AI cue again.
@@ -253,8 +244,6 @@ struct SelectedLightControlView: View {
         .lumaGazeTarget()
         // Dimmed when there's nothing to clear, so the affordance reflects whether an override exists.
         .disabled(appModel.selectedLightOverride == nil)
-        .accessibilityLabel("第 \(number) 盞燈跟隨場景")
-        .accessibilityHint("清除此燈的手動調整，回到 AI 生成的燈光")
     }
 
     /// The index of the preset whose value is closest to `intensity` — drives the highlighted fade-bump.

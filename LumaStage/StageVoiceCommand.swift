@@ -1,12 +1,9 @@
 import Foundation
 
-/// A spoken/typed command that drives the **show** — navigating the cue stack, growing it, or asking the
-/// app to read its explanation aloud — rather than editing a single light (`LightCommand`) or running a
-/// full AI generation. This is the layer that makes the whole design loop runnable hands-free, which is
-/// the basis of the voice-only / accessibility mode: generate by voice, step cues by voice ("go"), and
-/// have the result spoken back.
+/// A spoken/typed command that drives the **show** — navigating the cue stack, growing it, or controlling
+/// playback — rather than editing a single light (`LightCommand`) or running a full AI generation.
 ///
-/// Like `LightCommand`, it's a pure parser: `parse` returns a command for navigation/narration phrases
+/// Like `LightCommand`, it's a pure parser: `parse` returns a command for navigation/playback phrases
 /// and `nil` for anything else (which falls through to `LightCommand`, then to generative AI). Keywords
 /// are matched in BOTH English and Traditional Chinese because `SpeechTranscriber` feeds mixed input.
 /// Kept Foundation-only so the smoke tests pin the parsing without speech or a simulator.
@@ -17,8 +14,6 @@ enum StageVoiceCommand: Equatable {
     case previousCue
     /// Append a new cue to the stack (duplicates the current cue).
     case addCue
-    /// Speak the current AI explanation / understood command aloud.
-    case readExplanation
     /// Start auto-playback of the show — the cue list runs itself, following cue to cue (SPEC 16). When a
     /// music show is loaded, `AppModel` routes this to music playback instead; otherwise to cue-list playback.
     case playShow
@@ -33,8 +28,6 @@ enum StageVoiceCommand: Equatable {
     /// embeds the phrase. So "add a cooler wash to the next scene" stays a generation prompt instead of
     /// being hijacked into a cue advance (the substring-match bug this replaced).
     private static let englishCommands: [(command: StageVoiceCommand, sets: [Set<String>])] = [
-        (.readExplanation, [["read", "it"], ["read", "aloud"], ["read", "it", "aloud"], ["read", "explanation"],
-                            ["read", "it", "out", "loud"], ["speak", "it"], ["say", "it"], ["explain", "it"]].map(Set.init)),
         (.addCue, [["add", "cue"], ["new", "cue"], ["another", "cue"], ["duplicate", "cue"],
                    ["add", "scene"], ["new", "scene"]].map(Set.init)),
         (.previousCue, [["previous", "cue"], ["prev", "cue"], ["last", "cue"], ["previous", "scene"],
@@ -52,7 +45,6 @@ enum StageVoiceCommand: Equatable {
     /// small slack of the matched needle. So "把燈光調成上一個演出的暖色" stays a generation prompt rather than
     /// stepping to the previous cue (the ASCII-only token guard can't protect CJK).
     private static let chineseCommands: [(command: StageVoiceCommand, needles: [String])] = [
-        (.readExplanation, ["念出說明", "說明一下", "解釋一下", "念出", "唸出", "朗讀", "讀出"]),
         (.addCue, ["新增場景", "加一個場景", "加個場景", "複製場景", "增加場景", "多一個場景"]),
         (.previousCue, ["上一個場景", "前一個場景", "回上一個", "上一個", "上一幕", "倒回"]),
         (.nextCue, ["下一個場景", "切下一個", "進下一個", "下一個", "下一幕"]),

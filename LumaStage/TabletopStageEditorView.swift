@@ -238,10 +238,7 @@ struct TabletopStageEditorView: View {
 
     private var controlBar: some View {
         HStack(spacing: 14) {
-            // A non-visual readout of the current selection. On screen the selected piece is shown only
-            // by the blue 3D highlight plate under it, so VoiceOver / low-vision users get no signal of
-            // what (if anything) is selected — and the "旋轉所選"/"刪除所選" buttons act on it. This line
-            // surfaces it as text and is grouped into one spoken element.
+            // Keep a visible readout of the current selection; the 3D highlight alone is easy to miss.
             selectionStatus
 
             Picker("舞台尺寸", selection: stageSizeBinding) {
@@ -251,7 +248,6 @@ struct TabletopStageEditorView: View {
             }
             .pickerStyle(.segmented)
             .frame(width: 210)
-            .accessibilityLabel("舞台尺寸")
 
             Picker("桁架", selection: portalBinding) {
                 Text("4×3").tag(StagePortalPreset.portal4x3)
@@ -260,7 +256,6 @@ struct TabletopStageEditorView: View {
             }
             .pickerStyle(.segmented)
             .frame(width: 170)
-            .accessibilityLabel("桁架門架尺寸")
 
             Divider().frame(height: 26)
 
@@ -273,7 +268,6 @@ struct TabletopStageEditorView: View {
             .buttonStyle(.bordered)
             .lumaGazeTarget()
             .help("加入一段桁架，拖到既有節點附近會自動對齊接上")
-            .accessibilityHint("加入一段桁架，拖到既有節點附近會自動對齊接上")
 
             Menu {
                 ForEach(Self.addableFixtureModels, id: \.self) { model in
@@ -304,8 +298,6 @@ struct TabletopStageEditorView: View {
             .lumaGazeTarget()
             .disabled(rigIsFull)
             .help(rigIsFull ? "燈具數量已達上限" : "加入一盞燈具到舞台前緣，可拖移到任意位置")
-            .accessibilityLabel("新增燈具")
-            .accessibilityHint(rigIsFull ? "燈具數量已達上限，無法再新增" : "加入一盞燈具到舞台前緣，可拖移到任意位置")
 
             Button("刪除所選燈具", systemImage: "lightbulb.slash") {
                 appModel.removeSelectedFixture()
@@ -316,9 +308,6 @@ struct TabletopStageEditorView: View {
             .lumaGazeTarget()
             .disabled(appModel.selectedFixtureId == nil)
             .help("刪除選取的燈具")
-            .accessibilityLabel("刪除所選燈具")
-            .accessibilityHint("刪除目前選取的燈具；尚未選取燈具時無法使用")
-            .accessibilityValue(selectedFixtureAccessibilityValue)
 
             Button("複製所選燈具", systemImage: "plus.square.on.square") {
                 appModel.duplicateSelectedFixture()
@@ -329,9 +318,6 @@ struct TabletopStageEditorView: View {
             .lumaGazeTarget()
             .disabled(appModel.selectedFixtureId == nil || rigIsFull)
             .help(rigIsFull ? "燈具數量已達上限" : "複製選取的燈具")
-            .accessibilityLabel("複製所選燈具")
-            .accessibilityHint(rigIsFull ? "燈具數量已達上限，無法再複製" : "複製目前選取的燈具；尚未選取燈具時無法使用")
-            .accessibilityValue(selectedFixtureAccessibilityValue)
 
             Button("鏡射所選燈具", systemImage: "flip.horizontal") {
                 appModel.mirrorSelectedFixture()
@@ -342,9 +328,6 @@ struct TabletopStageEditorView: View {
             .lumaGazeTarget()
             .disabled(appModel.selectedFixtureId == nil || rigIsFull)
             .help(rigIsFull ? "燈具數量已達上限" : "以舞台中線為軸，鏡像複製選取的燈具")
-            .accessibilityLabel("鏡射所選燈具")
-            .accessibilityHint(rigIsFull ? "燈具數量已達上限，無法再鏡射" : "鏡像複製目前選取的燈具；尚未選取燈具時無法使用")
-            .accessibilityValue(selectedFixtureAccessibilityValue)
 
             // Turntable: spin the WHOLE model so the user can look at any side (distinct from "旋轉所選",
             // which rotates only the selected piece). 45° steps → 8 covers a full turn.
@@ -356,7 +339,6 @@ struct TabletopStageEditorView: View {
             .buttonBorderShape(.circle)
             .lumaGazeTarget()
             .help("將整個舞台模型向左轉 45°，方便檢視其他角度")
-            .accessibilityHint("旋轉整個舞台視角，不會移動任何物件")
 
             Button("舞台右轉", systemImage: "arrow.clockwise.circle") {
                 rotateStage(by: 45)
@@ -366,7 +348,6 @@ struct TabletopStageEditorView: View {
             .buttonBorderShape(.circle)
             .lumaGazeTarget()
             .help("將整個舞台模型向右轉 45°，方便檢視其他角度")
-            .accessibilityHint("旋轉整個舞台視角，不會移動任何物件")
 
             Divider().frame(height: 26)
 
@@ -379,8 +360,6 @@ struct TabletopStageEditorView: View {
             .lumaGazeTarget()
             .disabled(appModel.selectedStageObjectId == nil)
             .help("將選取的物件旋轉 90°")
-            .accessibilityHint("只旋轉目前選取的物件 90°；尚未選取物件時無法使用")
-            .accessibilityValue(selectionAccessibilityValue)
 
             Button("刪除所選", systemImage: "trash") {
                 appModel.removeSelectedStageObject()
@@ -391,8 +370,6 @@ struct TabletopStageEditorView: View {
             .lumaGazeTarget()
             .disabled(appModel.selectedStageObjectId == nil)
             .help("刪除選取的物件")
-            .accessibilityHint("刪除目前選取的物件；尚未選取物件時無法使用")
-            .accessibilityValue(selectionAccessibilityValue)
 
             Button("撤銷上一個編輯", systemImage: "arrow.uturn.backward") {
                 appModel.undoStageEdit()
@@ -403,7 +380,6 @@ struct TabletopStageEditorView: View {
             .lumaGazeTarget()
             .disabled(!appModel.canUndoStageEdit)
             .help("撤銷上一個舞台或燈具編輯")
-            .accessibilityHint("還原上一個舞台或燈具編輯；沒有可撤銷項目時無法使用")
 
             Button("重置舞台", systemImage: "arrow.counterclockwise") {
                 appModel.resetStageLayoutToDefault()
@@ -413,7 +389,6 @@ struct TabletopStageEditorView: View {
             .buttonBorderShape(.circle)
             .lumaGazeTarget()
             .help("還原成預設的舞台佈局與燈具")
-            .accessibilityHint("將整個舞台佈局與燈具還原成預設值")
 
             Button("完成", systemImage: "checkmark") {
                 finishEditing()
@@ -423,16 +398,13 @@ struct TabletopStageEditorView: View {
             .buttonBorderShape(.circle)
             .lumaGazeTarget()
             .help("儲存佈局並返回 1:1 沉浸式舞台")
-            .accessibilityHint("儲存佈局並返回沉浸式舞台")
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
         .glassBackgroundEffect()
     }
 
-    /// A compact, always-visible status pill telling the user which piece is selected — the only
-    /// non-color, VoiceOver-legible signal of selection (on screen it's just the blue 3D highlight).
-    /// Combined into one spoken element so it reads as a single phrase.
+    /// A compact, always-visible status pill telling the user which piece is selected.
     private var selectionStatus: some View {
         // 燈具與物件選取互斥：優先顯示選取的燈具（"N · 型號"），否則回退物件（桁架／台座），皆無 → 未選取。
         let statusText: String
@@ -453,8 +425,6 @@ struct TabletopStageEditorView: View {
                 .foregroundStyle(LumaStageDesign.textPrimary)
                 .lineLimit(1)
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(statusText)
     }
 
     /// The selected rig fixture's addressable "N · 型號" label (from the current cue, else the first), or
@@ -486,21 +456,9 @@ struct TabletopStageEditorView: View {
         }
     }
 
-    /// Shared `.accessibilityValue` for the selection-dependent buttons (旋轉所選 / 刪除所選) so their
-    /// current target is spoken even though it's only shown by the 3D highlight.
-    private var selectionAccessibilityValue: String {
-        selectedObjectTypeName.map { "已選取 \($0)" } ?? "尚未選取物件"
-    }
-
     /// True when the rig is already at `AppModel.maxRigFixtureCount`, so the add-light control is disabled.
     private var rigIsFull: Bool {
         (appModel.lightingLook.cues.map(\.fixtureGroups.count).max() ?? 0) >= AppModel.maxRigFixtureCount
-    }
-
-    /// `.accessibilityValue` for the 刪除所選燈具 / 複製所選燈具 buttons — names the selected fixture (otherwise
-    /// only the 3D highlight signals it).
-    private var selectedFixtureAccessibilityValue: String {
-        selectedFixtureLabel.map { "已選取 \($0)" } ?? "尚未選取燈具"
     }
 
     /// A small menu of fixture models the user can drop onto the tabletop rig. A representative spread of

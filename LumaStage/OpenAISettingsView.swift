@@ -38,7 +38,6 @@ struct OpenAISettingsView: View {
                         dismiss()
                     }
                     .lumaGazeTarget()
-                    .accessibilityHint("關閉 OpenAI 設定")
                 }
             }
         }
@@ -58,15 +57,11 @@ struct OpenAISettingsView: View {
             HStack(spacing: 8) {
                 Image(systemName: hasStoredKey ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
                     .foregroundStyle(hasStoredKey ? LumaStageDesign.softGreen : LumaStageDesign.warmAmber)
-                    .accessibilityHidden(true)
 
                 Text(hasStoredKey ? "已設定 API 金鑰" : "尚未設定 API 金鑰")
                     .font(.callout.weight(.medium))
                     .foregroundStyle(LumaStageDesign.textPrimary)
             }
-            // Read the status as a single VoiceOver element.
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(hasStoredKey ? "狀態：已設定 OpenAI API 金鑰" : "狀態：尚未設定 OpenAI API 金鑰")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(18)
@@ -88,8 +83,6 @@ struct OpenAISettingsView: View {
                 .frame(minHeight: LumaStageDesign.minGazeTarget)
                 .padding(.horizontal, 14)
                 .lumaNativeGlass(radius: LumaStageDesign.cornerRadius, fallbackOpacity: 0.3)
-                .accessibilityLabel("OpenAI API 金鑰輸入框")
-                .accessibilityHint("輸入後點儲存金鑰按鈕以存入本機 Keychain")
 
             HStack(spacing: 12) {
                 Button("清除金鑰", systemImage: "trash") {
@@ -100,8 +93,6 @@ struct OpenAISettingsView: View {
                 .lumaGazeTarget()
                 .tint(LumaStageDesign.magenta)
                 .disabled(!hasStoredKey)
-                .accessibilityLabel("清除已儲存的 OpenAI API 金鑰")
-                .accessibilityHint("從本機 Keychain 移除金鑰")
 
                 Spacer()
 
@@ -113,8 +104,6 @@ struct OpenAISettingsView: View {
                 .lumaGazeTarget()
                 .tint(LumaStageDesign.coolBlue)
                 .disabled(draftKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                .accessibilityLabel("儲存 OpenAI API 金鑰到本機 Keychain")
-                .accessibilityHint("存入後會更新生成可用性狀態")
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -127,7 +116,6 @@ struct OpenAISettingsView: View {
             Image(systemName: "lock.shield")
                 .font(.callout.weight(.semibold))
                 .foregroundStyle(LumaStageDesign.coolBlue)
-                .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 6) {
                 Text("金鑰只存於本機 Keychain；demo 直連 OpenAI，正式版應改走自家 proxy。")
@@ -144,7 +132,6 @@ struct OpenAISettingsView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
         .lumaNativeGlass(radius: LumaStageDesign.cornerRadius, fallbackOpacity: 0.28)
-        .accessibilityElement(children: .combine)
     }
 
     // MARK: - Actions

@@ -45,9 +45,6 @@ struct PanelChatView: View {
                         .foregroundStyle(.red)
                         .id("error")
                         .listRowSeparator(.hidden)
-                        .accessibilityElement(children: .ignore)
-                        .accessibilityLabel("錯誤")
-                        .accessibilityValue(error)
                 }
             }
             .listStyle(.plain)
@@ -94,12 +91,6 @@ struct PanelChatView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 6)
-        // One element ("狀態：解讀中…"); the phase changes rapidly during generation, so
-        // .updatesFrequently lets VoiceOver batch updates instead of interrupting itself.
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("狀態")
-        .accessibilityValue(phaseText ?? "")
-        .accessibilityAddTraits(.updatesFrequently)
     }
 
     private var inputBar: some View {
@@ -108,15 +99,12 @@ struct PanelChatView: View {
                 .textFieldStyle(.roundedBorder)
                 .lineLimit(1...4)
                 .onSubmit(send)
-                .accessibilityLabel("燈光效果提示")
             Button(action: send) {
                 Image(systemName: "arrow.up.circle.fill")
                     .font(.title)
             }
             .frame(minWidth: 44, minHeight: 44)
             .disabled(!canSend)
-            .accessibilityLabel("傳送")
-            .accessibilityHint("將提示傳送給 Vision Pro 上的 AI 生成燈光效果")
         }
         .padding(12)
         .background(.bar)
@@ -155,22 +143,6 @@ private struct ChatBubble: View {
             if message.sender != .user { Spacer(minLength: 48) }
         }
         .listRowInsets(EdgeInsets(top: 3, leading: 12, bottom: 3, trailing: 12))
-        // Direction is shown only by left/right alignment + colour, so fold the bubble into one
-        // VoiceOver element and prefix the speaker in the label. The live (in-progress) transcript
-        // also says so, since its meaning differs from a finished message.
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(accessibilityText)
-    }
-
-    /// "你：…" / "LumaStage：…" / "系統：…", with a "（輸入中）" suffix while the transcript streams.
-    private var accessibilityText: String {
-        let speaker: String
-        switch message.sender {
-        case .user: speaker = "你"
-        case .model: speaker = "LumaStage"
-        case .system: speaker = "系統"
-        }
-        return isLive ? "\(speaker)（輸入中）：\(message.text)" : "\(speaker)：\(message.text)"
     }
 
     private var bubble: some View {

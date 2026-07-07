@@ -64,23 +64,8 @@ struct VisionAIComposerBox: View {
             .lumaGazeTarget()
             .tint(appModel.isMusicShowActive ? LumaStageDesign.coolBlue : nil)
             .help("匯入歌曲，裝置端離線分析後自動生成整場節拍同步演出；也能鎖定設備檔")
-            .accessibilityLabel(appModel.isMusicShowActive ? "音樂演出（已載入）" : "音樂演出")
-            .accessibilityValue(musicAccessibilityValue)
 
             Spacer()
-
-            Button(
-                appModel.isVoiceNarrationEnabled ? "關閉語音朗讀" : "開啟語音朗讀",
-                systemImage: appModel.isVoiceNarrationEnabled ? "speaker.wave.2.fill" : "speaker.slash"
-            ) {
-                appModel.toggleVoiceNarration()
-            }
-            .labelStyle(.iconOnly)
-            .buttonStyle(.bordered)
-            .buttonBorderShape(.circle)
-            .lumaGazeTarget()
-            .tint(appModel.isVoiceNarrationEnabled ? LumaStageDesign.softGreen : nil)
-            .help("語音朗讀 — 開啟後每次生成、走場與單燈調整都會念出來（無障礙模式）")
 
             Button("燈光除錯", systemImage: appModel.isDebugPanelVisible ? "ladybug.fill" : "ladybug") {
                 appModel.toggleDebugPanel()
@@ -113,7 +98,6 @@ struct VisionAIComposerBox: View {
                     .buttonBorderShape(.circle)
                     .lumaGazeTarget()
                     .help("新增場景（複製目前場景作為起點）")
-                    .accessibilityLabel("新增場景")
                 }
                 .padding(.vertical, 2)
             }
@@ -133,7 +117,6 @@ struct VisionAIComposerBox: View {
             .tint(appModel.isShowRunning ? .red : LumaStageDesign.softGreen)
             .disabled(!appModel.isMusicShowActive && appModel.cues.count <= 1)
             .help(appModel.isShowRunning ? "停止播放，停在目前場景" : "播放 — 自動連續跑完整個場景清單")
-            .accessibilityLabel(appModel.isShowRunning ? "停止播放" : "播放，自動連續走場")
 
             Button("GO", systemImage: "forward.fill") {
                 appModel.goToNextCue()
@@ -145,7 +128,6 @@ struct VisionAIComposerBox: View {
             .tint(LumaStageDesign.softGreen)
             .disabled(appModel.cues.count <= 1)
             .help("GO — 手動切換到下一個場景")
-            .accessibilityLabel("GO，手動前往下一個場景")
         }
     }
 
@@ -179,14 +161,6 @@ struct VisionAIComposerBox: View {
             }
             .disabled(appModel.cues.count <= 1)
         }
-        .accessibilityLabel("場景 \(index + 1)，\(cue.localizedDisplayName)")
-        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
-        .accessibilityHint("點兩下切換到此場景")
-        // A non-gesture path to the destructive delete (the context menu needs a long-press), so Switch
-        // Control / Voice Control users can reach it too.
-        .accessibilityAction(named: "刪除場景") {
-            if appModel.cues.count > 1 { appModel.removeCue(id: cue.id) }
-        }
     }
 
     private func inputField(text: Binding<String>, isRecording: Bool) -> some View {
@@ -212,7 +186,6 @@ struct VisionAIComposerBox: View {
                     .font(.title2.weight(.semibold))
                     .foregroundStyle(.red)
                     .symbolEffect(.variableColor.iterative, options: .repeating, isActive: !reduceMotion)
-                    .accessibilityLabel("聆聽中")
                     .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale))
             }
         }
@@ -247,8 +220,6 @@ struct VisionAIComposerBox: View {
 
             if let musicStatusTitle = statusChips.musicStatusTitle {
                 LumaStatusChip(title: musicStatusTitle, tint: LumaStageDesign.coolBlue)
-                    .accessibilityLabel("音樂演出狀態")
-                    .accessibilityValue(musicAccessibilityValue)
             }
 
             Spacer()
@@ -353,7 +324,6 @@ struct VisionAIComposerBox: View {
                         .font(.callout)
                         .foregroundStyle(LumaStageDesign.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
-                        .accessibilityLabel("設計理由，\(rationale)")
                 }
             }
 
@@ -599,16 +569,6 @@ struct VisionAIComposerBox: View {
             && !appModel.typedPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    /// VoiceOver value for the topBar music button — the live show status read aloud after the label.
-    private var musicAccessibilityValue: String {
-        guard appModel.isMusicShowActive else { return "尚未載入歌曲" }
-        var parts: [String] = []
-        if let title = appModel.currentSongTitle { parts.append(title) }
-        if let bpm = appModel.musicBPM { parts.append("每分鐘 \(Int(bpm.rounded())) 拍") }
-        parts.append(appModel.isMusicPlaying ? "播放中" : "已停止")
-        return parts.joined(separator: "，")
-    }
-
     private var spillTitle: String {
         appModel.stageImmersionMode == .roomSpill
             ? "停止將燈光投射到你的房間"
@@ -798,8 +758,6 @@ private struct MusicShowSheet: View {
                 .lumaGazeTarget()
                 .frame(maxWidth: .infinity)
                 .help("從檔案選擇一首歌（裝置端分析，不會上傳）")
-                .accessibilityLabel("匯入音檔")
-                .accessibilityHint("選擇一首歌曲，裝置端離線分析後自動生成演出")
 
                 Button("使用內建示範曲", systemImage: "music.note.list") {
                     Task { await appModel.useBuiltInDemoSong() }
@@ -809,8 +767,6 @@ private struct MusicShowSheet: View {
                 .lumaGazeTarget()
                 .frame(maxWidth: .infinity)
                 .help("載入預先分析好的內建示範曲（含裝置端合成的原創背景音軌，有聲音）；再按「播放演出」即可聽到 — 現場零失敗")
-                .accessibilityLabel("使用內建示範曲")
-                .accessibilityHint("載入預先分析的示範曲，含裝置端合成的原創背景音軌；載入後按「播放演出」開始播放，現場零失敗")
 
                 Button("從音樂資料庫選曲", systemImage: "music.note.list") {
                     isShowingLibraryPicker = true
@@ -820,8 +776,6 @@ private struct MusicShowSheet: View {
                 .lumaGazeTarget()
                 .frame(maxWidth: .infinity)
                 .help("從你的本機音樂資料庫挑一首歌（裝置端分析，受保護的串流曲目無法分析）")
-                .accessibilityLabel("從音樂資料庫選曲")
-                .accessibilityHint("瀏覽本機音樂資料庫並選擇一首歌曲，裝置端離線分析後自動生成演出")
             }
         }
     }
@@ -862,9 +816,6 @@ private struct MusicShowSheet: View {
                 .lumaGazeTarget()
                 .frame(maxWidth: .infinity)
                 .help(appModel.isMusicPlaying ? "停止播放，停止節拍同步走場" : "開始播放，cue 隨段落自動走")
-                .accessibilityLabel(appModel.isMusicPlaying ? "停止演出" : "播放演出")
-                .accessibilityValue(appModel.isMusicPlaying ? "播放中" : "已停止")
-                .accessibilityAddTraits(.isButton)
             }
         }
     }
@@ -891,8 +842,6 @@ private struct MusicShowSheet: View {
                 .lumaGazeTarget()
                 .frame(maxWidth: .infinity)
                 .help("設定燈具數量與允許的型號 — 套用後對音樂演出與 AI 生成都生效")
-                .accessibilityLabel("編輯設備檔")
-                .accessibilityValue(rigSummary)
             }
         }
     }
@@ -985,7 +934,6 @@ private struct SongLibraryPickerView: View {
                 .font(.footnote)
                 .foregroundStyle(LumaStageDesign.textSecondary)
                 .listRowBackground(Color.clear)
-                .accessibilityLabel("提示：灰色曲目受保護或尚未下載到本機，無法分析。已購買的歌曲可先在音樂 App 下載，或改用匯入音檔或內建示範曲。")
             }
         }
         .animation(reduceMotion ? nil : .default, value: items)
@@ -1005,8 +953,6 @@ private struct SongLibraryPickerView: View {
             .padding(.vertical, 4)
             .frame(minHeight: LumaStageDesign.minGazeTarget)
             .disabled(true)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("\(item.title)，\(item.artist)，\(durationText(item.duration))，受保護或尚未下載到本機，無法分析")
         } else {
             Button {
                 Task {
@@ -1027,10 +973,6 @@ private struct SongLibraryPickerView: View {
             }
             .buttonStyle(.plain)
             .lumaGazeTarget()
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("\(item.title)，\(item.artist)，\(durationText(item.duration))")
-            .accessibilityHint("選擇這首歌，裝置端離線分析後自動生成演出")
-            .accessibilityAddTraits(.isButton)
         }
     }
 
@@ -1088,7 +1030,7 @@ private struct SongLibraryPickerView: View {
 
 /// Edits a local copy of `appModel.rigConstraint` — a fixture-count limit (or 不限) plus an allowed
 /// model whitelist (empty = 不限型號) — and commits it via `appModel.setRigConstraint(_:)`. Selection
-/// uses a checkmark (non-color) indicator for accessibility.
+/// uses a visible checkmark indicator.
 private struct RigConstraintEditorView: View {
     @Environment(AppModel.self) private var appModel
     @Environment(\.dismiss) private var dismiss
@@ -1132,7 +1074,6 @@ private struct RigConstraintEditorView: View {
                         dismiss()
                     }
                     .lumaGazeTarget()
-                    .accessibilityHint("套用設備檔，對音樂演出與 AI 生成都生效")
                 }
             }
         }
@@ -1167,7 +1108,6 @@ private struct RigConstraintEditorView: View {
                 }
                 .toggleStyle(.switch)
                 .lumaGazeTarget()
-                .accessibilityHint("開啟以設定燈具數量上限，關閉表示不限")
 
                 if limitCount {
                     Stepper(value: $fixtureCount, in: Self.countRange) {
@@ -1183,8 +1123,6 @@ private struct RigConstraintEditorView: View {
                         }
                     }
                     .lumaGazeTarget()
-                    .accessibilityLabel("燈具數量")
-                    .accessibilityValue("\(fixtureCount) 盞")
                 } else {
                     Text("目前不限數量")
                         .font(.callout)
@@ -1238,10 +1176,6 @@ private struct RigConstraintEditorView: View {
         }
         .buttonStyle(.plain)
         .lumaGazeTarget()
-        .accessibilityLabel(Self.displayName(for: model))
-        .accessibilityValue(isSelected ? "已選擇" : "未選擇")
-        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
-        .accessibilityHint("點兩下\(isSelected ? "取消選擇" : "選擇")此型號")
     }
 }
 

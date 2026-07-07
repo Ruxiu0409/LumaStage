@@ -89,11 +89,6 @@ class AppModel {
     /// Whether the in-app relight debug panel (toggled from the AI composer) is showing. Off by default.
     var isDebugPanelVisible = false
 
-    /// Voice-only / accessibility mode: when on, every generation, cue change, and single-light edit is
-    /// spoken aloud via `SpeechNarrator`, so the whole design loop (generate → step cues with "go" →
-    /// hear the result) is usable without seeing the floating composer. Off by default.
-    var isVoiceNarrationEnabled = false
-
     /// Manual per-light overrides (the deterministic control layer), keyed by `StageLightID.number`.
     /// Layered on top of the generative cue by the renderer; persists across AI generations until
     /// cleared ("all lights on" / "reset lights"). Empty = every light follows the cue.
@@ -140,11 +135,6 @@ class AppModel {
     var lastError: String?
 
     let speechTranscriber = SpeechTranscriber()
-
-    /// Speaks feedback aloud when `isVoiceNarrationEnabled`. ObservationIgnored — it's an output sink,
-    /// not observable state. (Constructing the synthesizer is cheap; it stays silent until `speak`.)
-    @ObservationIgnored
-    private let narrator = SpeechNarrator()
 
     @ObservationIgnored
     private let aiClient: any LightingLookGenerating
@@ -925,7 +915,6 @@ class AppModel {
         lastError = nil
         aiUnderstoodCommand = "已依「\(analysis.title)」生成 \(look.cues.count) 個場景的整場演出。"
         conversationState = .explaining
-        narrateIfEnabled(aiUnderstoodCommand)
     }
 
     /// Starts music-synced playback: audio (if any) + the beat clock anchor + cue auto-advance. No-op when
@@ -995,7 +984,6 @@ class AppModel {
         )
         conversationState = .explaining
         lastError = nil
-        narrateIfEnabled(aiUnderstoodCommand)
     }
 
     /// Stops cue-list auto-playback, holding the current cue. Silent + idempotent so reset paths and the
@@ -1128,8 +1116,8 @@ class AppModel {
     }
 
     func generate(from prompt: String) async {
-        // Hands-free show control ("go", "next cue", "新增場景", "念出說明") runs the cue stack / narration
-        // with no AI call — so the whole loop is drivable by voice (the accessibility mode). A design
+        // Hands-free show control ("go", "next cue", "新增場景") runs the cue stack
+        // with no AI call. A design
         // prompt that merely contains a word like "go" returns nil and falls through.
         if let voiceCommand = StageVoiceCommand.parse(prompt) {
             applyVoiceCommand(voiceCommand)
@@ -1182,7 +1170,6 @@ class AppModel {
             lastExplanation = result.look.explanation
             persistCurrentProjectState()
             conversationState = .explaining
-            narrateIfEnabled("\(result.look.explanation.actionSummary) 共 \(lightingLook.cues.count) 個場景。")
         } catch {
             fail(error.localizedDescription)
         }
@@ -1223,7 +1210,6 @@ class AppModel {
             aiUnderstoodCommand = summary
             lastExplanation = lightingLook.explanation
             conversationState = .explaining
-            narrateIfEnabled(summary)
             return
         }
 
@@ -1246,7 +1232,6 @@ class AppModel {
                 actionSummary: summary
             )
             conversationState = .explaining
-            narrateIfEnabled(summary)
             return
         }
 
@@ -1283,7 +1268,6 @@ class AppModel {
             actionSummary: summary
         )
         conversationState = .explaining
-        narrateIfEnabled(summary)
     }
 
     // MARK: - Cue stack (multi-cue sequence + GO) + voice-only control
@@ -1294,7 +1278,6 @@ class AppModel {
         case .nextCue: goToNextCue()
         case .previousCue: goToPreviousCue()
         case .addCue: appendCue()
-        case .readExplanation: readCurrentExplanationAloud()
         case .playShow:
             // Route by what's loaded: a music show plays its audio + beat-locked advance; otherwise the
             // cue list auto-plays. Both surface their own feedback (playCueList speaks; music is audible).
@@ -1303,7 +1286,6 @@ class AppModel {
             if isMusicShowActive { stopMusicShow() } else { stopCueList() }
             aiUnderstoodCommand = "已停止播放。"
             conversationState = .explaining
-            narrateIfEnabled(aiUnderstoodCommand)
         }
     }
 
@@ -1339,7 +1321,6 @@ class AppModel {
         conversationState = .explaining
         lastError = nil
         persistCurrentProjectState()
-        narrateIfEnabled(aiUnderstoodCommand)
     }
 
     /// Appends a new cue to the stack by duplicating the current one (so the rig carries over), then
@@ -1358,7 +1339,6 @@ class AppModel {
             conversationState = .explaining
             lastError = nil
             persistCurrentProjectState()
-            narrateIfEnabled(aiUnderstoodCommand)
         } catch {
             fail(error.localizedDescription)
         }
@@ -1377,36 +1357,9 @@ class AppModel {
             conversationState = .explaining
             lastError = nil
             persistCurrentProjectState()
-            narrateIfEnabled(aiUnderstoodCommand)
         } catch {
             fail(error.localizedDescription)
         }
-    }
-
-    // MARK: - Voice narration (accessibility)
-
-    func toggleVoiceNarration() {
-        isVoiceNarrationEnabled.toggle()
-        if isVoiceNarrationEnabled {
-            narrator.speak("語音朗讀已開啟。\(aiUnderstoodCommand)")
-        } else {
-            narrator.stop()
-        }
-    }
-
-    /// Reads the current understood command + explanation aloud — an explicit request (the "念出說明"
-    /// voice command / a button), so it speaks regardless of the narration toggle.
-    func readCurrentExplanationAloud() {
-        narrator.speak("\(aiUnderstoodCommand)。\(lastExplanation.term)：\(lastExplanation.plainText)")
-        // Clear any prior error so reading the explanation doesn't leave the composer stuck on the red
-        // error panel (the feedback panel shows lastError first, regardless of conversationState).
-        lastError = nil
-        conversationState = .explaining
-    }
-
-    private func narrateIfEnabled(_ text: String) {
-        guard isVoiceNarrationEnabled else { return }
-        narrator.speak(text)
     }
 
     // MARK: - In-headset manual per-light control (the "console" surface, on top of the AI cue)
@@ -1566,7 +1519,6 @@ class AppModel {
             )
             conversationState = .explaining
             persistCurrentProjectState()
-            narrateIfEnabled(aiUnderstoodCommand)
         } catch {
             fail(error.localizedDescription)
         }

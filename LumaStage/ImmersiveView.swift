@@ -696,9 +696,6 @@ struct ImmersiveView: View {
         addLightLabel(number: lightNumber, near: placement.position, mountedAbove: support.isFloorStand, to: rig)
         addLightPickTarget(
             number: lightNumber,
-            model: fixture.renderModel,
-            initialColorHex: fixture.color.value,
-            initialIntensity: fixture.intensity,
             near: placement.position,
             to: rig
         )
@@ -719,22 +716,14 @@ struct ImmersiveView: View {
     /// real ~0.4 m fixture geometry (`model_<id>`) landed at the same spot, the system gaze highlight
     /// painted this oversized invisible sphere as a glowing orb engulfing the fixture. We keep the input
     /// target on THIS proxy (not on `model_<id>`) because every existing path — gaze/pinch selection,
-    /// pinch-to-dim, VoiceOver, and the selection ring — keys off the `lightpick_<n>` name and hierarchy;
+    /// pinch-to-dim, and the selection ring — keys off the `lightpick_<n>` name and hierarchy;
     /// moving the input target onto the sibling `model_<id>` would break `lightNumber(forPickTarget:)`'s
     /// walk-up (the model is not a `lightpick_` ancestor). Instead we (a) shrink the collider drastically
     /// to `sceneLength(0.06)` so it hugs the fixture rather than ballooning past it, and (b) remove the
     /// `HoverEffectComponent` entirely so it never renders as an orb. The fixture still gaze-selects and
     /// pinch-drags exactly as before; it just no longer glows a bubble over the gear.
-    ///
-    /// It is ALSO the light's VoiceOver element: an `AccessibilityComponent` gives it a fixed identity
-    /// label ("第 N 盞燈，<燈具名>") and an initial state value ("藍色，亮度 60%" / "已關閉") from the
-    /// fixture's own colour/intensity. `apply(_:overrides:to:)` refreshes `.value` on every relight so a
-    /// blind/low-vision user looking at (or sweeping through) the rig hears each light's live state.
     private static func addLightPickTarget(
         number: Int,
-        model: LightingFixtureVisualModel,
-        initialColorHex: String,
-        initialIntensity: Double,
         near position: Vector3Meters,
         to rig: Entity
     ) {
@@ -752,24 +741,6 @@ struct ImmersiveView: View {
         pick.components.set(InputTargetComponent())
         // NOTE: deliberately NO HoverEffectComponent — see the doc comment above. The system hover
         // highlight on this invisible sphere is exactly the glowing-orb bug (BUG 1).
-
-        // VoiceOver: make the proxy a focusable element that announces the light's identity + live state.
-        // `label` is fixed (identity); `value` is the current colour/brightness and is re-set per relight
-        // in `apply(...)`. RealityKit's AccessibilityComponent label/value are LocalizedStringResource?,
-        // so runtime Strings are wrapped via `LocalizedStringResource(stringLiteral:)`.
-        var accessibility = AccessibilityComponent()
-        accessibility.isAccessibilityElement = true
-        accessibility.label = LocalizedStringResource(
-            stringLiteral: StageLightAccessibility.identityLabel(number: number, model: model)
-        )
-        accessibility.value = LocalizedStringResource(
-            stringLiteral: StageLightAccessibility.stateValue(
-                colorHex: initialColorHex,
-                intensity: initialIntensity,
-                isOff: false
-            )
-        )
-        pick.components.set(accessibility)
 
         // Selection ring: an UnlitMaterial torus so it reads at any brightness (even when the light is
         // off), starting disabled. `syncSelectionHighlight` enables exactly the selected light's ring.
@@ -1462,21 +1433,6 @@ struct ImmersiveView: View {
                 updateLaserProjector(named: "laser_\(fixture.id)", in: root, colorHex: resolved.color, intensity: resolved.intensity)
             }
 
-            // VoiceOver: refresh the pick proxy's spoken state so a focused light announces the CURRENT
-            // cue/override colour + brightness ("藍色，亮度 60%" / "已關閉"). The identity label set at
-            // build time is left untouched. Re-set the whole component (RealityKit requires a `set` to
-            // commit a mutated component back to the entity).
-            if let pick = root.findEntity(named: "\(lightPickPrefix)\(index + 1)"),
-               var accessibility = pick.components[AccessibilityComponent.self] {
-                accessibility.value = LocalizedStringResource(
-                    stringLiteral: StageLightAccessibility.stateValue(
-                        colorHex: resolved.color,
-                        intensity: resolved.intensity,
-                        isOff: override.isOff
-                    )
-                )
-                pick.components.set(accessibility)
-            }
         }
     }
 

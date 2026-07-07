@@ -1,5 +1,7 @@
 # LumaStage × MAIC 最具創新獎 — 專案經理 / 燈光設計師雙視角戰略書
 
+> 歷史文件註(2026-07-08):專案已不參加 MAIC,且 TTS 語音輸出、逐燈 VoiceOver 體驗與相關 SwiftUI 標註已於 SPEC 18 下架。下方把語音朗讀閉環或 VoiceOver 標註列為可做/已做能力的段落,只保留作歷史策略參考,不得當作現況功能宣稱;現況以 `CLAUDE.md` 與 `docs/specs/README.md` 為準。
+
 > 撰寫角度:我同時用「專業舞台燈光設計師(對 grandMA2 工作流程瞭如指掌)」與「專案經理」兩個身分審視 LumaStage。前者判斷「這在燈光圈站不站得住腳」,後者判斷「這在賽場拿不拿得到分」。兩者交集,才是真正該做的事。
 >
 > 目標:在 **MAIC(中國高校計算機大賽-移動應用創新賽)** 拿下 **最具創新獎 / 啟航賽道最高榮譽**。
@@ -94,10 +96,11 @@ LumaStage 已經精準命中本屆 MAIC 的**技術風口**(visionOS 空間運�
 ### Tier S —— 必做,動到根才補得起來
 
 #### S1. 社會價值支柱 + 全語音無障礙模式 〔最高 CP〕
+> **狀態更新(2026-07-08)**:專案已不參加 MAIC,且語音朗讀與 VoiceOver 標註已下架。此段保留為歷史策略紀錄;現況 demo 只能宣稱語音輸入、文字回饋、Reduce Motion / Dynamic Type / 60pt 注視目標。
 - **為什麼**:命中啟航 20 分(且 60% 硬門檻)的維度,正中歷年最高獎 DNA。把產品從「酷工具」重新定位為「**讓沒有器材、沒有場地、甚至視力/行動受限的學生劇團與獨立創作者,只靠一台 Vision Pro 就能設計專業舞台燈光**」。
-- **🟡 你已有 80% 素材**:語音輸入(`SpeechTranscriber`)、AI 生成、`LightingExplanation` 白話教學。只缺**全程零觸控閉環**(語音生成 → 語音切 cue → 語音逐燈微調 → `AVSpeechSynthesizer` 朗讀 explanation)+ `accessibilityLabel`/Dynamic Type 標註。
+- **🟡 歷史評估**:語音輸入(`SpeechTranscriber`)、AI 生成、`LightingExplanation` 白話教學仍是素材;TTS 回饋與 VoiceOver 標註不再是現況功能。
 - **MA2 對應**:對應的不是某功能,而是 **MA2 陡峭學習曲線本身**——專業控台要數週訓練+昂貴硬體,這個模式把入門降到「一句話」。
-- **Apple 技術**:Speech(語音輸入)+(新增)AVSpeechSynthesizer(朗讀)+ App Intents(Siri/捷徑觸發,可選);燈光生成走 OpenAI 雲端。
+- **Apple 技術**:Speech(語音輸入)+ App Intents(Siri/捷徑觸發,可選);燈光生成走 OpenAI 雲端。TTS / VoiceOver 路線已移除。
 - **工作量**:S/M(敘事+a11y 標註=S;全語音閉環=M)。風險低,主要是**重新包裝既有能力**。
 - **誠實底線**:**只有真的做出無障礙模式才講無障礙**,否則只講「democratization」。評委會抓造假。
 

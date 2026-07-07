@@ -112,7 +112,6 @@ private struct LightingOverview: View {
                             .buttonStyle(.bordered)
                             .buttonBorderShape(.capsule)
                             .tint(c.id == look.selectedCueId ? .orange : nil)
-                            .accessibilityAddTraits(c.id == look.selectedCueId ? [.isSelected] : [])
                             .contextMenu {
                                 Button(role: .destructive) {
                                     model.send(.removeCue(id: c.id))
@@ -131,8 +130,6 @@ private struct LightingOverview: View {
                         .buttonStyle(.bordered)
                         .buttonBorderShape(.circle)
                         .frame(minWidth: 44, minHeight: 44)
-                        .accessibilityLabel("新增場景")
-                        .accessibilityHint("複製目前場景作為新場景的起點")
                     }
                     .padding(.vertical, 2)
                 }
@@ -147,8 +144,6 @@ private struct LightingOverview: View {
                 .buttonBorderShape(.capsule)
                 .tint(.green)
                 .disabled(look.cues.count <= 1)
-                .accessibilityLabel("GO，前往下一個場景")
-                .accessibilityHint("以過場時間切換到下一個場景")
             }
         }
         .disabled(!model.isConnected)
@@ -195,8 +190,6 @@ private struct FixtureCard: View {
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(alignment: .topTrailing) {
             if !fixture.enabled {
-                // The "off" state is shown only by this faint power glyph + dimmed colours;
-                // it's surfaced non-visually in accessibilityValue below instead.
                 Image(systemName: "power")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
@@ -204,20 +197,6 @@ private struct FixtureCard: View {
             }
         }
         .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        // The card is a grid of colour chip + %, type, and an intensity bar — fold it into one
-        // VoiceOver element. The NavigationLink wrapping it supplies the button trait.
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(StageLightLabel.displayName(number: number))
-        .accessibilityValue(accessibilityValue)
-    }
-
-    /// e.g. "已關閉，LED 帕燈，強度 60%" / "LED 帕燈，強度 60%" — type + intensity, plus the
-    /// off-state up front since it's otherwise only a faint glyph.
-    private var accessibilityValue: String {
-        let type = LightingFixtureCatalog.item(for: fixture.renderModel)?.displayName ?? ""
-        let intensity = "強度 \(Int((fixture.intensity * 100).rounded()))%"
-        let body = type.isEmpty ? intensity : "\(type)，\(intensity)"
-        return fixture.enabled ? body : "已關閉，\(body)"
     }
 }
 
@@ -263,13 +242,10 @@ private struct FixtureDetailView: View {
             HStack {
                 Slider(value: intensityBinding(fixture), in: 0...1)
                     .disabled(!model.isConnected)
-                    .accessibilityLabel("強度")
-                    .accessibilityValue("\(Int((fixture.intensity * 100).rounded()))%")
                 Text("\(Int((fixture.intensity * 100).rounded()))%")
                     .font(.body.monospacedDigit())
                     .foregroundStyle(.secondary)
                     .frame(width: 50, alignment: .trailing)
-                    .accessibilityHidden(true)
             }
         }
     }
@@ -292,13 +268,10 @@ private struct FixtureDetailView: View {
                                         isSelected(swatch.hex, fixture.color.value) ? Color.primary : Color.black.opacity(0.15),
                                         lineWidth: isSelected(swatch.hex, fixture.color.value) ? 3 : 1
                                     )
-                                    .accessibilityHidden(true)
                                 }
                                 .frame(minWidth: 44, minHeight: 44)
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel(swatch.zh)
-                        .accessibilityAddTraits(isSelected(swatch.hex, fixture.color.value) ? [.isSelected] : [])
                     }
                 }
                 .padding(.vertical, 6)
@@ -312,13 +285,10 @@ private struct FixtureDetailView: View {
             HStack {
                 Slider(value: beamBinding(fixture), in: 5...120)
                     .disabled(!model.isConnected)
-                    .accessibilityLabel("光束角度")
-                    .accessibilityValue("\(Int(fixture.effectiveFineControl.beamAngleDegrees.rounded()))度")
                 Text("\(Int(fixture.effectiveFineControl.beamAngleDegrees.rounded()))°")
                     .font(.body.monospacedDigit())
                     .foregroundStyle(.secondary)
                     .frame(width: 50, alignment: .trailing)
-                    .accessibilityHidden(true)
             }
         }
     }
@@ -342,8 +312,6 @@ private struct FixtureDetailView: View {
             Text(value)
                 .font(.callout.monospacedDigit())
         }
-        // Read-only spec row — combine the label + value into one VoiceOver utterance ("型號, …").
-        .accessibilityElement(children: .combine)
     }
 
     private func dmxSummary(_ dmx: DMXPatch?) -> String {
@@ -380,7 +348,7 @@ private struct FixtureDetailView: View {
 // MARK: - Shared
 
 /// Preset color swatches — a control-desk palette, so no hex typing or `Color`→hex conversion.
-/// `zh` is the VoiceOver label (繁中); `name` stays as the English reference term.
+/// `zh` is the visible Traditional-Chinese color name; `name` stays as the English reference term.
 private let lightingPalette: [(name: String, zh: String, hex: String)] = [
     ("White", "白", "#FFFFFF"),
     ("Amber", "琥珀", "#FF8A2C"),

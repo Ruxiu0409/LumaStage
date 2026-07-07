@@ -50,10 +50,6 @@ struct ContentView: View {
         Color.clear
             .frame(width: 1, height: 1)
             .allowsHitTesting(false)
-            // `allowsHitTesting(false)` blocks gaze/touch but NOT the accessibility tree — without this,
-            // VoiceOver could land on this empty 1×1 transition element and read nothing. Hide it so
-            // focus passes straight through during the immersive-space swap / fixture-observatory frames.
-            .accessibilityHidden(true)
     }
 
     /// Opens whichever immersive space `desiredImmersiveScene` names — but only when none is currently open.

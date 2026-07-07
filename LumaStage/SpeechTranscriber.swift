@@ -64,12 +64,12 @@ final class SpeechTranscriber {
             // …plus Traditional-Chinese terms that help when the device locale IS Chinese (the recognizer
             // follows Locale.current; on the en-US demo device the English terms above carry it).
             "暖色", "冷色", "藍色", "紅色", "綠色", "開場", "重點",
-            "下一個場景", "上一個場景", "新增場景", "念出說明"
+            "下一個場景", "上一個場景", "新增場景"
         ]
         recognitionRequest = request
 
         // The default session category (.soloAmbient) can't record; switch to .playAndRecord so dictation
-        // works and any narration ducks/routes to the speaker. Best-effort — don't fail dictation on it.
+        // works reliably. Best-effort — don't fail dictation on it.
         // AVAudioSession exists on iOS/visionOS but not macOS (this file's canImport(AVFoundation) guard is
         // also satisfied under the macOS SDK during headless analysis), so gate it on the platform.
 #if !os(macOS)

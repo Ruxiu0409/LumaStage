@@ -31,7 +31,7 @@ swiftc \
   LumaStage/LightingModels.swift LumaStage/LightingAIService.swift LumaStage/StageBuilderModels.swift \
   LumaStage/LightingFixtureCatalog.swift LumaStage/LumaSyncProtocol.swift LumaStage/LumaSyncTransport.swift \
   LumaStage/LumaStageDesign.swift LumaStage/StageVoiceCommand.swift LumaStage/LightEffect.swift \
-  LumaStage/MusicBeatClock.swift LumaStage/StageLightAccessibility.swift LumaStage/FixtureGroups.swift \
+  LumaStage/MusicBeatClock.swift LumaStage/FixtureGroups.swift \
   LumaStage/OpenAILightingService.swift LumaStage/OpenAIKeychain.swift LumaStage/SongAnalysis.swift \
   LumaStage/ShowPlan.swift LumaStage/RigConstraint.swift LumaStage/MusicShowBuilder.swift \
   LumaStage/SongLibrary.swift LumaStage/DemoTrackSynth.swift LumaStage/CuePlayback.swift \
@@ -79,7 +79,7 @@ git push origin main
 5. **#25**（燈具改型號專屬迷你幾何）——純幾何置換，沒有硬依賴，屬 #28 分層的 C 組（亮點級），排在互動完整性（B 組）之後做符合 #28 自己建議的波次。
 6. **#27(a)**（只做死資料清理那一半）——低風險、獨立。
 7. **#1 → #7 → #11**（視窗生命週期三題）——與桌面編輯器叢集無關的另一條線，故排在後面整批做，避免同分支反覆切換上下文。**#11 排最後**：它的症狀是「數種情境會重複視窗」，#1、#7 可能已經修掉其中幾種情境，先做完前兩顆能讓 #11 的範圍先縮小，再處理才不會做重工。
-8. **#5**（移除語音朗讀＋無障礙）——完全獨立，跟誰接都可以，排最後當收尾。**注意**：無障礙文案有 smoke test 釘住（`stageLightAccessibilityLabelsAreLocalized`），刪功能要連測試一起處理，不能只刪 view 端。
+8. **#5**（移除語音朗讀＋無障礙）——完全獨立，跟誰接都可以，排最後當收尾。**注意**：刪功能要連 smoke 測試一起處理，不能只刪 view 端。
 
 ## 何時停下來問人（不要自作主張）
 - 需違反任一硬規則才能達成 → 停、回報。

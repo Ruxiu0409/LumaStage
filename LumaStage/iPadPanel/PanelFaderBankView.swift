@@ -85,7 +85,6 @@ private struct GroupSubmasterFader: View {
 
     private static let throwHeight: CGFloat = 220
     private let faderWidth: CGFloat = 64
-    private let adjustStep = 0.05
 
     private var isSoloed: Bool { soloedGroupId == group.id }
     private var isSuppressedBySolo: Bool { soloedGroupId != nil && !isSoloed }
@@ -114,9 +113,6 @@ private struct GroupSubmasterFader: View {
             soloButton
         }
         .frame(width: faderWidth)
-        // Fold the throw + readout into one adjustable VoiceOver element; the bump/solo buttons stay
-        // separate (they have their own labels below).
-        .accessibilityElement(children: .contain)
     }
 
     // MARK: Throw
@@ -165,17 +161,6 @@ private struct GroupSubmasterFader: View {
         }
         .frame(width: faderWidth, height: Self.throwHeight)
         .opacity(isSuppressedBySolo ? 0.45 : 1)
-        .accessibilityLabel(group.displayName)
-        .accessibilityValue("\(Int((displayedLevel * 100).rounded()))%")
-        // Lets VoiceOver users ride the submaster with swipe-up/down in ~5% steps.
-        .accessibilityAdjustableAction { direction in
-            guard model.isConnected, soloedGroupId == nil else { return }
-            switch direction {
-            case .increment: ride(to: level + adjustStep)
-            case .decrement: ride(to: level - adjustStep)
-            @unknown default: break
-            }
-        }
     }
 
     private var trackTint: Color {
@@ -213,8 +198,6 @@ private struct GroupSubmasterFader: View {
                     .onEnded { _ in model.send(.bumpGroup(groupId: group.id, on: false)) }
             )
             .disabled(!model.isConnected)
-            .accessibilityLabel("\(group.displayName)瞬亮")
-            .accessibilityHint("按住打到全亮，放開恢復")
     }
 
     // MARK: Solo
@@ -236,9 +219,6 @@ private struct GroupSubmasterFader: View {
         .buttonStyle(.bordered)
         .tint(isSoloed ? .yellow : nil)
         .disabled(!model.isConnected)
-        .accessibilityLabel("\(group.displayName)獨奏")
-        .accessibilityValue(isSoloed ? "開啟" : "關閉")
-        .accessibilityAddTraits(isSoloed ? [.isSelected] : [])
         // React to ANY group's solo state so every fader pushes the right master while a solo is active.
         .onChange(of: soloedGroupId) { _, newValue in
             guard model.isConnected else { return }
@@ -288,8 +268,6 @@ private struct GoFooter: View {
             .buttonBorderShape(.capsule)
             .tint(isPlaying ? .red : .green)
             .disabled(!model.isConnected || cueCount <= 1)
-            .accessibilityLabel(isPlaying ? "停止播放" : "播放，自動連續走場")
-            .accessibilityHint(isPlaying ? "停止自動走場，停在目前場景" : "依每個場景的停留時間自動切到下一個場景")
 
             Button {
                 model.send(.goToNextCue)
@@ -302,8 +280,6 @@ private struct GoFooter: View {
             .buttonBorderShape(.capsule)
             .tint(.green)
             .disabled(!model.isConnected || cueCount <= 1)
-            .accessibilityLabel("GO，手動前往下一個場景")
-            .accessibilityHint("以過場時間切換到下一個場景")
         }
     }
 

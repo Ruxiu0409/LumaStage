@@ -80,7 +80,6 @@ struct LumaStageCoreSmokeTests {
         demoTrackSynthRendersBeatMatchedAudibleWav()
         parsesStageVoiceCommands()
         parsesPlayStopVoiceCommands()
-        stageLightAccessibilityLabelsAreLocalized()
         try relightDebugSnapshotMapsCueFixtures()
         try relightDebugSnapshotResolvesManualOverrides()
         cueEditSupersedesMaskingOverride()
@@ -2128,7 +2127,7 @@ struct LumaStageCoreSmokeTests {
         expect(state.cueOrder == ["cue_opening"], "the final cue must remain")
     }
 
-    // The hands-free show-driving voice layer: cue navigation + narration in English and Chinese, while
+    // The hands-free show-driving voice layer: cue navigation in English and Chinese, while
     // design prompts (which merely contain a word like "go") still fall through to AI generation.
     private static func parsesStageVoiceCommands() {
         expect(StageVoiceCommand.parse("next cue") == .nextCue, "'next cue' should advance")
@@ -2140,8 +2139,6 @@ struct LumaStageCoreSmokeTests {
         expect(StageVoiceCommand.parse("上一個") == .previousCue, "Chinese 'previous' should step back")
         expect(StageVoiceCommand.parse("add a cue") == .addCue, "'add a cue' should append")
         expect(StageVoiceCommand.parse("新增場景") == .addCue, "Chinese 'add scene' should append")
-        expect(StageVoiceCommand.parse("read it aloud") == .readExplanation, "'read it aloud' should narrate")
-        expect(StageVoiceCommand.parse("念出說明") == .readExplanation, "Chinese 'read the explanation' should narrate")
 
         // Design prompts must NOT be hijacked into cue navigation.
         expect(StageVoiceCommand.parse("go for a warm sunset mood") == nil, "a design prompt containing 'go' must fall through")
@@ -2155,15 +2152,12 @@ struct LumaStageCoreSmokeTests {
         expect(StageVoiceCommand.parse("light up the last cue area") == nil, "embedded 'last cue' must not step back")
         expect(StageVoiceCommand.parse("go to next level of brightness") == nil, "embedded 'go to next' must not advance")
         expect(StageVoiceCommand.parse("add a new cue feel to the room") == nil, "embedded 'new cue' must not append")
-        expect(StageVoiceCommand.parse("make the singer say it loud") == nil, "embedded 'say it' must not narrate")
-        expect(StageVoiceCommand.parse("explain it like a sunset") == nil, "embedded 'explain it' must not narrate")
         // Chinese (the primary user language) design prompts that embed a command word must fall through.
         expect(StageVoiceCommand.parse("把燈光調成上一個演出的暖色") == nil, "embedded 上一個 must not step back")
         expect(StageVoiceCommand.parse("做一個像下一個季節的暖色調") == nil, "embedded 下一個 must not advance")
         expect(StageVoiceCommand.parse("複製場景的氛圍到主舞台") == nil, "embedded 複製場景 must not append")
         // Anchored true positives still parse (with a particle / filler around them).
         expect(StageVoiceCommand.parse("請下一個") == .nextCue, "a Chinese command with a particle still parses")
-        expect(StageVoiceCommand.parse("read it aloud") == .readExplanation, "the exact narration command still parses")
     }
 
     // SPEC 16: 播放/停止 (play/stop) voice commands parse in English + Chinese, stay anchored (a design
@@ -2189,36 +2183,6 @@ struct LumaStageCoreSmokeTests {
         expect(StageVoiceCommand.parse("play with warm sunset colors") == nil, "an embedded 'play' in a design prompt must fall through")
         expect(StageVoiceCommand.parse("把燈光調成停止前的暖色") == nil, "embedded 停止 in a design prompt must fall through")
         expect(StageVoiceCommand.parse("make it warm and moody") == nil, "a plain design prompt should not parse as play/stop")
-    }
-
-    private static func stageLightAccessibilityLabelsAreLocalized() {
-        // Identity: the Nth light reads "第 N 盞燈，<繁中 type name from the catalog>".
-        expect(StageLightAccessibility.identityLabel(number: 3, model: .movingHeadBeam) == "第 3 盞燈，搖頭光束燈",
-               "Light identity should number the fixture and name its 繁中 type from the catalog")
-        expect(StageLightAccessibility.identityLabel(number: 1, model: .laser) == "第 1 盞燈，雷射燈",
-               "Light identity should resolve the laser type name from the catalog")
-
-        // State value: colour name + intensity percent; off short-circuits to 已關閉.
-        expect(StageLightAccessibility.stateValue(colorHex: "#2E6BFF", intensity: 0.6, isOff: false) == "藍色，亮度 60%",
-               "A lit fixture should announce its colour and rounded intensity percent")
-        expect(StageLightAccessibility.stateValue(colorHex: "#2E6BFF", intensity: 0.6, isOff: true) == "已關閉",
-               "An off fixture should announce 已關閉 regardless of colour/intensity")
-        expect(StageLightAccessibility.stateValue(colorHex: "#FFE9C8", intensity: 0.014, isOff: false) == "暖白，亮度 1%",
-               "Intensity should round to the nearest percent and an incandescent tint reads as 暖白")
-
-        // Colour buckets: representative hues + neutrals + the warm-white incandescent case.
-        expect(StageLightAccessibility.colorName(forHex: "#E23B3B") == "紅色", "A red hex should bucket to 紅色")
-        expect(StageLightAccessibility.colorName(forHex: "#33CC55") == "綠色", "A green hex should bucket to 綠色")
-        expect(StageLightAccessibility.colorName(forHex: "#2E6BFF") == "藍色", "A blue hex should bucket to 藍色")
-        expect(StageLightAccessibility.colorName(forHex: "#FFFFFF") == "白色", "Pure white should bucket to 白色")
-        expect(StageLightAccessibility.colorName(forHex: "#000000") == "黑色", "Pure black should bucket to 黑色")
-        expect(StageLightAccessibility.colorName(forHex: "#808080") == "灰色", "A mid neutral should bucket to 灰色")
-        expect(StageLightAccessibility.colorName(forHex: "#FFE9C8") == "暖白", "A warm low-saturation tint should bucket to 暖白, not 白色")
-        // Tolerates a missing '#' and lowercase.
-        expect(StageLightAccessibility.colorName(forHex: "33cc55") == "綠色", "Colour parsing should tolerate a missing # and lowercase")
-        // Malformed input falls back to 白色.
-        expect(StageLightAccessibility.colorName(forHex: "not-a-color") == "白色", "Malformed hex should fall back to 白色")
-        expect(StageLightAccessibility.colorName(forHex: "#12") == "白色", "A too-short hex should fall back to 白色")
     }
 
     private static func disabledFixtureAssemblesDark() throws {
