@@ -277,10 +277,24 @@ struct TabletopStageEditorView: View {
 
             Menu {
                 ForEach(Self.addableFixtureModels, id: \.self) { model in
-                    Button {
-                        appModel.addFixtureToRig(model: model, zone: .stageFront)
-                    } label: {
-                        Label(Self.fixtureModelName(model), systemImage: "lightbulb")
+                    if model == .laser {
+                        Button {
+                            appModel.addFixtureToRig(model: model, zone: .stageBack)
+                        } label: {
+                            Label("\(Self.fixtureModelName(model)) (固定於上舞台桁架)", systemImage: "lightbulb")
+                        }
+                    } else {
+                        Menu {
+                            ForEach(StageZone.allCases, id: \.self) { zone in
+                                Button {
+                                    appModel.addFixtureToRig(model: model, zone: zone)
+                                } label: {
+                                    Text(Self.zoneName(zone))
+                                }
+                            }
+                        } label: {
+                            Label(Self.fixtureModelName(model), systemImage: "lightbulb")
+                        }
                     }
                 }
             } label: {
@@ -486,6 +500,17 @@ struct TabletopStageEditorView: View {
     /// identifier if a model isn't catalogued).
     private static func fixtureModelName(_ model: LightingFixtureVisualModel) -> String {
         LightingFixtureCatalog.item(for: model)?.displayName ?? model.rawValue
+    }
+
+    /// The Traditional-Chinese display name for a StageZone.
+    private static func zoneName(_ zone: StageZone) -> String {
+        switch zone {
+        case .stageFront: return "台前"
+        case .stageBack: return "台後"
+        case .stageLeft: return "台左"
+        case .stageRight: return "台右"
+        case .fullStage: return "全場"
+        }
     }
 
     private var stageSizeBinding: Binding<StagePlatformPreset> {
