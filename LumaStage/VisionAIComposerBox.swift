@@ -120,17 +120,32 @@ struct VisionAIComposerBox: View {
 
             Spacer(minLength: 8)
 
-            Button("GO", systemImage: "play.fill") {
-                appModel.goToNextCue()
+            // 播放/停止：像真實控台一樣自動連續跑完整個 cue list（SPEC 16）。有音樂演出時控制音樂播放，
+            // 否則控制 cue-list 自動走場。播放中仍可按 GO 手動跳場。
+            Button(appModel.isShowRunning ? "停止" : "播放",
+                   systemImage: appModel.isShowRunning ? "stop.fill" : "play.circle.fill") {
+                appModel.togglePlayback()
             }
             .font(.headline.weight(.bold))
             .buttonStyle(.borderedProminent)
             .buttonBorderShape(.capsule)
             .lumaGazeTarget()
+            .tint(appModel.isShowRunning ? .red : LumaStageDesign.softGreen)
+            .disabled(!appModel.isMusicShowActive && appModel.cues.count <= 1)
+            .help(appModel.isShowRunning ? "停止播放，停在目前場景" : "播放 — 自動連續跑完整個場景清單")
+            .accessibilityLabel(appModel.isShowRunning ? "停止播放" : "播放，自動連續走場")
+
+            Button("GO", systemImage: "forward.fill") {
+                appModel.goToNextCue()
+            }
+            .font(.headline.weight(.semibold))
+            .buttonStyle(.bordered)
+            .buttonBorderShape(.capsule)
+            .lumaGazeTarget()
             .tint(LumaStageDesign.softGreen)
             .disabled(appModel.cues.count <= 1)
-            .help("GO — 以過場時間切換到下一個場景")
-            .accessibilityLabel("GO，前往下一個場景")
+            .help("GO — 手動切換到下一個場景")
+            .accessibilityLabel("GO，手動前往下一個場景")
         }
     }
 

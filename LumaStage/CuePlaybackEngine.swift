@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 
 // MARK: - Cue-list auto-playback timer (SPEC 16 — GO 升為「播放」)
 //

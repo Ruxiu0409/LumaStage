@@ -54,6 +54,10 @@ struct LumaHostState: Codable, Equatable {
     var lighting: LightingLook
     /// `StageImmersionMode.rawValue` — lets the panel show (and later toggle) full-stage vs room-spill.
     var immersionMode: String
+    /// Whether the host is auto-running the cue list (SPEC 16), so the panel's play/stop control reflects
+    /// live state. Defaulted purely for construction ergonomics (host/panel are the same build and this is
+    /// live wire, never persisted, so the key is always present on the wire — no missing-key back-compat).
+    var isPlayingCueList: Bool = false
 }
 
 /// AVP → iPad. Everything the Chat tab renders: the live conversation with Foundation Models.
@@ -127,4 +131,9 @@ enum LumaControlCommand: Codable, Equatable {
     /// Maps to `AppModel.bumpGroup(id:on:)` — momentary flash: `on` drives the group to full, `off`
     /// releases it back to following the cue.
     case bumpGroup(groupId: String, on: Bool)
+    /// Maps to `AppModel.playCueList()` — start cue-list auto-playback: cues follow one another on their
+    /// hold time, running once to the last cue (SPEC 16). No-op if a music show is active or there's <2 cues.
+    case playCueList
+    /// Maps to `AppModel.stopCueList()` — stop auto-playback, holding the current cue.
+    case stopCueList
 }

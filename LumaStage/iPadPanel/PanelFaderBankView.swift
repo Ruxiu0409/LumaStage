@@ -275,21 +275,40 @@ private struct GoFooter: View {
 
             Spacer()
 
+            // 播放/停止：自動連續跑完整個 cue list（SPEC 16）。與手動 GO 並存 —— 播放中仍可按 GO 手動跳場。
             Button {
-                model.send(.goToNextCue)
+                model.send(isPlaying ? .stopCueList : .playCueList)
             } label: {
-                Label("GO", systemImage: "play.fill")
-                    .font(.title3.weight(.bold))
-                    .frame(minWidth: 88, minHeight: 50)
+                Label(isPlaying ? "停止" : "播放",
+                      systemImage: isPlaying ? "stop.fill" : "play.circle.fill")
+                    .font(.title3.weight(.semibold))
+                    .frame(minWidth: 80, minHeight: 50)
             }
             .buttonStyle(.borderedProminent)
             .buttonBorderShape(.capsule)
+            .tint(isPlaying ? .red : .green)
+            .disabled(!model.isConnected || cueCount <= 1)
+            .accessibilityLabel(isPlaying ? "停止播放" : "播放，自動連續走場")
+            .accessibilityHint(isPlaying ? "停止自動走場，停在目前場景" : "依每個場景的停留時間自動切到下一個場景")
+
+            Button {
+                model.send(.goToNextCue)
+            } label: {
+                Label("GO", systemImage: "forward.fill")
+                    .font(.title3.weight(.bold))
+                    .frame(minWidth: 80, minHeight: 50)
+            }
+            .buttonStyle(.bordered)
+            .buttonBorderShape(.capsule)
             .tint(.green)
             .disabled(!model.isConnected || cueCount <= 1)
-            .accessibilityLabel("GO，前往下一個場景")
+            .accessibilityLabel("GO，手動前往下一個場景")
             .accessibilityHint("以過場時間切換到下一個場景")
         }
     }
+
+    /// Whether the host is auto-running the cue list, so the transport button shows 停止 rather than 播放.
+    private var isPlaying: Bool { model.host?.isPlayingCueList == true }
 
     private var cues: [LightingCue] { model.lighting?.cues ?? [] }
     private var cueCount: Int { cues.count }
