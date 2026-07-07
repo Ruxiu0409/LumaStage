@@ -65,6 +65,9 @@ struct LumaStageCoreSmokeTests {
         try stagedAssemblyReconcilesStateCounts()
         try stagedAssemblyPreservesRigIdentityAcrossCues()
         try validateAcceptsMultipleCuesAndRejectsEmpty()
+        cuePlaybackResolvesHold()
+        cuePlaybackAdvancesWithoutWrap()
+        try cueHoldDurationDecodesFromOldJSON()
         try multiCueDraftBuildsValidatedSequence()
         try stageStateSupportsCueStackAndGo()
         try disabledFixtureAssemblesDark()
@@ -1954,6 +1957,59 @@ struct LumaStageCoreSmokeTests {
         var dangling = LightingLook.mvpDemo()
         dangling.selectedCueId = "cue_nope"
         expectThrows(ValidationError.missingCue("cue_nope")) { try dangling.validate() }
+    }
+
+    // SPEC 16: `CuePlayback.holdDuration` resolves a cue's follow time — nil → the default, and any present
+    // value is floored/capped so a malformed hold can't spin or strand the auto-playback scheduler.
+    private static func cuePlaybackResolvesHold() {
+        func cue(_ hold: Double?) -> LightingCue {
+            LightingCue(id: "c", name: "C", transition: .mvpDefault, fixtureGroups: [], holdDuration: hold)
+        }
+        expect(CuePlayback.holdDuration(for: cue(nil)) == CuePlayback.defaultHoldSeconds, "nil hold should resolve to the default")
+        expect(CuePlayback.holdDuration(for: cue(4)) == 4, "a normal hold should pass through unchanged")
+        expect(CuePlayback.holdDuration(for: cue(0.5)) == CuePlayback.minHoldSeconds, "a below-floor hold should clamp up to the minimum")
+        expect(CuePlayback.holdDuration(for: cue(-3)) == CuePlayback.minHoldSeconds, "a negative hold should clamp up to the minimum")
+        expect(CuePlayback.holdDuration(for: cue(9999)) == CuePlayback.maxHoldSeconds, "an absurd hold should clamp down to the maximum")
+        expect(CuePlayback.holdDuration(for: cue(.nan)) == CuePlayback.defaultHoldSeconds, "a non-finite hold should fall back to the default")
+        expect(CuePlayback.holdDuration(for: cue(.infinity)) == CuePlayback.defaultHoldSeconds, "an infinite hold should fall back to the default")
+    }
+
+    // SPEC 16: auto-playback advances one cue at a time and does NOT wrap — it runs to the last cue and stops
+    // (manual GO still wraps, tested separately in the voice/stage tests). And it takes ≥2 cues to auto-play.
+    private static func cuePlaybackAdvancesWithoutWrap() {
+        expect(CuePlayback.nextIndex(after: 0, count: 3) == 1, "the first cue should advance to the second")
+        expect(CuePlayback.nextIndex(after: 1, count: 3) == 2, "a middle cue should advance to the next")
+        expect(CuePlayback.nextIndex(after: 2, count: 3) == nil, "the last cue has no successor — playback stops there")
+        expect(CuePlayback.nextIndex(after: 0, count: 1) == nil, "a lone cue has nowhere to advance to")
+        expect(CuePlayback.canAutoPlay(cueCount: 0) == false, "no cues can't auto-play")
+        expect(CuePlayback.canAutoPlay(cueCount: 1) == false, "a single cue can't auto-play")
+        expect(CuePlayback.canAutoPlay(cueCount: 2) == true, "two cues can auto-play")
+    }
+
+    // SPEC 16: `LightingCue.holdDuration` is additive & optional — it round-trips through Codable, decodes to
+    // nil from JSON written before it existed, and `validate()` rejects an out-of-range hold but accepts nil
+    // / an in-range value.
+    private static func cueHoldDurationDecodesFromOldJSON() throws {
+        // Round-trip: a present hold survives encode → decode.
+        let cue = LightingCue(id: "c", name: "C", transition: .mvpDefault, fixtureGroups: [], holdDuration: 8.5)
+        let decoded = try JSONDecoder().decode(LightingCue.self, from: JSONEncoder().encode(cue))
+        expect(decoded.holdDuration == 8.5, "a cue's holdDuration should survive a Codable round-trip")
+
+        // Backward compatibility: JSON written before `holdDuration` existed must decode to nil.
+        let legacyJSON = Data("""
+        {"id":"legacy","name":"Legacy","transition":{"duration":2.5,"easing":"linear"},"fixtureGroups":[]}
+        """.utf8)
+        let legacy = try JSONDecoder().decode(LightingCue.self, from: legacyJSON)
+        expect(legacy.holdDuration == nil, "a cue without a holdDuration field should decode to nil")
+
+        // validate(): nil and an in-range hold pass; an out-of-range hold is rejected.
+        var valid = LightingLook.mvpDemo()
+        valid.cues[0].holdDuration = 8
+        try valid.validate()
+
+        var invalid = LightingLook.mvpDemo()
+        invalid.cues[0].holdDuration = 700   // > CuePlayback.maxHoldSeconds
+        expectThrows(ValidationError.invalidHoldDuration(700)) { try invalid.validate() }
     }
 
     // The multi-cue AI → domain assembler (the "describe the whole show → a sequence of cues" path)

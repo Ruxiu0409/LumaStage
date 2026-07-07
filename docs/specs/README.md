@@ -28,6 +28,7 @@
     LumaStage/OpenAILightingService.swift LumaStage/FallbackLightingService.swift LumaStage/OpenAIKeychain.swift \
     LumaStage/SongAnalysis.swift LumaStage/ShowPlan.swift LumaStage/RigConstraint.swift LumaStage/MusicShowBuilder.swift \
     LumaStage/SongLibrary.swift LumaStage/DemoTrackSynth.swift \
+    LumaStage/CuePlayback.swift \
     -o /tmp/smoke && /tmp/smoke    # 印出 "LumaStageCoreSmokeTests passed" 即過
   ```
   新增 Foundation-only 檔時,把它加進這個指令(並更新根 `CLAUDE.md` 的測試段)。
