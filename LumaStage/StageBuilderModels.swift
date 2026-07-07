@@ -1568,6 +1568,26 @@ enum SurroundingsLightPolicy {
     }
 }
 
+/// Foundation-only retry pacing for reopening an immersive space during the stage↔editor swap.
+/// visionOS intermittently rejects an `openImmersiveSpace` issued while the previous space's dismiss
+/// transition is still winding down (the same class of system flakiness as the documented
+/// intermittently-dropped `dismissWindow`), which stranded the user on a blank window after 完成.
+/// `ContentView.reconcileImmersiveScene` retries on this backoff before giving up visibly.
+enum ImmersiveSceneReopenPolicy {
+    /// Total open attempts (the first try + the retries the backoff below allows).
+    static let maxAttempts = 4
+
+    /// Backoff to sleep after failed attempt `attempt` (1-based) before trying again, or nil to
+    /// give up. Doubles from 0.3s so the whole cycle stays under ~2.5s — long enough to outlive a
+    /// dismiss transition, short enough that a genuinely broken open surfaces quickly.
+    static func retryDelayNanoseconds(afterFailedAttempt attempt: Int) -> UInt64? {
+        guard attempt >= 1, attempt < maxAttempts else {
+            return nil
+        }
+        return 300_000_000 << (attempt - 1)
+    }
+}
+
 /// Spatial placement for the draggable in-space AI composer attachment. Foundation-only so the
 /// drag → position mapping (and its clamping) stays testable without RealityKit.
 enum AIComposerPlacement {

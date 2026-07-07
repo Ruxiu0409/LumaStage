@@ -6,10 +6,12 @@ struct LumaStageCoreSmokeTests {
         try validatesDemoLookDefaults()
         try defaultProjectsShipPlayableShowcase()
         spotLightRenderMathMapsIntensityAndBeamAngle()
+        laserBeamMathDerivesCoreAndSheathLayers()
         try newProjectFactoryCreatesValidProject()
         try newProjectFactoryCreatesDefaultStageLayout()
-        projectCreationOffersSingleStudentActivityTemplate()
+        projectCreationOffersTemplatesWithBlankOption()
         try projectFactoryAppliesScenarioTemplate()
+        try projectFactoryCreatesBlankStageProject()
         try stageBaseCanResizeWidthDepthAndHeight()
         try stageBaseExposesSolidGeometry()
         iPadRootProjectSelectionUsesAvailableWidth()
@@ -60,22 +62,33 @@ struct LumaStageCoreSmokeTests {
         try dmxAndTargetSurviveValidationAndCodec()
         try showcaseDemoIsValidAndDiverse()
         try aiDraftGuaranteesRenderableFrontAndBackgroundFixtures()
+        try stagedAssemblyReconcilesStateCounts()
+        try stagedAssemblyPreservesRigIdentityAcrossCues()
         try validateAcceptsMultipleCuesAndRejectsEmpty()
+        cuePlaybackResolvesHold()
+        cuePlaybackAdvancesWithoutWrap()
+        try cueHoldDurationDecodesFromOldJSON()
         try multiCueDraftBuildsValidatedSequence()
         try stageStateSupportsCueStackAndGo()
         try disabledFixtureAssemblesDark()
         lightEffectEngineModulatesMovementAndIntensity()
         musicBeatClockGridIsCorrect()
         musicBeatSyncLocksEffectsToBeat()
-        try patchPlannerAssignsSequentialDMXAndBuildsSheet()
+        demoTrackSynthRendersBeatMatchedAudibleWav()
         parsesStageVoiceCommands()
+        parsesPlayStopVoiceCommands()
         stageLightAccessibilityLabelsAreLocalized()
         try relightDebugSnapshotMapsCueFixtures()
+        try relightDebugSnapshotResolvesManualOverrides()
+        cueEditSupersedesMaskingOverride()
         parsesSingleLightCommands()
+        parsesLightRotationCommands()
         resolvesLightOverridesOntoCueValues()
         rigPlacementSpreadsFixturesAcrossZone()
         try fixtureManualPositionOverridesZonePlacement()
+        fixtureSupportPolicyClassifiesTrussVsStand()
         try surroundingsLightPolicyGatesOpaqueVenue()
+        immersiveSceneReopenPolicyBacksOffThenGivesUp()
         try humanoidFigurePlanIsAnatomicallyOrdered()
         aiComposerPlacementClampsWithinReach()
         await unavailableLightingServiceReportsUnavailable()
@@ -90,7 +103,9 @@ struct LumaStageCoreSmokeTests {
         try rigConstraintClampsRemapsAndIsIdempotent()
         try musicShowBuilderBuildsValidatedSymmetricShow()
         try musicShowLasersAreMirroredLeftAndRight()
+        try laserFixturesAreForcedOntoTheTruss()
         try legacyProjectJSONDecodesToUnconstrainedRig()
+        await songLibraryLoopbackBrowsesAndResolves()
         print("LumaStageCoreSmokeTests passed")
     }
 
@@ -157,6 +172,94 @@ struct LumaStageCoreSmokeTests {
                "Above-range beam spread must clamp to the largest shadow light size")
     }
 
+    private static func laserBeamMathDerivesCoreAndSheathLayers() {
+        // Visibility gate: shared with the beam geometry so both layers vanish together.
+        expect(!LaserScatterMath.beamsVisible(0.02), "A near-dark laser must be gated off")
+        expect(!LaserScatterMath.beamsVisible(0.03), "The gate stays exclusive at 0.03 (matches the legacy > 0.03)")
+        expect(LaserScatterMath.beamsVisible(0.5), "A lit laser must be visible")
+
+        // Layer geometry: the glow sheath is wider than the thin core (the haze-particle layer was removed).
+        let coreRadius = 0.01
+        let sheathRadius = LaserScatterMath.sheathRadius(coreRadiusMeters: coreRadius)
+        expect(sheathRadius > coreRadius, "The glow sheath must be wider than the core")
+
+        // The core is hotter (whiter) than the raw hue; the sheath stays saturated.
+        let core = LaserScatterMath.coreRGBA(hex: "#FF0000", intensity: 1)
+        expect(core.green > 0 && core.blue > 0, "The white-hot core must lift the non-hue channels toward white")
+        expect(core.red >= core.green, "The core must still lean toward its hue (red dominant for a red laser)")
+        let sheath = LaserScatterMath.sheathRGBA(hex: "#FF0000", intensity: 1)
+        expect(sheath.green < 0.0001 && sheath.blue < 0.0001, "The sheath must keep the saturated hue")
+
+        // Sheath alpha is low and scales with intensity.
+        expect(sheath.alpha < 0.2, "The sheath alpha must stay low so it reads as a halo, not a solid tube")
+        expect(LaserScatterMath.sheathRGBA(hex: "#FF0000", intensity: 0.5).alpha < sheath.alpha,
+               "A dimmer cue must give a fainter sheath")
+
+        // Determinism + invalid-hex fallback to white.
+        expect(LaserScatterMath.coreRGBA(hex: "#3366FF", intensity: 0.7) == LaserScatterMath.coreRGBA(hex: "#3366FF", intensity: 0.7),
+               "Same inputs must be deterministic")
+        let bogus = LaserScatterMath.sheathRGBA(hex: "not-a-hex", intensity: 1)
+        let white = LaserScatterMath.sheathRGBA(hex: "#FFFFFF", intensity: 1)
+        expect(bogus == white, "An invalid hex must fall back to white")
+    }
+
+    // 規定：雷射只能掛在上舞台桁架上。驗證 (1) `enforcingTrussMountedLasers` 把落地/側台的雷射 zone 正規化
+    // 為 .stageBack；(2) 被拖到低處/下舞台的雷射經 `RigPlacement` 解析後仍必定吊掛在桁架（永不落地）。
+    private static func laserFixturesAreForcedOntoTheTruss() throws {
+        let layout = StageLayout.defaultStudentOutdoor()
+
+        // Simulate an AI/edit mistake: force every laser into a floor-of-house zone, then normalize.
+        var look = LightingLook.showcaseDemo()
+        for cueIndex in look.cues.indices {
+            for fixtureIndex in look.cues[cueIndex].fixtureGroups.indices
+            where look.cues[cueIndex].fixtureGroups[fixtureIndex].renderModel == .laser {
+                look.cues[cueIndex].fixtureGroups[fixtureIndex].zone = .stageFront
+            }
+        }
+        let enforced = look.enforcingTrussMountedLasers()
+        var sawLaser = false
+        for cue in enforced.cues {
+            for fixture in cue.fixtureGroups where fixture.renderModel == .laser {
+                sawLaser = true
+                expect(fixture.zone == .stageBack, "A laser must be normalized onto the upstage truss zone")
+            }
+        }
+        expect(sawLaser, "showcaseDemo must contain a laser to exercise the rule")
+
+        // Predicate: only the laser is truss-only.
+        expect(RigPlacement.mountsOnTrussOnly(.laser), "A laser is truss-only")
+        expect(!RigPlacement.mountsOnTrussOnly(.movingHeadBeam), "A moving head is not truss-only")
+
+        // A laser dragged to a low, downstage spot must resolve back onto the truss (hang, never a stand).
+        let laser = try expectUnwrapped(
+            enforced.cues.first?.fixtureGroups.first(where: { $0.renderModel == .laser }),
+            "showcaseDemo must contain a laser"
+        )
+        var dragged = laser
+        dragged.manualPosition = FixturePosition(x: 99, y: 0.4, z: 9) // way off the truss, near the floor
+        let placement = RigPlacement.resolvedPlacement(fixture: dragged, slot: 0, count: 1, layout: layout)
+        expect(RigPlacement.support(forPosition: placement.position, layout: layout) == .hangFromTruss,
+               "A dragged laser must still hang from the truss, never grow a floor stand")
+
+        // Directly pin resolvedPlacement's zone-forcing branch (manualPosition == nil): a laser with a
+        // stale non-back zone (legacy/un-normalized) must STILL resolve onto the truss — independent of
+        // the manual-position clamp path above.
+        var staleZoneLaser = laser
+        staleZoneLaser.zone = .stageFront
+        staleZoneLaser.manualPosition = nil
+        let stalePlacement = RigPlacement.resolvedPlacement(fixture: staleZoneLaser, slot: 0, count: 1, layout: layout)
+        expect(RigPlacement.support(forPosition: stalePlacement.position, layout: layout) == .hangFromTruss,
+               "A laser with no manual position must resolve onto the truss even if its stored zone is wrong")
+
+        // A non-laser fixture with the same off-truss manual position is free to stand on the floor.
+        var standingPar = laser
+        standingPar.model = .ledPar
+        standingPar.manualPosition = FixturePosition(x: 99, y: 0.4, z: 9)
+        let parPlacement = RigPlacement.resolvedPlacement(fixture: standingPar, slot: 0, count: 1, layout: layout)
+        expect(parPlacement.position.z > placement.position.z,
+               "A non-laser keeps its off-truss manual position (only lasers are clamped onto the truss)")
+    }
+
     private static func newProjectFactoryCreatesValidProject() throws {
         let project = LumaStageProject.newProject(index: 1)
 
@@ -179,14 +282,32 @@ struct LumaStageCoreSmokeTests {
         try layout.validate()
     }
 
-    private static func projectCreationOffersSingleStudentActivityTemplate() {
+    private static func projectCreationOffersTemplatesWithBlankOption() {
         let templates = ProjectCreationTemplate.allTemplates
 
-        expect(templates.count == 1, "Project creation should offer a single student-activity template")
-        expect(templates.first?.kind == .campusMusic, "The only project template should be the campus music night student activity")
-        expect(ProjectCreationTemplate.Kind.allCases.count == 1, "campusMusic should be the only project template kind")
-        expect(templates.allSatisfy { !$0.title.isEmpty && !$0.subtitle.isEmpty }, "Every project template should have English labels")
+        expect(templates.count == 2, "Project creation should offer the student-activity template plus a blank option")
+        expect(templates.first?.kind == .emptyStage, "The blank stage should lead the template list (start-from-scratch first)")
+        expect(templates.contains(where: { $0.kind == .campusMusic }), "Project creation should keep the campus music night scenario template")
+        expect(ProjectCreationTemplate.Kind.allCases.count == 2, "campusMusic and emptyStage should be the project template kinds")
+        expect(templates.first(where: { $0.kind == .emptyStage })?.visualStyle == .emptyStage, "The blank template should use the empty-stage preview style")
+        expect(templates.allSatisfy { !$0.title.isEmpty && !$0.subtitle.isEmpty }, "Every project template should have labels")
         expect(templates.allSatisfy { !$0.introduction.isEmpty }, "Every project template should include an intro paragraph")
+    }
+
+    private static func projectFactoryCreatesBlankStageProject() throws {
+        let project = LumaStageProject.newProject(index: 3, template: .emptyStage)
+
+        expect(project.name == "空白舞台 3", "The blank template should name new projects from its label")
+        expect(project.eventType == "自訂", "The blank template should use a custom event type")
+        try project.stageLayout.validate()
+        try project.lightingLook.validate()
+
+        let allWhite = project.lightingLook.cues.allSatisfy { cue in
+            cue.fixtureGroups.allSatisfy { $0.color.value == "#FFFFFF" }
+        }
+        expect(allWhite, "The blank look should be neutral white with no color theme")
+        expect(!project.lightingLook.cues.contains(where: { $0.fixtureGroups.contains(where: { $0.model == .laser }) }),
+               "The blank look should not include a laser or accent fixtures")
     }
 
     private static func projectFactoryAppliesScenarioTemplate() throws {
@@ -630,6 +751,11 @@ struct LumaStageCoreSmokeTests {
         try roundTrip(.control(.removeCue(id: "cue_highlight")))
         try roundTrip(.control(.setGroupMaster(groupId: "group_front", level: 0.5)))
         try roundTrip(.control(.bumpGroup(groupId: "group_movers", on: true)))
+        try roundTrip(.control(.playCueList))
+        try roundTrip(.control(.stopCueList))
+
+        // SPEC 16: the cue-list playback flag survives on the host-state snapshot (true and default-false).
+        try roundTrip(.hostState(LumaHostState(conversation: conversation, lighting: look, immersionMode: "roomSpill", isPlayingCueList: true)))
 
         for role in LumaPeerRole.allCases {
             try roundTrip(.hello(role: role))
@@ -1107,6 +1233,107 @@ struct LumaStageCoreSmokeTests {
         expect(highlightFront.intensity > openingFront.intensity, "Highlight front light should be brighter than Opening")
     }
 
+    // SPEC 14 (staged generation): the Foundation-only staged assembler joins a define-once rig with a
+    // per-cue state MATRIX (row j → rig[j]). It must reconcile count drift exactly like `makeValidatedLook`
+    // — a short row reuses its last entry, a long row truncates, and an empty row makes the whole cue dark
+    // — and still produce a look that passes `validate()`.
+    private static func stagedAssemblyReconcilesStateCounts() throws {
+        let rig = [
+            LightingLookDraft.RigFixture(id: "fixture_0", name: "Front L", role: .frontLight, zone: .stageFront, model: .frontFresnel),
+            LightingLookDraft.RigFixture(id: "fixture_1", name: "Wash", role: .backgroundWash, zone: .stageBack, model: .washBar),
+            LightingLookDraft.RigFixture(id: "fixture_2", name: "Beam", role: .spot, zone: .stageBack, model: .movingHeadBeam)
+        ]
+
+        let cueStates: [[LightingLookDraft.StagedState]] = [
+            // Short row: 2 states for 3 fixtures → the 3rd reuses the last (the wash's #2244FF entry).
+            [
+                LightingLookDraft.StagedState(enabled: true, intensity: 0.6, colorHex: "#FFD1A3"),
+                LightingLookDraft.StagedState(enabled: true, intensity: 0.7, colorHex: "#2244FF")
+            ],
+            // Long row: 5 states for 3 fixtures → the extra two are ignored.
+            [
+                LightingLookDraft.StagedState(enabled: true, intensity: 0.9, colorHex: "#FF3300"),
+                LightingLookDraft.StagedState(enabled: true, intensity: 0.8, colorHex: "#00FF88"),
+                LightingLookDraft.StagedState(enabled: true, intensity: 0.5, colorHex: "#8800FF"),
+                LightingLookDraft.StagedState(enabled: false, intensity: 0.2, colorHex: "#111111"),
+                LightingLookDraft.StagedState(enabled: true, intensity: 0.1, colorHex: "#222222")
+            ],
+            // Empty row: whole cue dark (every fixture off).
+            []
+        ]
+
+        let look = try LightingLookDraft.makeValidatedStagedLook(
+            lookName: "Staged Show",
+            mood: "warm → bold → blackout",
+            rig: rig,
+            cueNames: ["Opening", "Build", "Blackout"],
+            cueStates: cueStates,
+            explanationTerm: "Cue",
+            explanationPlainText: "A cue is one saved state of the whole rig the operator steps through.",
+            explanationActionSummary: "Built a three-cue staged show.",
+            explanationRationale: "Escalating cues build a short arc."
+        )
+        try look.validate()
+
+        expect(look.cues.count == 3, "Every cue name should produce a cue")
+        expect(look.cues.allSatisfy { $0.fixtureGroups.count == rig.count },
+               "Every cue must carry one fixture per rig fixture (count reconciled)")
+
+        // Short row: fixture_2 reuses fixture_1's last state (the #2244FF wash entry).
+        let opening = try look.requireCue(id: "cue_0")
+        let openingBeam = opening.fixtureGroups.first { $0.id == "fixture_2" }
+        expect(openingBeam?.color.value == "#2244FF", "A short state row must reuse the last entry for the trailing fixture")
+        expect(abs((openingBeam?.intensity ?? -1) - 0.7) < 0.0001, "The reused entry must carry its intensity too")
+
+        // Long row: only the first three states are used; extras dropped.
+        let build = try look.requireCue(id: "cue_1")
+        let buildThird = build.fixtureGroups.first { $0.id == "fixture_2" }
+        expect(buildThird?.color.value == "#8800FF", "A long state row must map the 3rd entry to the 3rd fixture and ignore extras")
+
+        // Empty row: whole cue dark — `enabled:false` assembles intensity 0.
+        let blackout = try look.requireCue(id: "cue_2")
+        expect(blackout.fixtureGroups.allSatisfy { $0.intensity == 0 },
+               "An empty state row must make the whole cue dark (intensity 0)")
+    }
+
+    // SPEC 14: the rig is defined ONCE and reused in every cue, so fixture ids + order must be identical
+    // across cues (rig identity), cue ids must be the pinned `cue_0…`, and `selectedCueId` must resolve.
+    private static func stagedAssemblyPreservesRigIdentityAcrossCues() throws {
+        let rig = [
+            LightingLookDraft.RigFixture(id: "fixture_0", name: "A", role: .frontLight, zone: .stageFront, model: .frontFresnel),
+            LightingLookDraft.RigFixture(id: "fixture_1", name: "B", role: .wash, zone: .stageLeft, model: .washBar),
+            LightingLookDraft.RigFixture(id: "fixture_2", name: "C", role: .spot, zone: .stageRight, model: .movingHeadBeam),
+            LightingLookDraft.RigFixture(id: "fixture_3", name: "D", role: .backgroundWash, zone: .stageBack, model: .backgroundBatten)
+        ]
+
+        func row(_ intensity: Double) -> [LightingLookDraft.StagedState] {
+            rig.map { _ in LightingLookDraft.StagedState(enabled: true, intensity: intensity, colorHex: "#FFFFFF") }
+        }
+
+        let look = try LightingLookDraft.makeValidatedStagedLook(
+            lookName: "Identity Show",
+            mood: "steady",
+            rig: rig,
+            cueNames: ["Opening", "Build", "Chorus", "Finale"],
+            cueStates: [row(0.3), row(0.5), row(0.7), row(0.9)],
+            explanationTerm: "Rig",
+            explanationPlainText: "The rig is the fixed set of fixtures the whole show is built from.",
+            explanationActionSummary: "Built a four-cue show on a stable four-fixture rig.",
+            explanationRationale: "A stable rig keeps each light addressable across every cue."
+        )
+        try look.validate()
+
+        let expectedIds = ["fixture_0", "fixture_1", "fixture_2", "fixture_3"]
+        expect(look.cues.count == 4, "Four cue names should produce four cues")
+        expect(look.cues.map(\.id) == ["cue_0", "cue_1", "cue_2", "cue_3"], "Cue ids must be the pinned cue_0… sequence")
+        for cue in look.cues {
+            expect(cue.fixtureGroups.map(\.id) == expectedIds,
+                   "Every cue must carry the same fixture ids in the same order (rig identity)")
+        }
+        _ = try look.requireCue(id: look.selectedCueId)
+        expect(look.selectedCueId == "cue_0", "The first cue should be selected and resolve")
+    }
+
     // The relight debug panel (toggled from the AI composer) renders `RelightDebugSnapshot`. Pin that
     // it mirrors the cue's fixtures and correctly flags which roles the immersive scene actually draws
     // — the same `isRenderedAsSpotlight` predicate that would have made the original "valid look that
@@ -1123,6 +1350,11 @@ struct LumaStageCoreSmokeTests {
 
         expect(snapshot.cueId == cue.id, "snapshot should carry the cue id")
         expect(snapshot.rows.count == cue.fixtureGroups.count, "snapshot should have one row per fixture")
+        // Each row carries its 1-based "Light N" number in cue order — the SAME numbering the on-stage
+        // floating label, the voice/deterministic commands, and the iPad panel all use, so the debug row
+        // can be cross-referenced to a command.
+        expect(snapshot.rows.map(\.number) == Array(1...cue.fixtureGroups.count),
+               "rows should carry 1-based Light N numbers in cue order")
         // The dynamic rig relights EVERY fixture now (`RelightDebugSnapshot.make` flags them all), so
         // renderedCount equals the fixture count — including non-spotlight roles like the laser's `.spot`.
         // (The `isRenderedAsSpotlight` predicate above is now vestigial metadata, not a render gate.)
@@ -1134,6 +1366,9 @@ struct LumaStageCoreSmokeTests {
         expect(frontRow?.hex == front.color.value, "row hex should mirror the fixture color")
         expect(frontRow?.intensityPercent == Int((front.intensity * 100).rounded()), "row intensity% should mirror the fixture")
         expect(frontRow?.isRendered == true, "the frontLight row should be flagged rendered")
+        // With no manual overrides passed, rows resolve to the raw cue values and read as un-overridden.
+        expect(snapshot.rows.allSatisfy { !$0.isOverridden && !$0.isManuallyOff },
+               "with no overrides, no row should be flagged manual")
 
         // A1 dynamic effects surface in the snapshot via the shared LightEffectPlan, so the in-app debug
         // readout matches what the renderer animates. mvpDemo's opening averages ≥ 0.6 → high energy.
@@ -1142,6 +1377,65 @@ struct LumaStageCoreSmokeTests {
         expect(frontRow?.effectKind == LightEffectKind.none, "a front fresnel stays steady even on a high-energy cue")
         let laserRow = snapshot.rows.first(where: { $0.fixtureId == "laser_fan" })
         expect(laserRow?.effectKind == LightEffectKind.none, "the laser stays still — its visible aerial beam fan isn't animated — even on a high-energy cue")
+    }
+
+    // The debug panel must resolve the manual override + group-master layers exactly like the renderer, so
+    // a hands-on edit (pinch/card/voice/fader ride) shows its EFFECTIVE value in 偵錯台 — not the raw cue
+    // value (the "偵錯台 doesn't change when I adjust a light by gesture" bug).
+    private static func relightDebugSnapshotResolvesManualOverrides() throws {
+        let look = LightingLook.mvpDemo()
+        let cue = try look.requireCue(id: look.selectedCueId)
+
+        // Light 1 recoloured + dimmed by hand; Light 2 manually blacked out; Light 3 ridden by a group at 50%.
+        let overrides: [Int: LightOverride] = [
+            1: LightOverride(isOff: false, colorHex: "#FF0000", intensity: 0.2),
+            2: LightOverride(isOff: true, colorHex: nil, intensity: nil)
+        ]
+        let masters: [Int: Double] = [3: 0.5]
+        let snapshot = RelightDebugSnapshot.make(from: cue, overrides: overrides, groupMasters: masters)
+
+        let row1 = snapshot.rows[0]
+        expect(row1.hex == "#FF0000", "row 1 should show the manual override colour, not the cue colour")
+        expect(row1.intensityPercent == 20, "row 1 should show the manual override intensity, not the cue value")
+        expect(row1.isOverridden, "row 1 should be flagged as manually overridden")
+        expect(!row1.isManuallyOff, "row 1 is dimmed by hand, not blacked out")
+
+        let row2 = snapshot.rows[1]
+        expect(row2.intensityPercent == 0, "a manually blacked-out light resolves to 0%")
+        expect(row2.isManuallyOff, "row 2 should be flagged as manually off")
+
+        let cue3Intensity = cue.fixtureGroups[2].intensity
+        let row3 = snapshot.rows[2]
+        expect(row3.intensityPercent == Int((cue3Intensity * 0.5 * 100).rounded()),
+               "a group master ride should scale the row's intensity like the renderer")
+        expect(row3.isOverridden, "a light pulled off 1.0 by a group ride should be flagged")
+    }
+
+    // An authoritative cue-layer edit (iPad panel / direct per-fixture edit) supersedes the matching
+    // component of a light's manual override, so the new cue value renders instead of being masked by a
+    // stale override — the "平板改變的內容沒有更新到燈光上" fix. (AppModel isn't in the smoke set, so pin
+    // the Foundation-only `LightOverride.superseded` logic AppModel delegates to.)
+    private static func cueEditSupersedesMaskingOverride() {
+        let full = LightOverride(isOff: true, colorHex: "#00FF00", intensity: 0.9)
+
+        // An intensity edit drops the manual level + blackout but keeps an unrelated colour override.
+        let afterIntensity = full.superseded(clearing: .intensity)
+        expect(afterIntensity?.intensity == nil, "an intensity edit should clear the manual level")
+        expect(afterIntensity?.isOff == false, "an intensity edit should un-blackout the light")
+        expect(afterIntensity?.colorHex == "#00FF00", "an intensity edit should keep an unrelated colour override")
+
+        // A colour edit drops the manual colour but keeps an unrelated intensity/blackout override.
+        let afterColor = full.superseded(clearing: .color)
+        expect(afterColor?.colorHex == nil, "a colour edit should clear the manual colour")
+        expect(afterColor?.intensity == 0.9, "a colour edit should keep an unrelated intensity override")
+        expect(afterColor?.isOff == true, "a colour edit should not touch a blackout")
+
+        // When the edited component was the ONLY thing the override carried, it drops entirely so the light
+        // follows the cue again.
+        let colorOnly = LightOverride(isOff: false, colorHex: "#0000FF", intensity: nil)
+        expect(colorOnly.superseded(clearing: .color) == nil, "clearing the only component should drop the override")
+        let intensityOnly = LightOverride(isOff: false, colorHex: nil, intensity: 0.3)
+        expect(intensityOnly.superseded(clearing: .intensity) == nil, "clearing the only component should drop the override")
     }
 
     // Deterministic single-light command parsing (the Action-Phrase-style precise control layer):
@@ -1185,6 +1479,44 @@ struct LumaStageCoreSmokeTests {
         // Role-only phrase (no colour) must NOT false-match — it falls through to the AI/other paths.
         expect(LightCommand.parse("把前光調暗一點") == nil,
                "a role phrase with no colour must not parse as a role recolor")
+    }
+
+    // SPEC 13: "Light N turn right/left/up/down M degrees" parses to `.rotate` (one axis at a time), the
+    // aim-offset clamp holds, and rotate must NOT eat "turn off"/"turn on" (no direction word → close/open).
+    private static func parsesLightRotationCommands() {
+        expect(LightCommand.parse("Light 6 turn right 60 degrees") == .rotate(6, panDeltaDegrees: 60, tiltDeltaDegrees: 0),
+               "turn right N° should pan +N on the named light")
+        expect(LightCommand.parse("turn light 2 left 45 degrees") == .rotate(2, panDeltaDegrees: -45, tiltDeltaDegrees: 0),
+               "turn left N° should pan −N")
+        expect(LightCommand.parse("tilt light 3 up 20 degrees") == .rotate(3, panDeltaDegrees: 0, tiltDeltaDegrees: 20),
+               "tilt up N° should tilt +N")
+        expect(LightCommand.parse("rotate light 4 down 30") == .rotate(4, panDeltaDegrees: 0, tiltDeltaDegrees: -30),
+               "rotate down N (no 'degrees') should tilt −N")
+        expect(LightCommand.parse("pan light 1 right") == .rotate(1, panDeltaDegrees: 45, tiltDeltaDegrees: 0),
+               "a rotation with no magnitude should default to 45°")
+
+        // Regression: on/off are not direction words, so a rotation verb ("turn") must not swallow them.
+        expect(LightCommand.parse("turn off light 2") == .close(2), "rotate must not eat 'turn off'")
+        expect(LightCommand.parse("turn on light 4") == .open(4), "rotate must not eat 'turn on'")
+
+        // FixtureAimOffset.adding clamps to the valid range (pan ±180, tilt ±90).
+        expect(FixtureAimOffset.zero.adding(panDelta: 200, tiltDelta: 0).panDegrees == 180, "pan clamps to 180")
+        expect(FixtureAimOffset.zero.adding(panDelta: 0, tiltDelta: -200).tiltDegrees == -90, "tilt clamps to −90")
+        expect(FixtureAimOffset.zero.adding(panDelta: -300, tiltDelta: 0).panDegrees == -180, "pan clamps to −180")
+
+        // Old JSON with no `aimOffset` key decodes to nil (synthesized decoder defaults optionals to nil),
+        // and a set aimOffset survives a Codable round-trip (mirrors the manualPosition back-compat test).
+        let legacyJSON = """
+        {"id":"f1","name":"燈具 1","role":"frontLight","zone":"stageFront",
+         "enabled":true,"intensity":0.6,"color":{"mode":"rgb","value":"#FFFFFF"}}
+        """
+        let decoded = try! JSONDecoder().decode(FixtureGroup.self, from: Data(legacyJSON.utf8))
+        expect(decoded.aimOffset == nil, "A FixtureGroup decoded from JSON without an aimOffset key must yield nil")
+
+        var placed = decoded
+        placed.aimOffset = FixtureAimOffset(panDegrees: 60, tiltDegrees: -12)
+        let roundTripped = try! JSONDecoder().decode(FixtureGroup.self, from: try! JSONEncoder().encode(placed))
+        expect(roundTripped.aimOffset == placed.aimOffset, "aimOffset must survive a Codable round-trip")
     }
 
     private static func resolvesLightOverridesOntoCueValues() {
@@ -1265,6 +1597,26 @@ struct LumaStageCoreSmokeTests {
         expect(roundTripped.manualPosition == manual, "manualPosition must survive a Codable round-trip")
     }
 
+    private static func fixtureSupportPolicyClassifiesTrussVsStand() {
+        let layout = StageLayout.defaultStudentOutdoor()
+        // Use placement to produce each zone's actual position, then ask support:
+        let back  = RigPlacement.placement(zone: .stageBack,  slot: 0, count: 1, layout: layout).position
+        let left  = RigPlacement.placement(zone: .stageLeft,  slot: 0, count: 2, layout: layout).position
+        let front = RigPlacement.placement(zone: .stageFront, slot: 0, count: 2, layout: layout).position
+        expect(RigPlacement.support(forPosition: back,  layout: layout) == .hangFromTruss, "上舞台 truss 位吊掛")
+        expect(RigPlacement.support(forPosition: left,  layout: layout).isFloorStand,      "側台 boom 落地燈架")
+        expect(RigPlacement.support(forPosition: front, layout: layout).isFloorStand,      "FOH 落地燈架")
+        // 手動位置：truss 正下方且高 → 吊掛；台前高處（footprint 外）→ 落地。
+        if let f = RigPlacement.trussFootprint(in: layout) {
+            let underTruss = Vector3Meters(x: (f.minX + f.maxX)/2, y: f.topY - 0.2, z: (f.minZ + f.maxZ)/2)
+            expect(RigPlacement.support(forPosition: underTruss, layout: layout) == .hangFromTruss, "truss 正下方高處吊掛")
+        }
+        let floatingDownstage = Vector3Meters(x: 0, y: 3.0, z: 5.0)  // 台前遠處高空
+        if case .floorStand(let topY) = RigPlacement.support(forPosition: floatingDownstage, layout: layout) {
+            expect(topY > 0.3 && topY <= 3.0, "落地柱頂在燈下")
+        } else { fatalError("台前高空應落地燈架，不可浮空") }
+    }
+
     private static func surroundingsLightPolicyGatesOpaqueVenue() throws {
         expect(SurroundingsLightPolicy.includesOpaqueVenue(in: .fullStage),
                "Full-stage immersion must keep the opaque venue (floor + backdrop)")
@@ -1277,6 +1629,21 @@ struct LumaStageCoreSmokeTests {
         let encoded = try JSONEncoder().encode(StageImmersionMode.roomSpill)
         let decoded = try JSONDecoder().decode(StageImmersionMode.self, from: encoded)
         expect(decoded == .roomSpill, "StageImmersionMode should survive a Codable round-trip")
+    }
+
+    // 空間重開重試節奏（stage↔editor 交接失敗的補救）：前三次失敗以 0.3s 起倍增退避重試，
+    // 第 maxAttempts 次失敗即放棄（回 nil，讓 ContentView 清掉 desired scene、退回 composer）。
+    private static func immersiveSceneReopenPolicyBacksOffThenGivesUp() {
+        expect(ImmersiveSceneReopenPolicy.retryDelayNanoseconds(afterFailedAttempt: 1) == 300_000_000,
+               "First failed open should retry after 0.3s")
+        expect(ImmersiveSceneReopenPolicy.retryDelayNanoseconds(afterFailedAttempt: 2) == 600_000_000,
+               "Second failed open should back off to 0.6s")
+        expect(ImmersiveSceneReopenPolicy.retryDelayNanoseconds(afterFailedAttempt: 3) == 1_200_000_000,
+               "Third failed open should back off to 1.2s")
+        expect(ImmersiveSceneReopenPolicy.retryDelayNanoseconds(afterFailedAttempt: ImmersiveSceneReopenPolicy.maxAttempts) == nil,
+               "Exhausting maxAttempts must give up (nil) so the reconciler exits visibly")
+        expect(ImmersiveSceneReopenPolicy.retryDelayNanoseconds(afterFailedAttempt: 0) == nil,
+               "A nonsensical attempt number must not retry")
     }
 
     private static func aiComposerPlacementClampsWithinReach() {
@@ -1598,6 +1965,59 @@ struct LumaStageCoreSmokeTests {
         expectThrows(ValidationError.missingCue("cue_nope")) { try dangling.validate() }
     }
 
+    // SPEC 16: `CuePlayback.holdDuration` resolves a cue's follow time — nil → the default, and any present
+    // value is floored/capped so a malformed hold can't spin or strand the auto-playback scheduler.
+    private static func cuePlaybackResolvesHold() {
+        func cue(_ hold: Double?) -> LightingCue {
+            LightingCue(id: "c", name: "C", transition: .mvpDefault, fixtureGroups: [], holdDuration: hold)
+        }
+        expect(CuePlayback.holdDuration(for: cue(nil)) == CuePlayback.defaultHoldSeconds, "nil hold should resolve to the default")
+        expect(CuePlayback.holdDuration(for: cue(4)) == 4, "a normal hold should pass through unchanged")
+        expect(CuePlayback.holdDuration(for: cue(0.5)) == CuePlayback.minHoldSeconds, "a below-floor hold should clamp up to the minimum")
+        expect(CuePlayback.holdDuration(for: cue(-3)) == CuePlayback.minHoldSeconds, "a negative hold should clamp up to the minimum")
+        expect(CuePlayback.holdDuration(for: cue(9999)) == CuePlayback.maxHoldSeconds, "an absurd hold should clamp down to the maximum")
+        expect(CuePlayback.holdDuration(for: cue(.nan)) == CuePlayback.defaultHoldSeconds, "a non-finite hold should fall back to the default")
+        expect(CuePlayback.holdDuration(for: cue(.infinity)) == CuePlayback.defaultHoldSeconds, "an infinite hold should fall back to the default")
+    }
+
+    // SPEC 16: auto-playback advances one cue at a time and does NOT wrap — it runs to the last cue and stops
+    // (manual GO still wraps, tested separately in the voice/stage tests). And it takes ≥2 cues to auto-play.
+    private static func cuePlaybackAdvancesWithoutWrap() {
+        expect(CuePlayback.nextIndex(after: 0, count: 3) == 1, "the first cue should advance to the second")
+        expect(CuePlayback.nextIndex(after: 1, count: 3) == 2, "a middle cue should advance to the next")
+        expect(CuePlayback.nextIndex(after: 2, count: 3) == nil, "the last cue has no successor — playback stops there")
+        expect(CuePlayback.nextIndex(after: 0, count: 1) == nil, "a lone cue has nowhere to advance to")
+        expect(CuePlayback.canAutoPlay(cueCount: 0) == false, "no cues can't auto-play")
+        expect(CuePlayback.canAutoPlay(cueCount: 1) == false, "a single cue can't auto-play")
+        expect(CuePlayback.canAutoPlay(cueCount: 2) == true, "two cues can auto-play")
+    }
+
+    // SPEC 16: `LightingCue.holdDuration` is additive & optional — it round-trips through Codable, decodes to
+    // nil from JSON written before it existed, and `validate()` rejects an out-of-range hold but accepts nil
+    // / an in-range value.
+    private static func cueHoldDurationDecodesFromOldJSON() throws {
+        // Round-trip: a present hold survives encode → decode.
+        let cue = LightingCue(id: "c", name: "C", transition: .mvpDefault, fixtureGroups: [], holdDuration: 8.5)
+        let decoded = try JSONDecoder().decode(LightingCue.self, from: JSONEncoder().encode(cue))
+        expect(decoded.holdDuration == 8.5, "a cue's holdDuration should survive a Codable round-trip")
+
+        // Backward compatibility: JSON written before `holdDuration` existed must decode to nil.
+        let legacyJSON = Data("""
+        {"id":"legacy","name":"Legacy","transition":{"duration":2.5,"easing":"linear"},"fixtureGroups":[]}
+        """.utf8)
+        let legacy = try JSONDecoder().decode(LightingCue.self, from: legacyJSON)
+        expect(legacy.holdDuration == nil, "a cue without a holdDuration field should decode to nil")
+
+        // validate(): nil and an in-range hold pass; an out-of-range hold is rejected.
+        var valid = LightingLook.mvpDemo()
+        valid.cues[0].holdDuration = 8
+        try valid.validate()
+
+        var invalid = LightingLook.mvpDemo()
+        invalid.cues[0].holdDuration = 700   // > CuePlayback.maxHoldSeconds
+        expectThrows(ValidationError.invalidHoldDuration(700)) { try invalid.validate() }
+    }
+
     // The multi-cue AI → domain assembler (the "describe the whole show → a sequence of cues" path)
     // builds an ordered, validated cue stack with the first cue selected and the rig shared across cues.
     private static func multiCueDraftBuildsValidatedSequence() throws {
@@ -1661,37 +2081,6 @@ struct LumaStageCoreSmokeTests {
         expect(state.cueOrder == ["cue_opening"], "the final cue must remain")
     }
 
-    // Patch planning makes the (previously dead) DMXPatch field live: sequential, non-colliding
-    // addresses written onto every cue, and a printable sheet summary.
-    private static func patchPlannerAssignsSequentialDMXAndBuildsSheet() throws {
-        let look = LightingLook.showcaseDemo()   // 9 fixtures
-        let patched = DMXPatchPlanner.patched(look)
-
-        let rig = patched.cues.first!.fixtureGroups
-        let addresses = rig.compactMap { $0.dmx?.address }
-        expect(addresses == [1, 5, 9, 13, 17, 21, 25, 29, 33], "fixtures should patch sequentially in 4-channel steps from address 1")
-        expect(rig.allSatisfy { $0.dmx?.universe == 1 }, "nine fixtures fit in one universe")
-        expect(Set(addresses).count == addresses.count, "patched DMX addresses must not collide")
-
-        // The same patch is written onto the fixture in EVERY cue (rig identity across cues).
-        for cue in patched.cues {
-            expect(cue.fixtureGroups.allSatisfy { $0.dmx != nil }, "every fixture in every cue should carry a patch")
-        }
-        try patched.validate()
-
-        let sheet = LightingPatchSheet.make(from: look)
-        expect(sheet.fixtureCount == 9, "sheet should list every fixture")
-        expect(sheet.universeCount == 1, "sheet should report one universe for nine fixtures")
-        expect(sheet.channelCount == 36, "nine fixtures × 4 channels = 36 DMX channels")
-        expect(sheet.rows.first?.number == 1, "rows should be 1-based, matching on-stage Light N")
-        expect(sheet.rows.first?.channelSpan == "1–4", "first fixture should span channels 1–4")
-        expect(sheet.rows.allSatisfy { !$0.fixtureType.isEmpty }, "every row should name a fixture type")
-
-        // Idempotent: re-patching an already-patched look yields the same addresses.
-        let twice = DMXPatchPlanner.patched(patched)
-        expect(twice.cues.first!.fixtureGroups.compactMap { $0.dmx?.address } == addresses, "re-patching should be stable")
-    }
-
     // The hands-free show-driving voice layer: cue navigation + narration in English and Chinese, while
     // design prompts (which merely contain a word like "go") still fall through to AI generation.
     private static func parsesStageVoiceCommands() {
@@ -1728,6 +2117,31 @@ struct LumaStageCoreSmokeTests {
         // Anchored true positives still parse (with a particle / filler around them).
         expect(StageVoiceCommand.parse("請下一個") == .nextCue, "a Chinese command with a particle still parses")
         expect(StageVoiceCommand.parse("read it aloud") == .readExplanation, "the exact narration command still parses")
+    }
+
+    // SPEC 16: 播放/停止 (play/stop) voice commands parse in English + Chinese, stay anchored (a design
+    // prompt embedding "play"/"停止" falls through), and never eat cue navigation.
+    private static func parsesPlayStopVoiceCommands() {
+        expect(StageVoiceCommand.parse("play the show") == .playShow, "'play the show' should start playback")
+        expect(StageVoiceCommand.parse("run the show") == .playShow, "'run the show' should start playback")
+        expect(StageVoiceCommand.parse("play") == .playShow, "a bare 'play' should start playback")
+        expect(StageVoiceCommand.parse("auto play") == .playShow, "'auto play' should start playback")
+        expect(StageVoiceCommand.parse("播放") == .playShow, "Chinese '播放' should start playback")
+        expect(StageVoiceCommand.parse("自動播放") == .playShow, "Chinese '自動播放' should start playback")
+        expect(StageVoiceCommand.parse("跑全場") == .playShow, "Chinese '跑全場' should start playback")
+
+        expect(StageVoiceCommand.parse("stop the show") == .stopShow, "'stop the show' should stop playback")
+        expect(StageVoiceCommand.parse("stop playback") == .stopShow, "'stop playback' should stop playback")
+        expect(StageVoiceCommand.parse("stop") == .stopShow, "a bare 'stop' should stop playback")
+        expect(StageVoiceCommand.parse("停止播放") == .stopShow, "Chinese '停止播放' should stop playback")
+        expect(StageVoiceCommand.parse("停止") == .stopShow, "Chinese '停止' should stop playback")
+
+        // Cue navigation and design prompts must NOT be hijacked.
+        expect(StageVoiceCommand.parse("next cue") == .nextCue, "'next cue' must still advance, not play")
+        expect(StageVoiceCommand.parse("下一個場景") == .nextCue, "Chinese 'next scene' must still advance")
+        expect(StageVoiceCommand.parse("play with warm sunset colors") == nil, "an embedded 'play' in a design prompt must fall through")
+        expect(StageVoiceCommand.parse("把燈光調成停止前的暖色") == nil, "embedded 停止 in a design prompt must fall through")
+        expect(StageVoiceCommand.parse("make it warm and moody") == nil, "a plain design prompt should not parse as play/stop")
     }
 
     private static func stageLightAccessibilityLabelsAreLocalized() {
@@ -1922,6 +2336,71 @@ struct LumaStageCoreSmokeTests {
         let before = MusicBeatSync.output(pan, clock: clock, at: 0.5 - dt).panOffsetDegrees
         let after = MusicBeatSync.output(pan, clock: clock, at: 0.5 + dt).panOffsetDegrees
         expect(abs(before - after) < 0.1, "the sweep does not jump across a beat boundary")
+    }
+
+    /// The built-in demo song's synthesized backing track (`DemoTrackSynth`) must produce a well-formed,
+    /// AUDIBLE, deterministic 16-bit PCM WAV whose energy follows the analysis's sections — otherwise the
+    /// demo plays in silence (the exact bug this fixes). Pins: sample count = duration·sampleRate; a canonical
+    /// WAV header (RIFF/WAVE/fmt /data, mono, 44.1 kHz, 16-bit, matching sizes); the buffer isn't silent; a
+    /// loud chorus section is clearly louder than a quiet intro; and the render is byte-stable.
+    private static func demoTrackSynthRendersBeatMatchedAudibleWav() {
+        // A short two-section analysis: a quiet intro then a loud chorus. bpm-only (no beatTimes) exercises the
+        // derived grid. Keep it short so the headless render stays fast.
+        let sections = [
+            SongSection(start: 0, end: 3, kind: .intro, pace: 0.30, loudness: 0.35, keyMode: .minor, dominantInstruments: []),
+            SongSection(start: 3, end: 6, kind: .chorus, pace: 0.90, loudness: 0.90, keyMode: .major, dominantInstruments: ["drums"])
+        ]
+        let analysis = SongAnalysis(title: "T", duration: 6, bpm: 128, beatTimes: [], barTimes: [], sections: sections)
+
+        let sampleRate = DemoTrackSynth.sampleRate
+        let samples = DemoTrackSynth.renderSamples(for: analysis)
+
+        // --- Sample count matches the declared duration -----------------------------------------------------
+        let expectedCount = Int((6.0 * Double(sampleRate)).rounded())
+        expect(samples.count == expectedCount, "render must be duration·sampleRate samples (got \(samples.count), want \(expectedCount))")
+
+        // --- Not silent, and always within [-1, 1] (soft-clipped) -------------------------------------------
+        let peak = samples.map { abs($0) }.max() ?? 0
+        expect(peak > 0.05, "the demo track must be audible, not silent (peak \(peak))")
+        expect(samples.allSatisfy { $0 >= -1 && $0 <= 1 }, "samples must stay within [-1, 1] after soft-clip")
+
+        // --- Section dynamics: the loud chorus is clearly louder than the quiet intro -----------------------
+        func rms(_ startSec: Double, _ endSec: Double) -> Double {
+            let a = Int(startSec * Double(sampleRate)), b = Int(endSec * Double(sampleRate))
+            let slice = samples[a..<min(b, samples.count)]
+            let sumSq = slice.reduce(0.0) { $0 + Double($1) * Double($1) }
+            return (sumSq / Double(max(1, slice.count))).squareRoot()
+        }
+        let introRMS = rms(0.5, 2.5)
+        let chorusRMS = rms(3.5, 5.5)
+        expect(chorusRMS > introRMS * 1.4, "the chorus must swell clearly louder than the intro (intro \(introRMS), chorus \(chorusRMS))")
+
+        // --- Deterministic: same analysis → byte-identical audio (the file cache relies on this) ------------
+        let again = DemoTrackSynth.renderSamples(for: analysis)
+        expect(samples == again, "the synth must be deterministic (same analysis → identical samples)")
+
+        // --- Canonical 16-bit PCM WAV header + sizes --------------------------------------------------------
+        let wav = DemoTrackSynth.wavData(fromMono: samples, sampleRate: sampleRate)
+        let bytes = [UInt8](wav)
+        func ascii(_ range: Range<Int>) -> String { String(decoding: bytes[range], as: UTF8.self) }
+        func le16(_ at: Int) -> Int { Int(bytes[at]) | (Int(bytes[at + 1]) << 8) }
+        func le32(_ at: Int) -> Int { Int(bytes[at]) | (Int(bytes[at + 1]) << 8) | (Int(bytes[at + 2]) << 16) | (Int(bytes[at + 3]) << 24) }
+
+        let dataSize = samples.count * 2
+        expect(bytes.count == 44 + dataSize, "WAV = 44-byte header + 2 bytes/sample (got \(bytes.count))")
+        expect(ascii(0..<4) == "RIFF", "WAV must start with RIFF")
+        expect(le32(4) == 36 + dataSize, "RIFF chunk size must be 36 + dataSize")
+        expect(ascii(8..<12) == "WAVE", "WAV must declare the WAVE form")
+        expect(ascii(12..<16) == "fmt ", "fmt chunk id")
+        expect(le32(16) == 16, "PCM fmt chunk is 16 bytes")
+        expect(le16(20) == 1, "audioFormat must be 1 (PCM)")
+        expect(le16(22) == 1, "mono (1 channel)")
+        expect(le32(24) == sampleRate, "sample rate must round-trip")
+        expect(le32(28) == sampleRate * 2, "byteRate = sampleRate · channels · bytesPerSample")
+        expect(le16(32) == 2, "blockAlign = channels · bytesPerSample")
+        expect(le16(34) == 16, "16 bits per sample")
+        expect(ascii(36..<40) == "data", "data chunk id")
+        expect(le32(40) == dataSize, "data chunk size must equal the sample byte count")
     }
 
     // MARK: - SPEC 10: OpenAI cloud backend + fallback composer
@@ -2469,6 +2948,48 @@ struct LumaStageCoreSmokeTests {
         let project = try JSONDecoder().decode(LumaStageProject.self, from: data)
         expect(project.rigConstraint.isUnconstrained,
                "A legacy project JSON without rigConstraint must decode to an unconstrained rig")
+    }
+
+    // SPEC 12 WI-2: the Foundation-only selection seam. Pins the loopback's browse/search/resolve
+    // behaviour so the platform `MusicKitSongLibrary` and the UI can be written against this contract.
+    private static func songLibraryLoopbackBrowsesAndResolves() async {
+        let resolved = URL(fileURLWithPath: "/tmp/luma-loopback-song.m4a")
+        let items = [
+            SongLibraryItem(id: "1", title: "Neon Skyline", artist: "Aurora", duration: 211, isProtected: false),
+            SongLibraryItem(id: "2", title: "Midnight Drive", artist: "Aurora", duration: 184, isProtected: false),
+            SongLibraryItem(id: "3", title: "Quiet Harbor", artist: "Lumen", duration: 0, isProtected: true)
+        ]
+        let library = LoopbackSongLibrary(items: items, resolvedURL: resolved)
+
+        // search filters by title (case-insensitive) and by artist.
+        let byTitle = await library.search("neon")
+        expect(byTitle.map(\.id) == ["1"], "search must match title case-insensitively")
+        let byArtist = await library.search("AURORA")
+        expect(byArtist.map(\.id) == ["1", "2"], "search must match artist case-insensitively")
+        let none = await library.search("nope")
+        expect(none.isEmpty, "search with no match must return empty")
+
+        // recentSongs respects the limit.
+        let recent = await library.recentSongs(limit: 2)
+        expect(recent.map(\.id) == ["1", "2"], "recentSongs must return the first `limit` items")
+
+        // a non-protected item resolves to the injected URL.
+        do {
+            let url = try await library.resolvePlayableURL(for: items[0])
+            expect(url == resolved, "resolvePlayableURL must return the injected URL for a non-protected item")
+        } catch {
+            fatalError("resolvePlayableURL should not throw for a non-protected item, got \(error)")
+        }
+
+        // a protected item throws .protected.
+        do {
+            _ = try await library.resolvePlayableURL(for: items[2])
+            fatalError("resolvePlayableURL must throw for a protected item")
+        } catch let error as SongSourceError {
+            expect(error == .protected, "protected item must throw .protected, got \(error)")
+        } catch {
+            fatalError("protected item must throw SongSourceError.protected, got \(error)")
+        }
     }
 
     private static func expect(_ condition: @autoclosure () -> Bool, _ message: String) {

@@ -4,7 +4,7 @@
 >
 > 本文是 MAIC 啟航賽道「社會價值」維度(約 20 分,且設有單項 60% 淘汰硬門檻)的敘事主軸。原則只有一條:**每一個能力宣稱,都是我們真的寫進程式碼的能力**;說不清楚的,寧可保守,絕不誇大。誠實本身就是給評委看的工程素養,不是弱點。
 >
-> 對齊文件:`docs/maic-strategy.md` §5、§5.6(誠實護欄);現況以 `LightingModels.swift`、`AppModel.swift`、`StageLightAccessibility.swift`、`StageVoiceCommand.swift`、`SpeechNarrator.swift`、`LightingPatchSheet.swift`、`ImmersiveView.swift` 程式碼為地面真相。
+> 對齊文件:`docs/maic-strategy.md` §5、§5.6(誠實護欄);現況以 `LightingModels.swift`、`AppModel.swift`、`StageLightAccessibility.swift`、`StageVoiceCommand.swift`、`SpeechNarrator.swift`、`ImmersiveView.swift` 程式碼為地面真相。
 
 ---
 
@@ -44,7 +44,7 @@ LumaStage 的設計哲學,是把「擁有什麼」的門檻,換成「**能不能
 
 ### 3.1 端側 Apple Foundation Models:用一句話生成專業 cue → 降低專業門檻
 
-整套 AI 生成**完全跑在裝置上**(Apple Foundation Models),**不需 API key、不需網路、不需帳號**。使用者用自然語言描述要的氛圍(中英混講皆可),裝置端模型就生成一整套 **4–12 盞燈、2–5 個有序場景(cue)** 的燈光腳本,每盞燈帶顏色、亮度、光束角與過場。
+整套 AI 生成**完全跑在裝置上**(Apple Foundation Models),**不需 API key、不需網路、不需帳號**。使用者用自然語言描述要的氛圍(中英混講皆可),裝置端模型就生成一整套 **4–12 盞燈、2–6 個有序場景(cue)** 的燈光腳本,每盞燈帶顏色、亮度、光束角與過場。
 
 - **對障礙的回應**:把「要先學會操作一台控台」的數週門檻,壓縮成「**說一句話**」。不必先懂推桿與編碼輪,也能產出結構正確的專業 cue。
 - **隱私即尊嚴**:端側意味著創作者的點子永遠不離開自己的裝置——對學生與獨立創作者,這是「我的創意不被上傳、不被拿去訓練」的安全感。
@@ -76,12 +76,6 @@ LumaStage 開出一個**真實尺寸(1:1)的夜間室外舞台數位孿生**,燈
 
 更進一步,切換到**房間溢光(mixed passthrough)**模式,AI 設計的虛擬聚光燈會**真的打在使用者所在的真實房間牆面上**(`SpotLightComponent.SurroundingsLight`)。對一個沒有黑空間、沒有掛點的學生來說,這是他第一次能「身體感受到」自己設計的光——零器材的所見即所得。
 
-### 3.5 真實世界銜接:DMX 配接表匯出(PDF)——這不是封閉玩具
-
-設計完不是終點。LumaStage 能把虛擬 rig 自動分配 DMX universe / address,匯出一頁式**燈光配接表 PDF**(`LightingPatchSheet` + `DMXPatchPlanner` + `PatchSheetExportView`):燈號、燈具類型、區位、Universe、位址、通道、顏色一應俱全。
-
-- **對障礙的回應**:這完成了從「虛擬構思」到「真實器材」的閉環。學生在宿舍用 Vision Pro 設計好,**匯出一張紙,進場交給技師直接 patch 到真實控台**。它證明 LumaStage 不是一個關起門的酷玩具,而是**能對接產業既有工作流**的設計與 previz 工具。
-
 ---
 
 ## 4. 一個真實場景:阿瑋的開場
@@ -92,7 +86,7 @@ LumaStage 開出一個**真實尺寸(1:1)的夜間室外舞台數位孿生**,燈
 
 幾秒後,系統唸出「已生成,共 3 個場景」。他說「**下一個場景**」,聽見舞台交叉淡入;他用 VoiceOver 把注視滑過台上的燈,一盞盞聽見**「第 1 盞燈,LED 柔光燈,暖白,亮度 45%」「第 4 盞燈,搖頭光束燈,藍色,亮度 80%」**——他在腦中拼出了整個畫面。他覺得主光太暗,說「**把 Light 1 調到 65%**」,系統確認並唸出新值。
 
-滿意之後,他**匯出一張 DMX 配接表 PDF**,傳給負責架實體燈的學長。進場那天,學長照著表把燈 patch 上真實控台——阿瑋設計的開場,第一次打在真正的舞台上。
+滿意之後,他說「**go**」,把整場秀從開場一路走到收尾——每一次交叉淡入,語音朗讀都替他確認走到了哪一個場景。這場開場,是他第一次不靠任何人、從零到完整走完一遍的燈光設計。
 
 **他從頭到尾沒看任何一個按鈕,也沒碰任何一根推桿。**
 
@@ -117,10 +111,10 @@ LumaStage 開出一個**真實尺寸(1:1)的夜間室外舞台數位孿生**,燈
 
 - **與特教資源班 / 學校戲劇社試用**:邀請視障與一般學生各一組,記錄「從零到完成一個雙場景設計」的上手時間與完成率。
 - **無障礙走查通過率**:依 VoiceOver / Reduce Motion / Dynamic Type 列查核表,在實體 Vision Pro 上逐項走查並記錄通過比例。
-- **零器材完成度**:統計使用者在「完全不接觸實體燈具」前提下,能獨力產出並匯出可交付配接表的比例。
+- **零器材完成度**:統計使用者在「完全不接觸實體燈具」前提下,能獨力完成一場多 cue 燈光設計、並以 GO 走完全場的比例。
 
 這些都是**規劃**,不是已有的數據——我們只承諾說得出口的事。
 
 ---
 
-*附註:本文每一項能力宣稱皆對照當前程式碼撰寫(`AppModel.swift` 的 cue stack/GO 與語音朗讀、`StageVoiceCommand.swift` 的中英語音指令、`StageLightAccessibility.swift` + `ImmersiveView.swift` 的逐燈 VoiceOver、`SpeechNarrator.swift` 的 zh-TW 朗讀、`LightingPatchSheet.swift` 的 DMX 配接表匯出、`ImmersiveView.swift` 的 1:1 孿生與房間溢光)。「正在補齊 / 規劃中」的項目已明確標示,以守住誠實護欄(見 `maic-strategy.md` §5.6)。*
+*附註:本文每一項能力宣稱皆對照當前程式碼撰寫(`AppModel.swift` 的 cue stack/GO 與語音朗讀、`StageVoiceCommand.swift` 的中英語音指令、`StageLightAccessibility.swift` + `ImmersiveView.swift` 的逐燈 VoiceOver、`SpeechNarrator.swift` 的 zh-TW 朗讀、`ImmersiveView.swift` 的 1:1 孿生與房間溢光)。「正在補齊 / 規劃中」的項目已明確標示,以守住誠實護欄(見 `maic-strategy.md` §5.6)。*

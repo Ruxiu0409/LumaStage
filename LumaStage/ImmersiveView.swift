@@ -122,10 +122,11 @@ struct ImmersiveView: View {
                 }
         )
         .preferredSurroundingsEffect(appModel.stageImmersionMode == .roomSpill ? .dim(intensity: 0.45) : nil)
-        // The per-light manual control card is a native `WindowGroup` (declared in LumaStageApp) — it
+        // The per-light manual control card is a single native `Window` (declared in LumaStageApp) — it
         // gets the system move bar and keeps its own position across content updates (no more "jump back
         // to a generated spot" when the user recolours a light). Open it whenever a light becomes
-        // selected and dismiss it when the selection clears. `selectedLightNumber` is already read at
+        // selected and dismiss it when the selection clears; because it's a `Window` (not a `WindowGroup`),
+        // re-opening for a newly selected light reuses the same card instead of stacking duplicates. `selectedLightNumber` is already read at
         // body level (above) so this `.onChange` observes it. The card's own X button calls
         // `appModel.selectLight(number: nil)`, which flows back through here to dismiss the window.
         .onChange(of: appModel.selectedLightNumber, initial: true) { _, newValue in
@@ -561,8 +562,18 @@ struct ImmersiveView: View {
     private static func syncRig(cue: LightingCue?, layout: StageLayout, in root: Entity) {
         guard let cue else { return }
 
+        // The signature includes the aim offset AND the manual position, not just id|model|zone: a
+        // rotation ("Light N turn right 60") or a live drag changes only those, and without them in the
+        // signature the rig would NOT rebuild on the live 1:1 stage, so the beam/head would never re-aim
+        // (or re-seat). Pan/tilt are rounded to whole degrees so sub-degree float noise can't churn the
+        // rig. (v1 hard-cuts on rebuild — no smooth pan animation; see SPEC 13 Caveats.)
         let signature = cue.fixtureGroups
-            .map { "\($0.id)|\($0.renderModel.rawValue)|\($0.zone.rawValue)" }
+            .map {
+                let pan = Int(($0.aimOffset?.panDegrees ?? 0).rounded())
+                let tilt = Int(($0.aimOffset?.tiltDegrees ?? 0).rounded())
+                let manual = $0.manualPosition.map { "\($0.x),\($0.y),\($0.z)" } ?? "-"
+                return "\($0.id)|\($0.renderModel.rawValue)|\($0.zone.rawValue)|\(pan)|\(tilt)|\(manual)"
+            }
             .sorted()
             .joined(separator: ",")
         let expectedName = "\(rigRootPrefix)\(abs(signature.hashValue))"
@@ -593,51 +604,79 @@ struct ImmersiveView: View {
                 count: zoneTotals[fixture.zone] ?? 1,
                 layout: layout
             )
-            addRigFixture(fixture, lightNumber: index + 1, at: placement, to: rig)
+            addRigFixture(fixture, lightNumber: index + 1, at: placement, layout: layout, to: rig)
         }
 
         root.addChild(rig)
     }
 
     /// Instantiates one fixture's visible gear + its (initially dark) spotlight at a placement, plus a
-    /// floating "Light N" label so it can be addressed by voice ("close the light N"). FOH-zone fixtures
-    /// get a floor stand; others hang like a moving head. `apply` drives color/intensity later.
+    /// floating "Light N" label so it can be addressed by voice ("close the light N"). The support policy
+    /// (`RigPlacement.support`) decides physics: a fixture whose resolved position sits under the truss
+    /// footprint and high enough hangs (no post); anything else grows a floor stand up to it — so no light
+    /// ever floats. `apply` drives color/intensity later.
     private static func addRigFixture(
         _ fixture: FixtureGroup,
         lightNumber: Int,
         at placement: (position: Vector3Meters, aim: Vector3Meters),
+        layout: StageLayout,
         to rig: Entity
     ) {
-        // FOH fixtures stand on the floor (label floats above them); everything else — truss-hung heads
-        // and the laser emitter — hangs high, so its label drops BELOW the fixture to clear the truss.
-        let isFrontOfHouse = fixture.zone == .stageFront || fixture.renderModel.defaultMountZone == .stageFront
+        // Physical support from the resolved position (not the zone): floor-stand fixtures grow a post from
+        // the floor and their label floats above; truss-hung fixtures get no post and their label drops
+        // BELOW the fixture to clear the truss. This covers side booms and manually-dragged lights too.
+        let support = RigPlacement.support(forPosition: placement.position, layout: layout)
+
+        // The resting aim = the zone-derived direction rotated by the fixture's user-authored aimOffset
+        // (SPEC 13). A nil/zero offset returns the zone direction unchanged, so existing / AI looks aim
+        // exactly as before (the tilt-doubling trap is avoided by using this NEW field, not fineControl).
+        // This one direction drives the head model, the spotlight orientation, and the effect baseAim so
+        // the geometry and beam stay coherent.
+        let baseDir = scenePoint(placement.aim) - scenePoint(placement.position)
+        let baseUnit = simd_length(baseDir) > 0.0001 ? simd_normalize(baseDir) : SIMD3<Float>(0, 0, -1)
+        let offset = fixture.aimOffset ?? .zero
+        let restingDir = LightEffectSystem.aim(base: baseUnit,
+                                               panDegrees: offset.panDegrees,
+                                               tiltDegrees: offset.tiltDegrees)
 
         if fixture.renderModel == .laser {
             // The laser builds its own emitter + visible aerial beam fan; the spotlight below still adds
-            // a faint colour spill on the surfaces the cone reaches.
+            // a faint colour spill on the surfaces the cone reaches. (v1: the visible beam fan itself uses
+            // a fixed orientation — only the spot cone spill follows the aim offset; see SPEC 13 Caveats.)
             addLaserProjector(name: "laser_\(fixture.id)", to: rig, source: placement.position, beamColorHex: fixture.color.value)
+
+            // If the laser isn't hung under the truss (e.g. moved off it), grow a floor stand up to the
+            // emitter head so it doesn't float. Truss-hung lasers (the default stageBack) get no post.
+            if case .floorStand(let topY) = support {
+                if let post = strut(named: "laser_\(fixture.id)_post",
+                                    from: Vector3Meters(x: placement.position.x, y: 0.0, z: placement.position.z),
+                                    to: Vector3Meters(x: placement.position.x, y: topY, z: placement.position.z),
+                                    radius: 0.035, hex: "#3A3D42", intensity: 0.72) {
+                    post.name = "laser_\(fixture.id)_post"
+                    rig.addChild(post)
+                }
+            }
         } else {
             // Every other type renders as its real model-type geometry (moving head, PAR, strobe bar,
-            // blinder, fresnel…) at ~0.4 m, aimed front-first at the stage. `spot_<id>`/label/pick proxy
-            // below are separate entities and keep driving the actual light.
-            let aimVector = scenePoint(placement.aim) - scenePoint(placement.position)
+            // blinder, fresnel…) at ~0.4 m, aimed front-first along the resting direction. `spot_<id>`/
+            // label/pick proxy below are separate entities and keep driving the actual light.
             let model = FixtureRealityModel.makeStageFixture(
                 for: fixture.renderModel,
                 targetHeight: sceneLength(0.4),
-                aim: simd_length(aimVector) > 0.0001 ? simd_normalize(aimVector) : SIMD3<Float>(0, 0, -1)
+                aim: restingDir
             )
             model.name = "model_\(fixture.id)"
             model.position = scenePoint(placement.position)
             markShadowCasterRecursively(model)
             rig.addChild(model)
 
-            // FOH fixtures should read as "standing" in the audience area: drop a slim post from the floor
-            // up to just under the fixture so it doesn't appear to float. Truss-hung types hang as-is.
-            if isFrontOfHouse {
-                let columnTopY = max(0.3, placement.position.y - 0.18)
+            // Floor-stand fixtures (FOH, side booms, or anything dragged off the truss) read as "standing":
+            // drop a slim post from the floor up to just under the fixture so it doesn't appear to float.
+            // Truss-hung types hang as-is (no post).
+            if case .floorStand(let topY) = support {
                 if let post = strut(named: "model_\(fixture.id)_post",
                                     from: Vector3Meters(x: placement.position.x, y: 0.0, z: placement.position.z),
-                                    to: Vector3Meters(x: placement.position.x, y: columnTopY, z: placement.position.z),
+                                    to: Vector3Meters(x: placement.position.x, y: topY, z: placement.position.z),
                                     radius: 0.035, hex: "#3A3D42", intensity: 0.72) {
                     post.name = "model_\(fixture.id)_post"
                     rig.addChild(post)
@@ -650,10 +689,11 @@ struct ImmersiveView: View {
             to: rig,
             from: placement.position,
             aim: placement.aim,
+            restingAimDirection: restingDir,
             beamAngleDegrees: fixture.effectiveFineControl.beamAngleDegrees
         )
 
-        addLightLabel(number: lightNumber, near: placement.position, mountedAbove: isFrontOfHouse, to: rig)
+        addLightLabel(number: lightNumber, near: placement.position, mountedAbove: support.isFloorStand, to: rig)
         addLightPickTarget(
             number: lightNumber,
             model: fixture.renderModel,
@@ -1097,6 +1137,7 @@ struct ImmersiveView: View {
         to root: Entity,
         from sourceModel: Vector3Meters,
         aim aimModel: Vector3Meters,
+        restingAimDirection: SIMD3<Float>? = nil,
         beamAngleDegrees: Double
     ) -> SpotLight {
         let spot = SpotLight()
@@ -1117,11 +1158,15 @@ struct ImmersiveView: View {
 
         let position = scenePoint(sourceModel)
         spot.position = position
-        let direction = scenePoint(aimModel) - position
+        // Prefer the caller's resting direction (the zone aim already rotated by the fixture's aimOffset —
+        // SPEC 13), falling back to the raw zone aim (position → target) when none is supplied. The dynamic
+        // effect system sweeps AROUND this baseAim, so a steady cue holds the beam exactly at restingDir.
+        let direction = restingAimDirection ?? (scenePoint(aimModel) - position)
         if simd_length(direction) > 0.0001 {
-            // A spotlight emits along its local -Z; aim that axis at the stage target.
+            // A spotlight emits along its local -Z; aim that axis along the resting direction. Use the
+            // shared `lookOrientation` so the geometry aim, the spotlight, and the effect math all agree.
             let aim = simd_normalize(direction)
-            spot.orientation = orientation(from: SIMD3<Float>(0, 0, -1), to: aim)
+            spot.orientation = LightEffectSystem.lookOrientation(forward: aim)
             // Capture the resting aim so the dynamic-effects system can sweep around it (effect kind +
             // base lumens are filled in per cue by `apply`).
             spot.components.set(LightEffectComponent(effect: .none, baseAim: aim, baseLumens: 0))
@@ -1251,12 +1296,18 @@ struct ImmersiveView: View {
     private static let laserBaseDirection = simd_normalize(SIMD3<Float>(0, -0.35, 1))
     private static let laserFanHalfAngle: Float = 30 * .pi / 180
     private static let laserBeamCount = 7
+    /// Model-space beam throw length and core radius (converted to scene units via `sceneLength`). The
+    /// core is thin so it reads as a laser pencil, not a rod; the sheath/particles carry the volume.
+    private static let laserBeamLengthMeters = 12.0
+    private static let laserCoreRadiusMeters = 0.01
 
-    /// Builds a laser projector: a compact emitter head on the upstage truss plus a fan of razor-thin,
-    /// glowing aerial beams shooting out over the stage. The beams are `UnlitMaterial` rods so they
-    /// read as their own light source — a real laser beam doesn't depend on the room being lit — and
-    /// `apply` recolors / toggles them per cue via `updateLaserProjector`. This is the show-stopper
-    /// fixture: visible beams in the air, not just a cone landing on a surface.
+    /// Builds a laser projector: a compact emitter head on the upstage truss plus a fan of volumetric
+    /// aerial beams shooting out over the stage. Each beam is two co-axial layers — a thin white-hot
+    /// `UnlitMaterial` core and a soft low-alpha glow sheath — so it reads as light in the air, not a
+    /// solid rod. The layers are their own light source (a real laser doesn't depend on the room being
+    /// lit); `apply` recolors / toggles them per cue via `updateLaserProjector`. This is the show-stopper
+    /// fixture: visible beams in the air, not just a cone landing on a surface. (An earlier third layer
+    /// of additive haze particles was removed — it read as a weird off-axis speckle at 1:1 scale.)
     private static func addLaserProjector(name: String, to rig: Entity, source: Vector3Meters, beamColorHex: String) {
         let container = Entity()
         container.name = name
@@ -1279,22 +1330,39 @@ struct ImmersiveView: View {
         aperture.position = origin + laserBaseDirection * sceneLength(0.18)
         container.addChild(aperture)
 
-        // The beam fan: thin Unlit rods, each laid along the throw then yawed about vertical.
-        let beamLength = sceneLength(12)
-        let beamRadius = sceneLength(0.02)
+        // The beam fan. Each beam is two co-axial layers so it reads as light in the air, not a solid
+        // rod: (1) a thin, near-white-hot core, and (2) a wider low-alpha glow sheath that bleeds colour
+        // outward and softens the silhouette. Both share the beam's orientation (the cylinder mesh's
+        // local +Y == the beam direction).
+        let config = LaserScatterConfig.default
+        let beamLength = sceneLength(laserBeamLengthMeters)
+        let coreRadius = sceneLength(laserCoreRadiusMeters)
+        let sheathRadius = sceneLength(LaserScatterMath.sheathRadius(coreRadiusMeters: laserCoreRadiusMeters, config: config))
         for index in 0..<laserBeamCount {
             let fraction = laserBeamCount <= 1 ? 0 : Float(index) / Float(laserBeamCount - 1) * 2 - 1   // -1...1
             let yaw = fraction * laserFanHalfAngle
             let beamOrientation = simd_quatf(angle: yaw, axis: SIMD3<Float>(0, 1, 0)) * throwOrientation
-            let direction = simd_act(beamOrientation, SIMD3<Float>(0, 1, 0))
-            let beam = ModelEntity(
-                mesh: .generateCylinder(height: beamLength, radius: beamRadius),
-                materials: [UnlitMaterial(color: laserBeamUIColor(hex: beamColorHex, intensity: 1))]
+            let center = origin + simd_act(beamOrientation, SIMD3<Float>(0, 1, 0)) * (beamLength / 2)
+
+            // Layer 1: the thin, near-white-hot core.
+            let core = ModelEntity(
+                mesh: .generateCylinder(height: beamLength, radius: coreRadius),
+                materials: [UnlitMaterial(color: laserCoreUIColor(hex: beamColorHex, intensity: 1))]
             )
-            beam.name = "\(name)_beam_\(index)"
-            beam.orientation = beamOrientation
-            beam.position = origin + direction * (beamLength / 2)
-            container.addChild(beam)
+            core.name = "\(name)_beam_\(index)"
+            core.orientation = beamOrientation
+            core.position = center
+            container.addChild(core)
+
+            // Layer 2: the soft translucent glow sheath.
+            let sheath = ModelEntity(
+                mesh: .generateCylinder(height: beamLength, radius: sheathRadius),
+                materials: [UnlitMaterial(color: laserSheathUIColor(hex: beamColorHex, intensity: 1))]
+            )
+            sheath.name = "\(name)_sheath_\(index)"
+            sheath.orientation = beamOrientation
+            sheath.position = center
+            container.addChild(sheath)
         }
 
         rig.addChild(container)
@@ -1307,22 +1375,38 @@ struct ImmersiveView: View {
         return UIColor(red: rgb.red, green: rgb.green, blue: rgb.blue, alpha: 0.85)
     }
 
-    /// Per-cue update for a laser: recolor the fan to the resolved cue colour and hide the beams when
-    /// the fixture is effectively off (the emitter body stays). The cone spilling colour onto surfaces
-    /// is still driven by the fixture's `spot_<id>` in `updateSpotLight`.
+    /// The white-hot beam core colour (cue hue lerped toward white). See `LaserScatterMath.coreRGBA`.
+    private static func laserCoreUIColor(hex: String, intensity: Double) -> UIColor {
+        let c = LaserScatterMath.coreRGBA(hex: hex, intensity: intensity)
+        return UIColor(red: c.red, green: c.green, blue: c.blue, alpha: c.alpha)
+    }
+
+    /// The low-alpha glow-sheath colour (saturated cue hue). See `LaserScatterMath.sheathRGBA`.
+    private static func laserSheathUIColor(hex: String, intensity: Double) -> UIColor {
+        let c = LaserScatterMath.sheathRGBA(hex: hex, intensity: intensity)
+        return UIColor(red: c.red, green: c.green, blue: c.blue, alpha: c.alpha)
+    }
+
+    /// Per-cue update for a laser: recolor both beam layers (core + sheath) to the resolved cue colour
+    /// and hide the beams when the fixture is effectively off (the emitter body stays). The cone spilling
+    /// colour onto surfaces is still driven by the fixture's `spot_<id>` in `updateSpotLight`.
     private static func updateLaserProjector(named name: String, in root: Entity, colorHex: String, intensity: Double) {
         guard let container = root.findEntity(named: name) else {
             return
         }
 
-        let beamsVisible = intensity > 0.03
-        let beamColor = laserBeamUIColor(hex: colorHex, intensity: intensity)
+        let beamsVisible = LaserScatterMath.beamsVisible(intensity)
+        let coreColor = laserCoreUIColor(hex: colorHex, intensity: intensity)
+        let sheathColor = laserSheathUIColor(hex: colorHex, intensity: intensity)
         let apertureColor = laserBeamUIColor(hex: colorHex, intensity: max(0.3, intensity))
         for child in container.children {
             guard let model = child as? ModelEntity else { continue }
             if child.name.contains("_beam_") {
                 child.isEnabled = beamsVisible
-                model.model?.materials = [UnlitMaterial(color: beamColor)]
+                model.model?.materials = [UnlitMaterial(color: coreColor)]
+            } else if child.name.contains("_sheath_") {
+                child.isEnabled = beamsVisible
+                model.model?.materials = [UnlitMaterial(color: sheathColor)]
             } else if child.name.hasSuffix("_aperture") {
                 child.isEnabled = beamsVisible
                 model.model?.materials = [UnlitMaterial(color: apertureColor)]

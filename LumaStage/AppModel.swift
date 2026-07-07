@@ -157,9 +157,19 @@ class AppModel {
     @ObservationIgnored
     private let songAnalyzer: any SongAnalyzing
 
+    /// Injectable 音樂資料庫瀏覽邊界（SPEC 12）。預設為平台實作 `MusicKitSongLibrary`；測試 / 預覽注入
+    /// `LoopbackSongLibrary`。讓使用者從裝置資料庫挑曲，解析到可讀檔案 URL 後餵進既有的 `importSong` 管線。
+    @ObservationIgnored
+    private let songLibrary: any SongLibraryBrowsing
+
     /// Playback + render-thread beat clock for music-synced shows.
     @ObservationIgnored
     let musicSyncEngine = MusicSyncEngine()
+
+    /// Drives cue-list auto-playback (SPEC 16) — the non-music "press 播放 and the show runs itself" path.
+    /// A hold-driven timer that follows cue to cue; `AppModel` supplies the advance logic via `onFollow`.
+    @ObservationIgnored
+    let cuePlaybackEngine = CuePlaybackEngine()
 
     /// The most recent analysis + plan, retained so `setRigConstraint` can rebuild the show in place.
     @ObservationIgnored
@@ -179,6 +189,9 @@ class AppModel {
     var isMusicShowActive = false
     /// Mirrors `musicSyncEngine.isPlaying` so the UI can observe it on `AppModel`.
     var isMusicPlaying = false
+    /// Whether cue-list auto-playback is running (SPEC 16). Distinct from `isMusicPlaying`: the two are
+    /// mutually exclusive drivers of cue advance (a music show uses `musicSyncEngine`).
+    var isPlayingCueList = false
     /// The analyzed tempo of the loaded song (nil when no tempo could be derived / no song loaded).
     var musicBPM: Double?
     /// Title of the loaded song (for the music status row).
@@ -195,11 +208,13 @@ class AppModel {
 
     init(
         aiClient: (any LightingLookGenerating)? = nil,
-        songAnalyzer: (any SongAnalyzing)? = nil
+        songAnalyzer: (any SongAnalyzing)? = nil,
+        songLibrary: (any SongLibraryBrowsing)? = nil
     ) {
         let resolvedClient = aiClient ?? Self.makeDefaultLightingClient()
         self.aiClient = resolvedClient
         self.songAnalyzer = songAnalyzer ?? MusicUnderstandingService()
+        self.songLibrary = songLibrary ?? MusicKitSongLibrary()
         modelAvailability = resolvedClient.availability
     }
 
@@ -257,16 +272,14 @@ class AppModel {
         stageState.selectedCueIndex + 1
     }
 
-    /// The current look's DMX patch sheet — the load-in paperwork (fixtures get real universe/address
-    /// assigned as it's built). Computed on demand; also the source for the PDF export.
-    var patchSheet: LightingPatchSheet {
-        LightingPatchSheet.make(from: lightingLook)
-    }
-
     /// What the relight debug panel renders: how the selected cue's fixtures map onto the scene
     /// (color/intensity/beam per fixture, and which roles actually light the stage). `nil` with no cue.
+    /// Resolves through the SAME manual-override + group-master layers the renderer applies, so the panel
+    /// reflects hands-on edits (pinch/card/voice/fader rides) — not just the raw AI cue values.
     var relightDebugSnapshot: RelightDebugSnapshot? {
-        selectedCue.map(RelightDebugSnapshot.make(from:))
+        selectedCue.map { cue in
+            RelightDebugSnapshot.make(from: cue, overrides: lightOverrides, groupMasters: groupMasterByLight())
+        }
     }
 
     var generationStatus: String {
@@ -459,7 +472,18 @@ class AppModel {
     /// the same fixture sits at the same spot across the whole show — then re-validates + persists.
     func moveFixture(id: String, toX x: Double, y: Double, z: Double) {
         var look = stageState.lightingLook
-        let position = FixturePosition(x: x, y: y, z: z)
+        // 規定：雷射不可被拖離桁架 — 把拖曳位置夾回 truss footprint 再存（與 RigPlacement 共用同一套規則，
+        // 所以在 1:1 舞台與桌上模型上雷射都會彈回桁架上）。
+        let isLaser = look.cues.contains { cue in
+            cue.fixtureGroups.contains { $0.id == id && RigPlacement.mountsOnTrussOnly($0.renderModel) }
+        }
+        let position: FixturePosition
+        if isLaser {
+            let clamped = RigPlacement.clampedToTruss(Vector3Meters(x: x, y: y, z: z), layout: stageLayout)
+            position = FixturePosition(x: clamped.x, y: clamped.y, z: clamped.z)
+        } else {
+            position = FixturePosition(x: x, y: y, z: z)
+        }
         var found = false
         for cueIndex in look.cues.indices {
             if let fixtureIndex = look.cues[cueIndex].fixtureGroups.firstIndex(where: { $0.id == id }) {
@@ -469,6 +493,33 @@ class AppModel {
         }
         guard found else {
             fail("找不到要移動的燈具。")
+            return
+        }
+        do {
+            try stageState.replaceLightingLook(look)
+            persistCurrentProjectState()
+        } catch {
+            fail(error.localizedDescription)
+        }
+    }
+
+    /// Rotates the aim of the fixture `id` in EVERY cue by a pan/tilt delta — rig identity, so the same
+    /// fixture keeps one orientation across the whole show — then re-validates + persists. Mirrors
+    /// `moveFixture`: the delta accumulates onto the fixture's `aimOffset` (clamped by `adding`), and the
+    /// renderer folds that offset onto the zone-derived resting aim so the head geometry + beam re-aim.
+    func rotateFixture(id: String, panDelta: Double, tiltDelta: Double) {
+        var look = stageState.lightingLook
+        var found = false
+        for cueIndex in look.cues.indices {
+            if let fixtureIndex = look.cues[cueIndex].fixtureGroups.firstIndex(where: { $0.id == id }) {
+                let current = look.cues[cueIndex].fixtureGroups[fixtureIndex].aimOffset ?? .zero
+                look.cues[cueIndex].fixtureGroups[fixtureIndex].aimOffset =
+                    current.adding(panDelta: panDelta, tiltDelta: tiltDelta)
+                found = true
+            }
+        }
+        guard found else {
+            fail("找不到要旋轉的燈具。")
             return
         }
         do {
@@ -492,16 +543,18 @@ class AppModel {
 
         let id = "fixture_\(UUID().uuidString.prefix(6).lowercased())"
         let role = model.derivedRole
+        // 規定：雷射只能掛在上舞台桁架上，忽略呼叫端傳入的 zone（新增燈具面板一律傳 .stageFront）。
+        let effectiveZone = RigPlacement.mountsOnTrussOnly(model) ? .stageBack : zone
         let number = largestCueCount + 1
         let newFixture = FixtureGroup(
             id: id,
             name: "燈具 \(number)",
             role: role,
-            zone: zone,
+            zone: effectiveZone,
             enabled: true,
             intensity: 0.6,
             color: FixtureColor(mode: .rgb, value: "#FFFFFF"),
-            fineControl: .default(role: role, zone: zone),
+            fineControl: .default(role: role, zone: effectiveZone),
             model: model,
             manualPosition: nil
         )
@@ -639,12 +692,14 @@ class AppModel {
     /// into the playback engine, and arms cue-by-section advance. The deterministic backbone (analysis →
     /// `ShowPlan` → `MusicShowBuilder`) never needs the AI, so the show is built even if generation is
     /// unavailable. Any failure surfaces through the existing `fail(...)`.
-    func importSong(url: URL) async {
+    func importSong(url: URL, title overrideTitle: String? = nil) async {
         // A file-picker URL is usually security-scoped; bracket the access so analysis can read it.
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
 
-        let title = url.deletingPathExtension().lastPathComponent
+        // 資料庫項目的 assetURL（`ipod-library://…`）檔名無意義，所以選曲路徑會傳真實 title 進來；
+        // 檔案瀏覽器路徑沒傳，就沿用既有的「去副檔名取檔名」行為。
+        let title = overrideTitle ?? url.deletingPathExtension().lastPathComponent
         do {
             let analysis = try await songAnalyzer.analyze(url: url, title: title)
             try buildAndLoadShow(from: analysis, audioURL: url)
@@ -653,25 +708,84 @@ class AppModel {
         }
     }
 
+    /// SPEC 12 — 從裝置音樂資料庫挑一首歌：解析其可讀取檔案 URL，再餵進既有的 `importSong` 管線
+    /// （帶上資料庫的真實 title）。受 DRM 保護 / 未下載的串流曲目沒有可讀 URL，會以繁中說明優雅拒絕。
+    func pickLibrarySong(_ item: SongLibraryItem) async {
+        do {
+            let url = try await songLibrary.resolvePlayableURL(for: item)
+            await importSong(url: url, title: item.title)
+        } catch SongSourceError.protected {
+            fail("此曲受保護或尚未下載到本機，無法在裝置端分析；請先在「音樂」App 下載，或改用未受保護的本機檔案。")
+        } catch SongSourceError.unauthorized {
+            fail("沒有音樂資料庫存取權限，請在設定中開啟。")
+        } catch {
+            fail("無法讀取這首歌：\(error.localizedDescription)")
+        }
+    }
+
+    /// 薄包裝，讓選曲 view 透過 `AppModel` 取用資料庫，而不直接持有 `MusicKitSongLibrary`（注入慣例）。
+    func authorizeMusicLibrary() async -> Bool {
+        await songLibrary.authorize()
+    }
+
+    /// 列出資料庫近期曲目（給選曲 view 的初始清單）。
+    func browseLibrary(limit: Int = 50) async -> [SongLibraryItem] {
+        await songLibrary.recentSongs(limit: limit)
+    }
+
+    /// 依關鍵字搜尋資料庫曲目（給選曲 view 的搜尋框）。
+    func searchLibrary(_ query: String) async -> [SongLibraryItem] {
+        await songLibrary.search(query)
+    }
+
     /// Same pipeline as `importSong`, but using the built-in pre-analyzed demo song — the zero-fail stage
     /// path. The demo analyzer ships its analysis as bundled JSON (no live framework run), so the show is
-    /// always built. The demo has no playable audio file, so this loads the engine clock-only: the look is
-    /// applied and the beat grid + cue advance still drive the visuals, just without audio playback.
+    /// always built. Audio is a fully-original backing track synthesized on-device from that same analysis
+    /// (`DemoTrackSynth`, beat-locked to the exact grid + sections) — so the demo actually plays sound AND
+    /// cues auto-advance on the section boundaries, just like an imported file. If synthesis/caching fails
+    /// for any reason, it falls back to the silent clock-only path (visuals still beat-lock; manual GO).
     func useBuiltInDemoSong() async {
         do {
             let analysis = try await CachedSongAnalyzer().analyze(url: URL(fileURLWithPath: ""), title: "")
-            try buildAndLoadShow(from: analysis, audioURL: nil)
+            let audioURL = await Self.demoAudioURL(for: analysis)   // nil ⇒ silent clock-only fallback
+            try buildAndLoadShow(from: analysis, audioURL: audioURL)
         } catch {
             fail(error.localizedDescription)
         }
     }
 
+    /// Render (once, cached) the synthesized demo backing track to a WAV in Caches and return its file URL.
+    /// The synth is deterministic, so a stable filename lets us reuse the file across launches instead of
+    /// re-rendering ~150s of audio every time. The CPU-bound render runs off the main actor. Returns nil on
+    /// any failure so `useBuiltInDemoSong` degrades gracefully to the silent clock-only demo.
+    private static func demoAudioURL(for analysis: SongAnalysis) async -> URL? {
+        let fileManager = FileManager.default
+        guard let caches = try? fileManager.url(
+            for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true
+        ) else { return nil }
+        // Version the name so a future synth change invalidates the cache without a stale file lingering.
+        let url = caches.appendingPathComponent("luma-demo-track-v1.wav")
+        if fileManager.fileExists(atPath: url.path) { return url }
+
+        // Render AND write the ~13 MB WAV off the main actor — both the CPU-bound synthesis and the atomic
+        // disk write stay off-main so tapping the demo button never hitches the UI on a cache miss.
+        return await Task.detached(priority: .userInitiated) {
+            let data = DemoTrackSynth.wavData(for: analysis)
+            do {
+                try data.write(to: url, options: .atomic)
+                return url
+            } catch {
+                return nil
+            }
+        }.value
+    }
+
     /// Shared backbone for `importSong` / `useBuiltInDemoSong`: builds the show from an analysis, applies it,
-    /// and arms the engine. With audio, `play()` runs the player, beat-locks the visuals, and auto-advances
-    /// cues on the section boundaries. With `audioURL == nil` (the demo), there is no player to tick, so
-    /// `playMusicShow` anchors the beat clock directly (visuals still beat-lock) but cues do not auto-advance
-    /// — the show holds its first cue and the user GOes manually. Throws on look-build / validation failure
-    /// (caught by the callers → `fail`).
+    /// and arms the engine. When a decodable audio file loads, `play()` runs the player, beat-locks the
+    /// visuals, and auto-advances cues on the section boundaries. When no audio loads (a nil URL, or a
+    /// non-nil URL the player can't decode), the show falls back to clock-only: `playMusicShow` anchors the
+    /// beat clock directly (visuals still beat-lock) but cues do not auto-advance — the show holds its first
+    /// cue and the user GOes manually. Throws on look-build / validation failure (caught by the callers → `fail`).
     private func buildAndLoadShow(from analysis: SongAnalysis, audioURL: URL?) throws {
         let plan = ShowPlan.make(from: analysis)
         let look = try MusicShowBuilder.buildLook(
@@ -696,17 +810,15 @@ class AppModel {
         lastPlan = plan
         let clock = analysis.makeBeatClock()
         lastClock = clock
-        musicShowIsClockOnly = (audioURL == nil)
 
-        if let audioURL {
-            musicSyncEngine.load(url: audioURL, clock: clock)
-        } else {
-            // No playable audio (built-in demo). Load with an empty URL: the player creation fails and the
-            // engine settles into a safe non-playing state. `playMusicShow` then anchors the beat clock
-            // directly so the visuals still beat-lock; cue auto-advance needs the audio tick, so for the
-            // demo the show holds its first cue (the user can still GO through cues manually).
-            musicSyncEngine.load(url: URL(fileURLWithPath: ""), clock: clock)
-        }
+        // Load first, then derive clock-only from whether a decodable player ACTUALLY loaded — not from the
+        // URL's nil-ness. A nil URL (or an empty one) fails player creation and lands clock-only, but so does
+        // a non-nil-but-unreadable URL (stale/corrupt cached demo WAV, or a file `AVURLAsset` could analyze
+        // but `AVAudioPlayer` can't decode). Keying the fallback on load success means such a case still
+        // beat-locks the visuals via `playMusicShow`'s clock anchor instead of freezing into a dead, silent
+        // show with no player tick.
+        musicSyncEngine.load(url: audioURL ?? URL(fileURLWithPath: ""), clock: clock)
+        musicShowIsClockOnly = !musicSyncEngine.hasLoadedPlayer
         musicSyncEngine.setSectionStarts(plan.cues.map(\.startTime))
         musicSyncEngine.onSectionBoundary = { [weak self] index in
             self?.selectCueAtSectionIndex(index)
@@ -727,6 +839,7 @@ class AppModel {
     /// directly so the render-thread effect system still beat-locks even though no audio plays.
     func playMusicShow() {
         guard isMusicShowActive else { return }
+        stopCueList()   // mutually exclusive drivers of cue advance — never let both run at once
         musicSyncEngine.play()
         if musicShowIsClockOnly, let clock = lastClock {
             // The audio engine has no player to start; anchor the shared beat clock ourselves so the visuals
@@ -755,6 +868,73 @@ class AppModel {
         selectCue(id: stack[index].id)
     }
 
+    // MARK: - Cue-list auto-playback (SPEC 16 — GO 升為「播放」)
+
+    /// Whether a show is auto-running (music show OR cue list) — the unified state the headset play/stop
+    /// control reflects, so one button reads correctly whichever kind of show is loaded.
+    var isShowRunning: Bool { isMusicPlaying || isPlayingCueList }
+
+    /// Starts cue-list auto-playback: each cue holds for its follow time, then follows to the next, running
+    /// once to the last cue and stopping there (manual GO still wraps). No-op — with friendly feedback —
+    /// when a music show drives the cues instead, or the look has too few cues to advance.
+    func playCueList() {
+        guard !isMusicShowActive else {
+            aiUnderstoodCommand = "目前是音樂演出，請用音樂面板的播放控制。"
+            conversationState = .explaining
+            return
+        }
+        guard CuePlayback.canAutoPlay(cueCount: cues.count) else {
+            aiUnderstoodCommand = "至少需要兩個場景才能自動播放。"
+            conversationState = .explaining
+            return
+        }
+
+        cuePlaybackEngine.onFollow = { [weak self] in self?.followToNextCueDuringPlayback() }
+        isPlayingCueList = true
+        cuePlaybackEngine.start(initialHold: CuePlayback.holdDuration(for: cues[stageState.selectedCueIndex]))
+
+        aiUnderstoodCommand = "開始播放，共 \(cues.count) 個場景會自動依序切換。"
+        lastExplanation = LightingExplanation(
+            term: "播放走場",
+            plainText: "播放會像真實燈控台的 cue list，依每個場景的停留時間自動 follow 到下一個，一路跑完整場。播放中你仍可手動 GO 跳到下一個場景。",
+            actionSummary: aiUnderstoodCommand
+        )
+        conversationState = .explaining
+        lastError = nil
+        narrateIfEnabled(aiUnderstoodCommand)
+    }
+
+    /// Stops cue-list auto-playback, holding the current cue. Silent + idempotent so reset paths and the
+    /// music-show takeover can call it without clobbering their own status text.
+    func stopCueList() {
+        cuePlaybackEngine.stop()
+        isPlayingCueList = false
+    }
+
+    /// The headset/voice unified play-or-stop entry point: drives the music show when one is loaded,
+    /// otherwise the cue list.
+    func togglePlayback() {
+        if isMusicShowActive {
+            if isMusicPlaying { stopMusicShow() } else { playMusicShow() }
+        } else {
+            if isPlayingCueList { stopCueList() } else { playCueList() }
+        }
+    }
+
+    /// `cuePlaybackEngine.onFollow`: advance to the next cue and return its hold to schedule the following
+    /// follow, or `nil` to stop (reached the last cue — no wrap, so the show ends holding it).
+    private func followToNextCueDuringPlayback() -> Double? {
+        guard isPlayingCueList else { return nil }
+        guard let next = CuePlayback.nextIndex(after: stageState.selectedCueIndex, count: cues.count) else {
+            isPlayingCueList = false
+            aiUnderstoodCommand = "已播放完整場演出，停在最後一個場景。"
+            conversationState = .explaining
+            return nil
+        }
+        selectCue(id: cues[next].id)
+        return CuePlayback.holdDuration(for: cues[next])
+    }
+
     /// Updates the locked-rig constraint: stores it on the model, persists it to the current project, and
     /// re-enforces it on the current look immediately so the user sees the effect at once.
     func setRigConstraint(_ constraint: RigConstraint) {
@@ -766,7 +946,8 @@ class AppModel {
         }
 
         // Re-enforce on the current look right now (idempotent, so re-applying a compliant look is a no-op).
-        let enforced = constraint.enforce(on: stageState.lightingLook)
+        // Keep the laser-on-truss rule too — a model remap could otherwise place a laser off the truss.
+        let enforced = constraint.enforce(on: stageState.lightingLook).enforcingTrussMountedLasers()
         do {
             try stageState.replaceLightingLook(enforced)
             lightOverrides = [:]
@@ -788,6 +969,10 @@ class AppModel {
     /// the observable music state. Called on project open/close and before a manual generation so a stale
     /// show never lingers. The applied look is left untouched (the next caller replaces it).
     func clearMusicShow() {
+        // Cue-list auto-playback is the non-music peer driver of cue advance (SPEC 16); this method is the
+        // shared teardown hook at every reset point (openProject/closeProject/generate), so end it here too
+        // — a new project/generation replaces the cues out from under a running show. Idempotent.
+        stopCueList()
         musicSyncEngine.stop()
         musicSyncEngine.onSectionBoundary = nil
         // Clock-only demo anchors the source itself, so make sure it's cleared on teardown.
@@ -884,7 +1069,9 @@ class AppModel {
             conversationState = .applying
             // The locked-rig constraint applies to AI generation too (idempotent / no-op when
             // unconstrained), so a manual design still obeys the user's declared equipment profile.
-            let constrained = rigConstraint.enforce(on: result.look)
+            // Then force every laser onto the upstage truss (規定：雷射只能在 Truss 上) — this also
+            // catches the edge case where a constraint remap turns a floor-zoned fixture into a laser.
+            let constrained = rigConstraint.enforce(on: result.look).enforcingTrussMountedLasers()
             try stageState.replaceLightingLook(constrained)
             // A manual generation replaces any music-synced show that was loaded.
             clearMusicShow()
@@ -945,6 +1132,29 @@ class AppModel {
             return
         }
 
+        // A rotation edits the fixture's persistent aim offset in the LOOK (rig identity, across all
+        // cues) — like `.setRoleColor` above, it goes through `replaceLightingLook` + persist rather than
+        // the override layer, so it survives cue switches and project reopen. Fixture id = the number-th
+        // fixture in cue order (`applyLightCommand`'s range guard already validated `number`).
+        if case .rotate(let number, let pan, let tilt) = command {
+            guard let id = selectedCue?.fixtureGroups[number - 1].id else {
+                fail("找不到第 \(number) 盞燈。")
+                return
+            }
+            rotateFixture(id: id, panDelta: pan, tiltDelta: tilt)
+            guard lastError == nil else { return }   // rotateFixture reported a failure
+            let summary = Self.describe(command)
+            aiUnderstoodCommand = summary
+            lastExplanation = LightingExplanation(
+                term: "燈具朝向",
+                plainText: "旋轉指令會改變單一燈具的朝向（水平左右或垂直俯仰），並在每個場景中保持一致，不會重新生成整個燈光。",
+                actionSummary: summary
+            )
+            conversationState = .explaining
+            narrateIfEnabled(summary)
+            return
+        }
+
         switch command {
         case .close(let number):
             lightOverrides[number, default: LightOverride()].isOff = true
@@ -965,6 +1175,8 @@ class AppModel {
             lightOverrides.removeAll()
         case .setRoleColor:
             return   // handled above (targeted cue patch, returns early); unreachable here.
+        case .rotate:
+            return   // handled above (persistent aim-offset edit, returns early); unreachable here.
         }
 
         let summary = Self.describe(command)
@@ -988,6 +1200,15 @@ class AppModel {
         case .previousCue: goToPreviousCue()
         case .addCue: appendCue()
         case .readExplanation: readCurrentExplanationAloud()
+        case .playShow:
+            // Route by what's loaded: a music show plays its audio + beat-locked advance; otherwise the
+            // cue list auto-plays. Both surface their own feedback (playCueList speaks; music is audible).
+            if isMusicShowActive { playMusicShow() } else { playCueList() }
+        case .stopShow:
+            if isMusicShowActive { stopMusicShow() } else { stopCueList() }
+            aiUnderstoodCommand = "已停止播放。"
+            conversationState = .explaining
+            narrateIfEnabled(aiUnderstoodCommand)
         }
     }
 
@@ -995,11 +1216,20 @@ class AppModel {
     /// it over that cue's transition (the renderer relights whenever the selected cue changes).
     func goToNextCue() {
         announce(stageState.goToNextCue(), verb: "前往")
+        rescheduleCuePlaybackIfPlaying()
     }
 
     /// GO back: step the cue stack to the previous cue (wraps at the start).
     func goToPreviousCue() {
         announce(stageState.goToPreviousCue(), verb: "返回")
+        rescheduleCuePlaybackIfPlaying()
+    }
+
+    /// After a manual GO taken mid-playback, restart the follow countdown from the now-current cue so the
+    /// operator's jump doesn't leave a stale hold running (SPEC 16 — "playing 中仍可手動 GO").
+    private func rescheduleCuePlaybackIfPlaying() {
+        guard isPlayingCueList else { return }
+        cuePlaybackEngine.start(initialHold: CuePlayback.holdDuration(for: cues[stageState.selectedCueIndex]))
     }
 
     private func announce(_ cue: LightingCue, verb: String) {
@@ -1216,6 +1446,15 @@ class AppModel {
         case .setColor(let number, let hex): return "已將 \(StageLightLabel.displayName(number: number)) 設為 \(hex)"
         case .setIntensity(let number, let fraction): return "已將 \(StageLightLabel.displayName(number: number)) 設為 \(Int((fraction * 100).rounded()))%"
         case .setRoleColor(let role, let hex): return "已將目前場景的\(role.displayName)改為 \(hex)"
+        case .rotate(let number, let pan, let tilt):
+            let label = StageLightLabel.displayName(number: number)
+            if pan != 0 {
+                return "已將 \(label) \(pan > 0 ? "向右轉" : "向左轉") \(Int(abs(pan)))°"
+            }
+            if tilt != 0 {
+                return "已將 \(label) \(tilt > 0 ? "向上仰" : "向下俯") \(Int(abs(tilt)))°"
+            }
+            return "已調整 \(label) 的朝向"
         case .allOff: return "已關閉所有燈光"
         case .resetAll: return "已將所有燈光重置為目前的燈光"
         }
@@ -1265,6 +1504,9 @@ class AppModel {
     func setFixtureIntensity(id fixtureId: String, value: Double) {
         do {
             try stageState.patchSelectedCue(.fixtureIntensity(fixtureId: fixtureId, intensity: value))
+            // Authoritative console edit: drop any stale manual intensity override on this light so the
+            // new cue level actually renders (else `LightOverride.resolved` masks it and the light doesn't move).
+            supersedeManualOverride(fixtureId: fixtureId, clearing: .intensity)
             aiUnderstoodCommand = "已將所選燈具亮度設為 \(Int(round(value * 100)))%"
             lastExplanation = stageState.lightingLook.explanation
             conversationState = .explaining
@@ -1277,6 +1519,9 @@ class AppModel {
     func setFixtureColor(id fixtureId: String, hexColor: String) {
         do {
             try stageState.patchSelectedCue(.fixtureColor(fixtureId: fixtureId, hexColor: hexColor))
+            // Authoritative console edit: drop any stale manual colour override on this light so the new
+            // cue colour actually renders instead of being masked by the override.
+            supersedeManualOverride(fixtureId: fixtureId, clearing: .color)
             aiUnderstoodCommand = "已將所選燈具顏色設為 \(hexColor)"
             lastExplanation = stageState.lightingLook.explanation
             conversationState = .explaining
@@ -1284,6 +1529,17 @@ class AppModel {
         } catch {
             fail(error.localizedDescription)
         }
+    }
+
+    /// Supersedes one component of a fixture's manual override after an authoritative cue-layer edit to the
+    /// same light (iPad panel or a direct per-fixture edit). Without this, a light still carrying an override
+    /// from an in-headset pinch/voice/card tweak would have that override mask the console edit at resolve
+    /// time and the on-stage spotlight would never change — the "iPad edits don't reach the lights" bug.
+    private func supersedeManualOverride(fixtureId: String, clearing component: OverrideComponent) {
+        guard let index = selectedCue?.fixtureGroups.firstIndex(where: { $0.id == fixtureId }) else { return }
+        let number = index + 1
+        guard let existing = lightOverrides[number] else { return }
+        lightOverrides[number] = existing.superseded(clearing: component)
     }
 
     func setFixtureFineControl(id fixtureId: String, control: FixtureFineControl) {

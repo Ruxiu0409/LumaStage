@@ -74,6 +74,11 @@ final class MusicSyncEngine {
     /// The beat grid handed to `load`; `nil` means free-running (no beat lock).
     private(set) var clock: MusicBeatClock?
 
+    /// Whether a decodable audio file is currently loaded (i.e. `play()` can produce sound). False after a
+    /// failed `load` — a bad/corrupt/undecodable URL leaves `player == nil`. Callers use this to decide the
+    /// clock-only fallback from actual load success rather than guessing from the URL they passed in.
+    var hasLoadedPlayer: Bool { player != nil }
+
     /// Fired once, in order, each time playback crosses a section start. The argument is the section index.
     /// Owner C wires this to `AppModel` cue advance.
     var onSectionBoundary: ((Int) -> Void)?

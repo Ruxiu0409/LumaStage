@@ -475,6 +475,11 @@ struct TabletopStageEditorView: View {
             if appModel.immersiveSpaceState == .open {
                 appModel.immersiveSpaceState = .inTransition
                 await dismissImmersiveSpace()
+                // Second line of defence: `onDisappear` reopens the main window, but a window request
+                // issued during a space transition is intermittently dropped by the system (same class
+                // as the documented dropped `dismissWindow`), and the reconciler that reopens the 1:1
+                // stage lives in that window. Re-issuing the open here is idempotent.
+                openWindow(id: AppModel.mainWindowID)
             }
         }
     }
@@ -670,6 +675,40 @@ enum TabletopStageScene {
             }
             container.position = scenePos
             container.findEntity(named: "fixture_selection_highlight")?.isEnabled = (fixture.id == selectedFixtureId)
+
+            // Same support policy as the 1:1 stage: a fixture under the truss footprint (and high enough)
+            // hangs; anything else grows a floor stand up to it — so no light floats on the diorama either.
+            // The stand is a child of the container, so it follows XZ drags and stays under the light.
+            syncFixtureStand(in: container, position: placement.position, layout: layout)
+        }
+    }
+
+    /// Adds/toggles a `"fixture_stand"` child cylinder on a fixture proxy container per `RigPlacement.support`.
+    /// `.floorStand` → a slim grey post from the floor up to the fixture body (height = the container's scene
+    /// height above the ground, i.e. `container.position.y`), centred locally so it reaches down to y = 0.
+    /// `.hangFromTruss` → the stand is disabled (fixture hangs). Kept as a container child so an XZ drag
+    /// carries it and it stays directly beneath the light.
+    private static func syncFixtureStand(in container: Entity, position: Vector3Meters, layout: StageLayout) {
+        let support = RigPlacement.support(forPosition: position, layout: layout)
+        switch support {
+        case .floorStand:
+            let height = container.position.y // scene units from the ground to the fixture body
+            let existing = container.findEntity(named: "fixture_stand") as? ModelEntity
+            let stand = existing ?? {
+                let m = ModelEntity(
+                    mesh: .generateCylinder(height: max(height, sceneLength(0.05)), radius: sceneLength(0.035)),
+                    materials: [material(hex: "#3A3D42")]
+                )
+                m.name = "fixture_stand"
+                container.addChild(m)
+                return m
+            }()
+            // Rebuild the mesh at the current height, then centre it locally so it spans y = 0 → fixture.
+            stand.model?.mesh = .generateCylinder(height: max(height, sceneLength(0.05)), radius: sceneLength(0.035))
+            stand.position = SIMD3<Float>(0, -height / 2, 0)
+            stand.isEnabled = true
+        case .hangFromTruss:
+            container.findEntity(named: "fixture_stand")?.isEnabled = false
         }
     }
 

@@ -233,6 +233,43 @@ struct FixtureFineControl: Codable, Equatable {
     }
 }
 
+/// A user-authored rotation OFFSET applied on top of a fixture's zone-derived resting aim — how the
+/// "Light N turn right/left/up/down M degrees" command re-aims one fixture (pan left/right, tilt
+/// up/down), persistently across every cue (rig identity). It is deliberately a NEW additive field
+/// (see `FixtureGroup.aimOffset`) rather than a reuse of `FixtureFineControl.pan/tilt`: those default to
+/// −35/−18 as dead data the renderer never reads, and the zone aim already points down at the stage, so
+/// consuming them would tilt every existing look downward (the "tilt-doubling trap"). A zero offset
+/// (`.zero`, the default) leaves the resting aim exactly at the zone-derived direction, so existing / AI
+/// looks render identically. The renderer folds it in via `LightEffectSystem.aim(base:panDegrees:tiltDegrees:)`.
+struct FixtureAimOffset: Codable, Equatable {
+    /// + turns right / − turns left (data convention; the visual left/right is verified on device — see
+    /// SPEC 13 Caveats — and if inverted, the sign is flipped in ONE place in the renderer, not here).
+    var panDegrees: Double = 0
+    /// + tilts up / − tilts down.
+    var tiltDegrees: Double = 0
+
+    static let zero = FixtureAimOffset(panDegrees: 0, tiltDegrees: 0)
+
+    /// Same clamps `FixtureFineControl` uses for its pan/tilt: pan −180...180, tilt −90...90.
+    func validate() throws {
+        guard (-180...180).contains(panDegrees) else {
+            throw ValidationError.invalidFineControlValue("aimPan", panDegrees)
+        }
+        guard (-90...90).contains(tiltDegrees) else {
+            throw ValidationError.invalidFineControlValue("aimTilt", tiltDegrees)
+        }
+    }
+
+    /// Adds a pan/tilt delta and clamps the result to the valid range, returning the new offset — so a
+    /// stream of "turn right 60" commands accumulates but can never drive the aim out of range.
+    func adding(panDelta: Double, tiltDelta: Double) -> FixtureAimOffset {
+        FixtureAimOffset(
+            panDegrees: min(max(panDegrees + panDelta, -180), 180),
+            tiltDegrees: min(max(tiltDegrees + tiltDelta, -90), 90)
+        )
+    }
+}
+
 /// The area a fixture is aimed at — a controlled vocabulary of stage targets (the JSON `target`
 /// field). Encodes as the snake_case string the JSON uses (e.g. `center_stage`).
 enum FixtureTarget: String, Codable, CaseIterable {
@@ -328,6 +365,14 @@ struct FixtureGroup: Codable, Equatable, Identifiable {
     /// the tabletop editor; the same `id` carries the same `manualPosition` across every cue (rig identity).
     var manualPosition: FixturePosition? = nil
 
+    /// A user-authored rotation offset applied on top of the zone-derived resting aim (pan left/right,
+    /// tilt up/down) — set by the "Light N turn right/left/up/down M degrees" command. Optional +
+    /// back-compat: old JSON without the key decodes nil (the synthesized decoder defaults optionals to
+    /// nil), and nil means "no offset" (zone aim unchanged). NOT `fineControl.pan/tilt` — that carries
+    /// dead −35/−18 defaults the renderer never reads, so reusing it would tilt every existing look down
+    /// (see `FixtureAimOffset`). The same `id` carries the same `aimOffset` across every cue (rig identity).
+    var aimOffset: FixtureAimOffset? = nil
+
     var effectiveFineControl: FixtureFineControl {
         fineControl ?? .default(role: role, zone: zone)
     }
@@ -344,6 +389,11 @@ struct LightingCue: Codable, Equatable, Identifiable {
     var name: String
     var transition: CueTransition
     var fixtureGroups: [FixtureGroup]
+    /// Follow/hold time in seconds — how long this cue holds before cue-list auto-playback advances to the
+    /// next cue (SPEC 16). Additive & optional so old project JSON decodes to `nil` (synthesized Codable uses
+    /// `decodeIfPresent` for Optionals); `nil` means "use `CuePlayback.defaultHoldSeconds`". Resolve it via
+    /// `CuePlayback.holdDuration(for:)`, which floors/caps the value — never read this raw for scheduling.
+    var holdDuration: Double? = nil
 
     var localizedDisplayName: String {
         switch name {
@@ -372,10 +422,15 @@ struct LightingCue: Codable, Equatable, Identifiable {
 struct RelightDebugSnapshot: Equatable {
     struct Row: Equatable, Identifiable {
         var id: String { fixtureId }
+        /// 1-based addressable light number in cue order — the SAME "Light N" the on-stage floating label,
+        /// the voice/deterministic commands, and the iPad panel use, so a debug row can be cross-referenced.
+        var number: Int
         var fixtureId: String
         var name: String
         var role: FixtureRole
+        /// Effective colour after the manual override + group master resolve — what the spotlight actually shows.
         var hex: String
+        /// Effective intensity% after the manual override + group master resolve.
         var intensityPercent: Int
         var beamDegrees: Int
         var gobo: GoboPattern?
@@ -383,6 +438,11 @@ struct RelightDebugSnapshot: Equatable {
         /// what `ImmersiveView`'s LightEffectSystem animates, via the shared `LightEffectPlan`.
         var effectKind: LightEffectKind
         var isRendered: Bool
+        /// Whether a manual per-light override is masking this fixture's cue value (so the panel can badge it
+        /// as hand-controlled rather than AI-cue-driven — the row's `hex`/`intensityPercent` already resolve it).
+        var isOverridden: Bool
+        /// Whether the fixture is manually blacked out (intensity resolves to 0 from the override, not the cue).
+        var isManuallyOff: Bool
     }
 
     var cueId: String
@@ -398,24 +458,43 @@ struct RelightDebugSnapshot: Equatable {
     /// How many fixtures are running a dynamic effect under the current cue.
     var animatedCount: Int { rows.filter { $0.effectKind != .none }.count }
 
-    static func make(from cue: LightingCue) -> RelightDebugSnapshot {
+    /// Builds the debug readout for a cue, resolving each fixture through the SAME manual override +
+    /// group-master layers the renderer uses (`ImmersiveView.apply` → `LightOverride.resolved`), so the
+    /// panel shows the EFFECTIVE colour/intensity on stage — not the raw cue value. `overrides` and
+    /// `groupMasters` are keyed by 1-based light number (cue order), matching `AppModel.lightOverrides`
+    /// and `AppModel.groupMasterByLight()`; both default empty so the pure cue mapping stays ergonomic.
+    static func make(
+        from cue: LightingCue,
+        overrides: [Int: LightOverride] = [:],
+        groupMasters: [Int: Double] = [:]
+    ) -> RelightDebugSnapshot {
         let effects = LightEffectPlan.effects(for: cue)
         return RelightDebugSnapshot(
             cueId: cue.id,
             cueName: cue.localizedDisplayName,
             isHighEnergy: LightEffectPlan.isHighEnergy(cue),
             rows: cue.fixtureGroups.enumerated().map { index, fixture in
-                Row(
+                let number = index + 1
+                let override = overrides[number] ?? LightOverride()
+                let resolved = override.resolved(
+                    cueColor: fixture.color.value,
+                    cueIntensity: fixture.intensity,
+                    groupMaster: groupMasters[number] ?? 1.0
+                )
+                return Row(
+                    number: number,
                     fixtureId: fixture.id,
                     name: fixture.name,
                     role: fixture.role,
-                    hex: fixture.color.value,
-                    intensityPercent: Int((fixture.intensity * 100).rounded()),
+                    hex: resolved.color,
+                    intensityPercent: Int((resolved.intensity * 100).rounded()),
                     beamDegrees: Int(fixture.effectiveFineControl.beamAngleDegrees.rounded()),
                     gobo: fixture.gobo,
                     effectKind: effects[index].kind,
                     // Every fixture in the dynamic rig is rendered as a real spotlight now.
-                    isRendered: true
+                    isRendered: true,
+                    isOverridden: override.isActive || (groupMasters[number].map { $0 != 1.0 } ?? false),
+                    isManuallyOff: override.isOff
                 )
             }
         )
@@ -448,6 +527,31 @@ struct LightOverride: Equatable {
         if isOff { return (color, 0) }
         return (color, intensity ?? cueIntensity)
     }
+
+    /// The override remaining after an authoritative cue-layer edit to the SAME light supersedes one
+    /// component. An intensity edit drops the manual level (and any manual blackout) so the light follows
+    /// the freshly-set cue level; a colour edit drops the manual colour. Returns nil when nothing manual
+    /// remains, so the caller can clear the override entirely and let the light follow the cue. This is
+    /// what lets an iPad/console per-fixture edit actually take effect instead of being masked by a stale
+    /// override (an in-headset pinch/voice/card tweak) — WITHOUT changing `resolved`'s "override wins" rule.
+    func superseded(clearing component: OverrideComponent) -> LightOverride? {
+        var copy = self
+        switch component {
+        case .intensity:
+            copy.intensity = nil
+            copy.isOff = false
+        case .color:
+            copy.colorHex = nil
+        }
+        return copy.isActive ? copy : nil
+    }
+}
+
+/// Which part of a manual `LightOverride` an authoritative cue-layer edit (iPad panel / direct fixture
+/// edit) supersedes, so the new cue value renders instead of the masked override. See `LightOverride.superseded`.
+enum OverrideComponent {
+    case intensity
+    case color
 }
 
 /// A deterministic single-light command parsed from a typed/spoken phrase. When `parse` returns a
@@ -461,6 +565,9 @@ enum LightCommand: Equatable {
     /// Recolor every fixture of a named role in the SELECTED cue (e.g. "把 Front Light 改成紅色").
     /// A targeted edit — never a full-look regeneration — so naming a role keeps the rig intact.
     case setRoleColor(FixtureRole, hex: String)
+    /// Rotate one fixture's aim by a pan/tilt delta ("Light N turn right/left/up/down M degrees"). One
+    /// axis is always 0 (a direction word maps to exactly one axis). Persistent across cues (rig identity).
+    case rotate(Int, panDeltaDegrees: Double, tiltDeltaDegrees: Double)
     case allOff
     case resetAll
 
@@ -469,6 +576,7 @@ enum LightCommand: Equatable {
         switch self {
         case .close(let number), .open(let number): return number
         case .setColor(let number, _), .setIntensity(let number, _): return number
+        case .rotate(let number, _, _): return number
         case .setRoleColor, .allOff, .resetAll: return nil
         }
     }
@@ -538,6 +646,12 @@ enum LightCommand: Equatable {
         }
         if let fraction = intensityFraction(in: text) {
             return .setIntensity(number, fraction: fraction)
+        }
+        // Rotation ("turn right 60 degrees", "tilt light 3 up 20") is checked here — AFTER intensity so a
+        // "% / dim" phrase still wins, and BEFORE close/open. It requires BOTH a rotation verb AND a
+        // direction word, so "turn off"/"turn on" (no direction word) fall through to close/open below.
+        if let rotation = rotationCommand(number: number, in: text, words: words) {
+            return rotation
         }
         if text.contains("turn off") || text.contains("switch off") || text.contains("shut off")
             || words.contains("close") || words.contains("off") || words.contains("kill") {
@@ -620,6 +734,56 @@ enum LightCommand: Equatable {
             }
             let fraction = value > 1 ? value / 100.0 : value
             return min(max(fraction, 0), 1)
+        }
+        return nil
+    }
+
+    /// A single-fixture rotation command, or nil if the text isn't a rotation (so the caller falls
+    /// through to close/open). A rotation needs BOTH a rotation verb ({turn, pan, tilt, rotate, aim,
+    /// point, spin}) AND a direction word ({right, left, up, down}) — this is what keeps "turn off"/
+    /// "turn on" (a verb but no direction word) out of this path. right → pan +M, left → pan −M,
+    /// up → tilt +M, down → tilt −M; the magnitude M is the first number after the light index (same
+    /// "skip the light number" trick `intensityFraction` uses), defaulting to 45° when none is given.
+    private static func rotationCommand(number: Int, in text: String, words: Set<String>) -> LightCommand? {
+        let rotationVerbs: Set<String> = ["turn", "pan", "tilt", "rotate", "aim", "point", "spin"]
+        guard !rotationVerbs.isDisjoint(with: words) else { return nil }
+
+        // The direction word picks the axis + sign. Only one direction is honored (the first found), so a
+        // command names one axis at a time; if none is present this isn't a rotation.
+        let panSign: Double
+        let tiltSign: Double
+        if words.contains("right") {
+            panSign = 1; tiltSign = 0
+        } else if words.contains("left") {
+            panSign = -1; tiltSign = 0
+        } else if words.contains("up") {
+            panSign = 0; tiltSign = 1
+        } else if words.contains("down") {
+            panSign = 0; tiltSign = -1
+        } else {
+            return nil
+        }
+
+        let magnitude = rotationMagnitude(in: text, skippingLightNumber: number) ?? 45
+        return .rotate(
+            number,
+            panDeltaDegrees: panSign * magnitude,
+            tiltDeltaDegrees: tiltSign * magnitude
+        )
+    }
+
+    /// The first standalone number in the text that isn't the light index (e.g. the "60" in "light 6 turn
+    /// right 60 degrees", skipping the "6"). Mirrors `intensityFraction`'s skip-the-light-number handling.
+    private static func rotationMagnitude(in text: String, skippingLightNumber lightNumber: Int) -> Double? {
+        let tokens = text.split(whereSeparator: { !$0.isNumber && $0 != "." }).map(String.init)
+        var lightIndexValue: Int? = lightNumber
+        for token in tokens {
+            guard let value = Double(token) else { continue }
+            if let li = lightIndexValue, Int(value) == li {
+                lightIndexValue = nil   // skip the light number itself once
+                continue
+            }
+            return value
         }
         return nil
     }
@@ -777,6 +941,48 @@ struct LightingLook: Codable, Equatable {
         )
     }
 
+    /// A neutral "blank canvas" look for the empty-project template: a minimal front-wash + background-wash
+    /// rig in plain white at a low level, with no color theme, laser, or accent fixtures. It reads as an
+    /// un-designed stage the user fills in with their first AI prompt, while staying a valid two-cue
+    /// `LightingLook` (so the cue stack, GO, and the renderer all work immediately). Both cues carry the
+    /// same fixture ids (rig identity), differing only by a gentle Opening→Highlight brightness lift.
+    static func blankStage() -> LightingLook {
+        func fixtures(intensity: Double) -> [FixtureGroup] {
+            [
+                FixtureGroup(
+                    id: "front_wash", name: "前方泛光（左）", role: .frontLight, zone: .stageFront,
+                    enabled: true, intensity: intensity, color: FixtureColor(mode: .rgb, value: "#FFFFFF")
+                ),
+                FixtureGroup(
+                    id: "front_wash_right", name: "前方泛光（右）", role: .frontLight, zone: .stageFront,
+                    enabled: true, intensity: intensity, color: FixtureColor(mode: .rgb, value: "#FFFFFF")
+                ),
+                FixtureGroup(
+                    id: "background_wash", name: "背景泛光", role: .backgroundWash, zone: .stageBack,
+                    enabled: true, intensity: intensity, color: FixtureColor(mode: .rgb, value: "#FFFFFF")
+                )
+            ]
+        }
+
+        return LightingLook(
+            schemaVersion: "1.0",
+            intent: .generateLook,
+            lookName: "空白舞台燈光",
+            mood: "中性、待設計",
+            ambient: AmbientState(preset: .standardNight, level: 0.30, colorTemperature: 4200),
+            selectedCueId: "cue_opening",
+            cues: [
+                LightingCue(id: "cue_opening", name: "Opening", transition: .mvpDefault, fixtureGroups: fixtures(intensity: 0.4)),
+                LightingCue(id: "cue_highlight", name: "Highlight", transition: .mvpDefault, fixtureGroups: fixtures(intensity: 0.6))
+            ],
+            explanation: LightingExplanation(
+                term: "空白舞台",
+                plainText: "這是一個中性的空白起點：白色前光與背景泛光，沒有套用任何配色或情緒，等你用 AI 開始設計。",
+                actionSummary: "已建立空白舞台：白色前光與背景泛光，尚未套用任何主題。"
+            )
+        )
+    }
+
     /// A richer multi-fixture demo (key fresnels, moving heads, PARs, a strobe, an audience blinder) for
     /// previews and the iPad panel's offline mock. Exercises the dynamic rig with diverse fixture types,
     /// colors, DMX patches, and aim targets; validates like any generated look. Both cues carry the same
@@ -901,6 +1107,13 @@ struct LightingLook: Codable, Equatable {
         }
 
         for cue in cues {
+            // A cue's follow/hold time (SPEC 16) is an optional playback hint, but when present it must be a
+            // sane, finite duration so the auto-playback scheduler can trust it. `CuePlayback.holdDuration`
+            // clamps at runtime; validate here keeps malformed data (NaN / negative / absurd) out of a
+            // persisted look in the first place.
+            if let hold = cue.holdDuration, !(hold.isFinite && (0...CuePlayback.maxHoldSeconds).contains(hold)) {
+                throw ValidationError.invalidHoldDuration(hold)
+            }
             for fixture in cue.fixtureGroups {
                 try validate(fixture)
             }
@@ -922,6 +1135,10 @@ struct LightingLook: Codable, Equatable {
 
         if let fineControl = fixture.fineControl {
             try fineControl.validate()
+        }
+
+        if let aimOffset = fixture.aimOffset {
+            try aimOffset.validate()
         }
 
         if let dmx = fixture.dmx {
@@ -1044,8 +1261,8 @@ struct LumaStageProject: Codable, Equatable, Identifiable {
         newProject(index: index, template: .campusMusic)
     }
 
-    static func newProject(index: Int, template: ProjectCreationTemplate.Kind) -> LumaStageProject {
-        let template = ProjectCreationTemplate.template(for: template)
+    static func newProject(index: Int, template kind: ProjectCreationTemplate.Kind) -> LumaStageProject {
+        let template = ProjectCreationTemplate.template(for: kind)
 
         return LumaStageProject(
             id: "project_custom_\(UUID().uuidString)",
@@ -1054,8 +1271,23 @@ struct LumaStageProject: Codable, Equatable, Identifiable {
             eventType: template.eventType,
             lastEditedDescription: "新專案",
             stageLayout: .defaultStudentOutdoor(),
-            lightingLook: look(name: template.lookName, mood: template.mood)
+            lightingLook: baseLook(for: kind, name: template.lookName, mood: template.mood)
         )
+    }
+
+    /// The starting look for a newly created project: the blank kind opens on a neutral white canvas,
+    /// every themed template carries the `mvpDemo` rig. Both are renamed/re-mooded to match the chosen
+    /// template so the look label reflects the picker choice.
+    private static func baseLook(for kind: ProjectCreationTemplate.Kind, name: String, mood: String) -> LightingLook {
+        switch kind {
+        case .emptyStage:
+            var look = LightingLook.blankStage()
+            look.lookName = name
+            look.mood = mood
+            return look
+        case .campusMusic:
+            return look(name: name, mood: mood)
+        }
     }
 
     private static func look(name: String, mood: String) -> LightingLook {
@@ -1069,6 +1301,7 @@ struct LumaStageProject: Codable, Equatable, Identifiable {
 struct ProjectCreationTemplate: Codable, Equatable, Identifiable {
     enum Kind: String, CaseIterable, Codable {
         case campusMusic
+        case emptyStage
     }
 
     enum VisualStyle: String, Codable, Hashable {
@@ -1091,7 +1324,22 @@ struct ProjectCreationTemplate: Codable, Equatable, Identifiable {
     var lookName: String
     var mood: String
 
+    // Order is UI-facing: the blank stage leads so "從零開始" is the first thing the user sees, then the
+    // ready-made scenario template. `projectCreationOffersTemplatesWithBlankOption` pins this order.
     static let allTemplates: [ProjectCreationTemplate] = [
+        ProjectCreationTemplate(
+            kind: .emptyStage,
+            title: "空白舞台",
+            subtitle: "從零開始，沒有預設配色或情緒，直接用 AI 打造你的燈光。",
+            introduction: "中性的空白起點：白色前光與背景泛光，搭配預設的戶外學生舞台與桁架，沒有套用任何主題。適合想完全自訂、從頭設計的使用者。",
+            systemImage: "square.dashed",
+            visualStyle: .emptyStage,
+            projectName: "空白舞台",
+            venueDescription: "戶外桁架舞台",
+            eventType: "自訂",
+            lookName: "空白舞台燈光",
+            mood: "中性、待設計"
+        ),
         ProjectCreationTemplate(
             kind: .campusMusic,
             title: "校園音樂之夜",
@@ -1432,6 +1680,87 @@ enum SpotLightRenderMath {
     }
 }
 
+// MARK: - Laser volumetric scatter
+
+/// Tunable "look" constants for the volumetric laser beam — the numbers behind the two visible
+/// layers (a thin white-hot core and a soft glow sheath). The per-beam haze *particles* were removed
+/// (they read as a weird off-axis speckle at 1:1 scale, and RealityKit particles aren't scene-lit);
+/// the core+sheath cylinders carry the aerial-beam look on their own. Grouped here so radius, alpha,
+/// and colour behaviour can be retuned from device previews in one place; the smoke tests pin the
+/// *shape* of the mapping (gate, ordering, monotonicity), not these exact values, so retuning is safe.
+/// Consumed by `LaserScatterMath`.
+struct LaserScatterConfig: Equatable {
+    /// Glow-sheath cylinder radius as a multiple of the beam core radius.
+    var sheathRadiusFactor: Double
+    /// Base additive alpha of the glow sheath at full intensity.
+    var sheathAlpha: Double
+    /// How far the core colour lerps toward white (0 = pure hue, 1 = white) for the white-hot centre.
+    var coreWhiteness: Double
+    /// Core alpha, kept near-opaque so the bright centre reads.
+    var coreAlpha: Double
+
+    static let `default` = LaserScatterConfig(
+        sheathRadiusFactor: 5.0,
+        sheathAlpha: 0.10,
+        coreWhiteness: 0.55,
+        coreAlpha: 0.95
+    )
+}
+
+/// Pure mapping from a laser cue's colour (`#RRGGBB`) + 0...1 intensity to the numeric parameters the
+/// RealityKit laser renderer needs for its two visible layers (white-hot core + glow sheath).
+/// Foundation-only so the smoke tests can pin the look math without a simulator; `ImmersiveView` is the
+/// only consumer (it maps `RGBA` -> UIColor and metres -> scene units for the beam cylinders).
+///
+/// Why two layers: the core is near-white-hot on-axis, and the wider low-alpha sheath bleeds the
+/// saturated colour outward to kill the hard cylinder edge, so the beam reads as light in the air rather
+/// than a solid rod. (An earlier third layer of additive haze particles was removed — see
+/// `LaserScatterConfig`.)
+enum LaserScatterMath {
+    /// A plain RGBA (0...1 per channel) so the math stays UIKit/RealityKit-free.
+    struct RGBA: Equatable {
+        var red: Double
+        var green: Double
+        var blue: Double
+        var alpha: Double
+    }
+
+    /// A laser is off (all three layers hidden) at or below this cue intensity — shared with the beam
+    /// geometry so core/sheath/particles vanish together. Matches the legacy `intensity > 0.03` gate.
+    static func beamsVisible(_ intensity: Double) -> Bool { intensity > 0.03 }
+
+    private static func clamp01(_ value: Double) -> Double { min(max(value, 0), 1) }
+
+    private static func components(hex: String) -> RGBComponents { RGBComponents(hex: hex) ?? .white }
+
+    /// The white-hot core colour: the cue hue dimmed by intensity, then lerped toward white by
+    /// `coreWhiteness` so the centre of the beam reads as an intense, near-white source.
+    static func coreRGBA(hex: String, intensity: Double, config: LaserScatterConfig = .default) -> RGBA {
+        let dimmed = components(hex: hex).dimmed(by: clamp01(intensity))
+        let w = clamp01(config.coreWhiteness)
+        return RGBA(
+            red: dimmed.red + (1 - dimmed.red) * w,
+            green: dimmed.green + (1 - dimmed.green) * w,
+            blue: dimmed.blue + (1 - dimmed.blue) * w,
+            alpha: config.coreAlpha
+        )
+    }
+
+    /// The glow-sheath colour: the fully saturated cue hue at a low, intensity-scaled alpha so the halo
+    /// bleeds colour outward without a hard silhouette.
+    static func sheathRGBA(hex: String, intensity: Double, config: LaserScatterConfig = .default) -> RGBA {
+        let c = components(hex: hex)
+        return RGBA(red: c.red, green: c.green, blue: c.blue, alpha: config.sheathAlpha * clamp01(intensity))
+    }
+
+    // MARK: Geometry (metres)
+
+    /// Glow-sheath cylinder radius for a given beam core radius.
+    static func sheathRadius(coreRadiusMeters: Double, config: LaserScatterConfig = .default) -> Double {
+        coreRadiusMeters * config.sheathRadiusFactor
+    }
+}
+
 // MARK: - Dynamic rig: fixture-type rendering metadata + zone placement
 
 /// `LightingFixtureVisualModel` lives in the fixture catalog as the visual vocabulary; here it gains
@@ -1586,11 +1915,104 @@ enum RigPlacement {
     /// fixture lands at the same spot on the 1:1 stage and on the diorama.
     static func resolvedPlacement(fixture: FixtureGroup, slot: Int, count: Int, layout: StageLayout)
         -> (position: Vector3Meters, aim: Vector3Meters) {
-        let zonePlacement = placement(zone: fixture.zone, slot: slot, count: count, layout: layout)
+        // 規定：雷射只能掛在上舞台桁架上。即使資料上被標成別的 zone（舊檔/AI 誤判），也一律用
+        // .stageBack 的桁架幾何解析，且手動拖曳的位置會被夾回 truss footprint（見 clampedToTruss）。
+        let trussOnly = mountsOnTrussOnly(fixture.renderModel)
+        let zone = trussOnly ? .stageBack : fixture.zone
+        let zonePlacement = placement(zone: zone, slot: slot, count: count, layout: layout)
         guard let manual = fixture.manualPosition else {
             return zonePlacement
         }
-        return (Vector3Meters(x: manual.x, y: manual.y, z: manual.z), zonePlacement.aim)
+        var position = Vector3Meters(x: manual.x, y: manual.y, z: manual.z)
+        if trussOnly {
+            position = clampedToTruss(position, layout: layout)
+        }
+        return (position, zonePlacement.aim)
+    }
+}
+
+/// Foundation-only：一盞燈在解析位置上如何被物理支撐，讓場上沒有燈浮空。
+/// 位置（model 公尺）水平落在 truss footprint 內、且離地夠高 → 吊掛在 truss；否則 → 從地板長出落地燈架。
+enum FixtureSupport: Equatable {
+    case hangFromTruss
+    /// 從 y = 0 到 `topY`（model 公尺）在燈具的 XZ 立一根落地燈架柱。
+    case floorStand(topY: Double)
+
+    var isFloorStand: Bool { if case .floorStand = self { return true }; return false }
+}
+
+extension RigPlacement {
+    /// 可調常數（實機微調，見 spec Caveats）
+    static let trussHangMarginMeters = 0.35   // footprint XZ 外擴；小值避免側台 boom 誤判吊掛
+    static let hangMinAboveDeckMeters = 1.0    // 低於此高度即使在 footprint 下也算落地（避免地面燈被判吊掛）
+    static let standTopGapMeters = 0.18        // 柱頂距燈底留隙（沿用 FOH columnTopY 的 0.18）
+
+    /// 規定：只能吊掛在桁架上、不可落地的燈具型號。目前只有雷射 — 它是全場唯一有可見光束幾何的燈，
+    /// 落地或側台會顯得突兀，且安全上雷射本就該高掛。`resolvedPlacement`/`AppModel` 以此夾住雷射位置。
+    static func mountsOnTrussOnly(_ model: LightingFixtureVisualModel) -> Bool {
+        model == .laser
+    }
+
+    /// 把一個位置（model 公尺）夾進桁架 footprint 的 XZ 範圍內，並吊到桁架頂下方 `standTopGapMeters`，
+    /// 使 `support(forPosition:)` 必定回傳 `.hangFromTruss`。無桁架時原樣返回（無處可掛，交給 support 落地）。
+    static func clampedToTruss(_ position: Vector3Meters, layout: StageLayout) -> Vector3Meters {
+        guard let f = trussFootprint(in: layout) else { return position }
+        return Vector3Meters(
+            x: min(max(position.x, f.minX), f.maxX),
+            y: f.topY - standTopGapMeters,
+            z: min(max(position.z, f.minZ), f.maxZ)
+        )
+    }
+
+    /// 所有 truss 端點的 XZ 包圍盒 + 頂高（model 公尺），無 truss 則 nil。
+    static func trussFootprint(in layout: StageLayout)
+        -> (minX: Double, maxX: Double, minZ: Double, maxZ: Double, topY: Double)? {
+        let pts = layout.objects.flatMap(\.trussEndpoints)
+        guard !pts.isEmpty else { return nil }
+        return (pts.map(\.x).min()!, pts.map(\.x).max()!,
+                pts.map(\.z).min()!, pts.map(\.z).max()!,
+                pts.map(\.y).max()!)
+    }
+
+    /// 一盞燈在解析位置的支撐方式。吊掛需同時：XZ 在 footprint±margin 內、且離甲板 >= hangMinAboveDeck。
+    static func support(forPosition position: Vector3Meters, layout: StageLayout) -> FixtureSupport {
+        // topY 用與 placement 相同的 stageBase 推法。
+        let stageBase = layout.objects.first { $0.type == .stageBase }
+        let size = stageBase?.size ?? StageObjectSize(width: 6, depth: 3, height: 0.8)
+        let topY = (stageBase?.position.y ?? size.height / 2) + size.height / 2
+
+        let m = trussHangMarginMeters
+        if let f = trussFootprint(in: layout),
+           position.x >= f.minX - m, position.x <= f.maxX + m,
+           position.z >= f.minZ - m, position.z <= f.maxZ + m,
+           position.y >= topY + hangMinAboveDeckMeters {
+            return .hangFromTruss
+        }
+        return .floorStand(topY: max(0.3, position.y - standTopGapMeters))
+    }
+}
+
+extension LightingLook {
+    /// 規定：雷射燈只能吊在上舞台桁架上。把每個 cue 裡雷射燈的 `zone` 正規化為 `.stageBack`，讓 slot 分組
+    /// 與 `RigPlacement` 一律把它掛在 truss。與 layout 無關（只改資料上的 zone）——手動拖曳造成的 off-truss
+    /// `manualPosition` 由 `RigPlacement.resolvedPlacement`/`AppModel.moveFixture` 夾回 truss。所有生成路徑
+    /// 在 `LightingLookDraft.makeValidatedLook` 套用此正規化；`showcaseDemo`/`MusicShowBuilder` 已把雷射放在
+    /// `.stageBack`，故此處對它們是 no-op。Idempotent。
+    func enforcingTrussMountedLasers() -> LightingLook {
+        var result = self
+        result.cues = cues.map { cue in
+            var newCue = cue
+            newCue.fixtureGroups = cue.fixtureGroups.map { fixture in
+                guard RigPlacement.mountsOnTrussOnly(fixture.renderModel), fixture.zone != .stageBack else {
+                    return fixture
+                }
+                var moved = fixture
+                moved.zone = .stageBack
+                return moved
+            }
+            return newCue
+        }
+        return result
     }
 }
 
@@ -1606,6 +2028,7 @@ enum ValidationError: Error, Equatable, LocalizedError {
     case invalidHexColor(String)
     case invalidFineControlValue(String, Double)
     case invalidDMXValue(String, Int)
+    case invalidHoldDuration(Double)
 
     var errorDescription: String? {
         switch self {
@@ -1631,6 +2054,8 @@ enum ValidationError: Error, Equatable, LocalizedError {
             return "無效的精細控制參數：\(field)=\(value)。"
         case .invalidDMXValue(let field, let value):
             return "無效的 DMX 參數：\(field)=\(value)。"
+        case .invalidHoldDuration(let value):
+            return "無效的場景停留時間：\(value) 秒。"
         }
     }
 }

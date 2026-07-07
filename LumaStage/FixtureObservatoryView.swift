@@ -89,9 +89,13 @@ struct FixtureObservatoryView: View {
         ManipulationComponent.configureEntity(stage, collisionShapes: [shape])
         if var manipulation = stage.components[ManipulationComponent.self] {
             manipulation.releaseBehavior = .stay
-            // Observatory behaves like a turntable: keep two-hand scale + rotate, but LOCK translation so
+            // Observatory behaves like a turntable: keep rotate + pinch-to-scale, but LOCK translation so
             // the fixture can't be dragged off-centre / out of reach — it only spins and resizes in place.
             manipulation.dynamics.translationBehavior = .none
+            // Explicitly enable scaling. Leaving `scalingBehavior` at the component default had
+            // pinch-to-zoom silently doing nothing on device while one-hand rotation still worked, so
+            // the fixture could be spun but never enlarged. Rotation is left at its (working) default.
+            manipulation.dynamics.scalingBehavior = .unconstrained
             stage.components.set(manipulation)
         }
     }

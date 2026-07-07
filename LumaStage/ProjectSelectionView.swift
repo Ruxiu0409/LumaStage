@@ -76,19 +76,31 @@ struct ProjectSelectionView: View {
                     introAction: { showsFixtureIntro = true }
                 )
             } else {
-                VStack(spacing: 0) {
-                    ForEach(Array(appModel.projects.enumerated()), id: \.element.id) { index, project in
-                        ProjectRow(project: project) {
-                            appModel.openProject(id: project.id)
-                        }
+                // Scroll a long project list instead of letting the content-size window's height hit the
+                // visionOS system maximum and compress every row together (the rows are vertically
+                // compressible, so an over-tall VStack squeezes their padding to nothing). The order is
+                // load-bearing: `.frame(maxHeight:)` THEN `.fixedSize(vertical:)` is the shrink-to-fit-up-
+                // to-a-cap idiom — `fixedSize` lets the ScrollView adopt its content's ideal height so a
+                // short list keeps the window compact (like the AI composer), while the inner `maxHeight`
+                // clamps a tall list and turns on scrolling. `.basedOnSize` suppresses bounce when it fits.
+                ScrollView {
+                    VStack(spacing: 0) {
+                        ForEach(Array(appModel.projects.enumerated()), id: \.element.id) { index, project in
+                            ProjectRow(project: project) {
+                                appModel.openProject(id: project.id)
+                            }
 
-                        if index < appModel.projects.count - 1 {
-                            Divider()
-                                .overlay(LumaStageDesign.hairline)
-                                .padding(.leading, 52)
+                            if index < appModel.projects.count - 1 {
+                                Divider()
+                                    .overlay(LumaStageDesign.hairline)
+                                    .padding(.leading, 52)
+                            }
                         }
                     }
                 }
+                .frame(maxHeight: 460)
+                .fixedSize(horizontal: false, vertical: true)
+                .scrollBounceBehavior(.basedOnSize)
             }
         }
         .lumaNativeGlass(radius: LumaStageDesign.cornerRadius, fallbackOpacity: 0.34)
@@ -162,7 +174,7 @@ private struct ProjectTemplateSelectionView: View {
                 .font(.title2.weight(.bold))
                 .accessibilityAddTraits(.isHeader)
 
-            Text("建立一個附有預設燈光與專案細節的學生活動舞台，再用 AI 微調整體效果。")
+            Text("選擇範本快速建立舞台專案，或從空白舞台從零開始，再用 AI 微調整體效果。")
                 .font(.callout)
                 .foregroundStyle(LumaStageDesign.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -180,7 +192,7 @@ private struct ProjectTemplateRow: View {
         Button(action: action) {
             VStack(alignment: .leading, spacing: 14) {
                 ProjectTemplatePreviewImage(template: template)
-                    .frame(height: 150)
+                    .frame(height: 164)
 
                 HStack(alignment: .top, spacing: 14) {
                     Image(systemName: template.systemImage)
@@ -247,29 +259,29 @@ private struct ProjectTemplatePreviewImage: View {
         GeometryReader { proxy in
             let size = proxy.size
 
+            // Back-to-front so screen-blended light layers add luminance over the darker scene:
+            // backdrop → haze glow → truss + hung fixtures → aerial beams → stage deck → floor pools →
+            // lit performers → vignette. Beams terminate at the deck (drawn after them) and read as pools.
             ZStack {
                 background
+                atmosphere(size: size)
+                backdropHalo(size: size)
 
-                StageSilhouette(width: size.width * 0.66, height: size.height * 0.28)
-                    .fill(Color.black.opacity(template.visualStyle == .emptyStage ? 0.75 : 0.88))
-                    .overlay {
-                        StageSilhouette(width: size.width * 0.66, height: size.height * 0.28)
-                            .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                    }
-                    .position(x: size.width * 0.50, y: size.height * 0.72)
+                truss(width: size.width * 0.66, height: size.height * 0.40)
+                    .stroke(Color.white.opacity(0.32), style: StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
+                    .position(x: size.width * 0.50, y: size.height * 0.42)
 
-                truss(width: size.width * 0.70, height: size.height * 0.42)
-                    .stroke(Color.white.opacity(0.48), style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
-                    .position(x: size.width * 0.50, y: size.height * 0.43)
-
+                trussFixtureDots(size: size)
                 beamLayer(size: size)
-
+                stage(size: size)
+                groundPools(size: size)
                 performerGroup(size: size)
+                vignette(size: size)
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(LumaStageDesign.hairline, lineWidth: 1)
         }
         // Purely decorative stage illustration — the enclosing template card carries the real
@@ -277,77 +289,201 @@ private struct ProjectTemplatePreviewImage: View {
         .accessibilityHidden(true)
     }
 
+    // MARK: Palette
+
+    private var palette: StageArtPalette {
+        switch template.visualStyle {
+        case .emptyStage:
+            return StageArtPalette(
+                backgroundTop: Color(red: 0.09, green: 0.10, blue: 0.12),
+                backgroundBottom: Color(red: 0.16, green: 0.17, blue: 0.20),
+                accent: .white,
+                secondary: .white,
+                atmosphere: .white
+            )
+        case .warmConcert:
+            return StageArtPalette(
+                backgroundTop: Color(red: 0.13, green: 0.08, blue: 0.11),
+                backgroundBottom: Color(red: 0.30, green: 0.14, blue: 0.09),
+                accent: LumaStageDesign.warmAmber,
+                secondary: LumaStageDesign.coolBlue,
+                atmosphere: LumaStageDesign.warmAmber
+            )
+        case .coolShowcase:
+            return StageArtPalette(
+                backgroundTop: Color(red: 0.04, green: 0.08, blue: 0.16),
+                backgroundBottom: Color(red: 0.07, green: 0.18, blue: 0.30),
+                accent: LumaStageDesign.coolBlue,
+                secondary: LumaStageDesign.softGreen,
+                atmosphere: LumaStageDesign.coolBlue
+            )
+        case .partyFinale:
+            return StageArtPalette(
+                backgroundTop: Color(red: 0.11, green: 0.06, blue: 0.18),
+                backgroundBottom: Color(red: 0.28, green: 0.10, blue: 0.24),
+                accent: LumaStageDesign.magenta,
+                secondary: LumaStageDesign.coolBlue,
+                atmosphere: LumaStageDesign.magenta
+            )
+        }
+    }
+
+    // The blank stage stays deliberately dim/unprogrammed; themed stages glow.
+    private var isBlank: Bool { template.visualStyle == .emptyStage }
+
+    // MARK: Layers
+
     private var background: some View {
         LinearGradient(
-            colors: backgroundColors,
+            colors: [palette.backgroundTop, palette.backgroundBottom],
             startPoint: .top,
             endPoint: .bottom
         )
         .overlay {
             LinearGradient(
-                colors: [
-                    .clear,
-                    Color.black.opacity(0.55)
-                ],
+                colors: [Color.black.opacity(0.28), .clear, Color.black.opacity(0.60)],
                 startPoint: .top,
                 endPoint: .bottom
             )
         }
     }
 
-    private var backgroundColors: [Color] {
-        switch template.visualStyle {
-        case .emptyStage:
-            return [
-                Color(red: 0.08, green: 0.09, blue: 0.105),
-                Color(red: 0.14, green: 0.15, blue: 0.17)
-            ]
-        case .warmConcert:
-            return [
-                Color(red: 0.12, green: 0.07, blue: 0.10),
-                Color(red: 0.27, green: 0.13, blue: 0.08)
-            ]
-        case .coolShowcase:
-            return [
-                Color(red: 0.04, green: 0.08, blue: 0.16),
-                Color(red: 0.07, green: 0.18, blue: 0.30)
-            ]
-        case .partyFinale:
-            return [
-                Color(red: 0.11, green: 0.06, blue: 0.18),
-                Color(red: 0.28, green: 0.10, blue: 0.24)
-            ]
+    // Soft aerial haze so the beams read as light scattering in air (matching the app's haze/scatter look).
+    private func atmosphere(size: CGSize) -> some View {
+        RadialGradient(
+            colors: [palette.atmosphere.opacity(isBlank ? 0.10 : 0.24), .clear],
+            center: .center,
+            startRadius: 0,
+            endRadius: size.width * 0.6
+        )
+        .frame(width: size.width * 1.1, height: size.height)
+        .position(x: size.width * 0.5, y: size.height * 0.42)
+        .blur(radius: 2)
+        .blendMode(.screen)
+    }
+
+    // A wide glow band on the backdrop behind the truss for depth.
+    private func backdropHalo(size: CGSize) -> some View {
+        Ellipse()
+            .fill(
+                RadialGradient(
+                    colors: [palette.secondary.opacity(isBlank ? 0.10 : 0.22), .clear],
+                    center: .center,
+                    startRadius: 0,
+                    endRadius: size.width * 0.42
+                )
+            )
+            .frame(width: size.width * 0.9, height: size.height * 0.46)
+            .position(x: size.width * 0.5, y: size.height * 0.5)
+            .blur(radius: 10)
+            .blendMode(.screen)
+    }
+
+    // Fixtures hung under the top truss bar. Themed rigs glow in their colours; the blank rig sits dim/unlit.
+    private func trussFixtureDots(size: CGSize) -> some View {
+        let count = 7
+        let barWidth = size.width * 0.60
+        let startX = size.width * 0.5 - barWidth / 2
+        let y = size.height * 0.255
+
+        return ZStack {
+            ForEach(0..<count, id: \.self) { index in
+                let t = CGFloat(index) / CGFloat(count - 1)
+                let tint = fixtureDotColor(index: index)
+                ZStack {
+                    Circle()
+                        .fill(tint)
+                        .frame(width: 12, height: 12)
+                        .blur(radius: 5)
+                        .opacity(isBlank ? 0.0 : 0.9)
+                        .blendMode(.screen)
+                    Circle()
+                        .fill(tint.opacity(isBlank ? 0.45 : 0.95))
+                        .frame(width: 4.5, height: 4.5)
+                }
+                .position(x: startX + barWidth * t, y: y)
+            }
         }
+        .frame(width: size.width, height: size.height)
     }
 
     @ViewBuilder
     private func beamLayer(size: CGSize) -> some View {
         switch template.visualStyle {
         case .emptyStage:
-            EmptyView()
+            // A single soft, neutral work-light wash — enough to feel lit, but no colour theme (still blank).
+            ProjectLightBeam(color: .white, rotation: 0)
+                .frame(width: size.width * 0.30, height: size.height * 0.66)
+                .position(x: size.width * 0.5, y: size.height * 0.49)
+                .opacity(0.5)
         case .warmConcert:
-            ProjectLightBeam(color: LumaStageDesign.warmAmber.opacity(0.42), rotation: -14)
-                .frame(width: size.width * 0.24, height: size.height * 0.70)
-                .position(x: size.width * 0.38, y: size.height * 0.50)
-            ProjectLightBeam(color: LumaStageDesign.coolBlue.opacity(0.32), rotation: 14)
-                .frame(width: size.width * 0.24, height: size.height * 0.70)
-                .position(x: size.width * 0.62, y: size.height * 0.50)
+            ProjectLightBeam(color: LumaStageDesign.warmAmber, rotation: -15)
+                .frame(width: size.width * 0.22, height: size.height * 0.70)
+                .position(x: size.width * 0.38, y: size.height * 0.49)
+            ProjectLightBeam(color: LumaStageDesign.coolBlue, rotation: 15)
+                .frame(width: size.width * 0.22, height: size.height * 0.70)
+                .position(x: size.width * 0.62, y: size.height * 0.49)
         case .coolShowcase:
             ForEach(0..<4, id: \.self) { index in
-                ProjectLightBeam(color: LumaStageDesign.coolBlue.opacity(0.34), rotation: Double(index - 2) * 7)
-                    .frame(width: size.width * 0.15, height: size.height * 0.62)
-                    .position(x: size.width * (0.32 + CGFloat(index) * 0.12), y: size.height * 0.50)
+                ProjectLightBeam(color: LumaStageDesign.coolBlue, rotation: Double(index) * 8 - 12)
+                    .frame(width: size.width * 0.14, height: size.height * 0.66)
+                    .position(x: size.width * (0.30 + CGFloat(index) * 0.13), y: size.height * 0.49)
             }
         case .partyFinale:
-            ProjectLightBeam(color: LumaStageDesign.warmAmber.opacity(0.40), rotation: -18)
-                .frame(width: size.width * 0.20, height: size.height * 0.68)
-                .position(x: size.width * 0.34, y: size.height * 0.49)
-            ProjectLightBeam(color: LumaStageDesign.magenta.opacity(0.38), rotation: 0)
-                .frame(width: size.width * 0.20, height: size.height * 0.68)
-                .position(x: size.width * 0.50, y: size.height * 0.48)
-            ProjectLightBeam(color: LumaStageDesign.coolBlue.opacity(0.34), rotation: 18)
-                .frame(width: size.width * 0.20, height: size.height * 0.68)
-                .position(x: size.width * 0.66, y: size.height * 0.49)
+            ProjectLightBeam(color: LumaStageDesign.warmAmber, rotation: -20)
+                .frame(width: size.width * 0.18, height: size.height * 0.68)
+                .position(x: size.width * 0.32, y: size.height * 0.48)
+            ProjectLightBeam(color: LumaStageDesign.magenta, rotation: 0)
+                .frame(width: size.width * 0.18, height: size.height * 0.68)
+                .position(x: size.width * 0.50, y: size.height * 0.47)
+            ProjectLightBeam(color: LumaStageDesign.coolBlue, rotation: 20)
+                .frame(width: size.width * 0.18, height: size.height * 0.68)
+                .position(x: size.width * 0.68, y: size.height * 0.48)
+        }
+    }
+
+    private func stage(size: CGSize) -> some View {
+        StageSilhouette(width: size.width * 0.66, height: size.height * 0.30)
+            .fill(
+                LinearGradient(
+                    colors: [Color.black.opacity(0.55), Color.black.opacity(0.9)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
+            .overlay {
+                StageSilhouette(width: size.width * 0.66, height: size.height * 0.30)
+                    .stroke(Color.white.opacity(0.10), lineWidth: 1)
+            }
+            .position(x: size.width * 0.50, y: size.height * 0.75)
+    }
+
+    // Pools of light where the beams land on the deck.
+    @ViewBuilder
+    private func groundPools(size: CGSize) -> some View {
+        let deckY = size.height * 0.655
+        switch template.visualStyle {
+        case .emptyStage:
+            LightPool(color: .white, width: size.width * 0.34, height: size.height * 0.10)
+                .opacity(0.5)
+                .position(x: size.width * 0.5, y: deckY)
+        case .warmConcert:
+            LightPool(color: LumaStageDesign.warmAmber, width: size.width * 0.26, height: size.height * 0.09)
+                .position(x: size.width * 0.40, y: deckY)
+            LightPool(color: LumaStageDesign.coolBlue, width: size.width * 0.26, height: size.height * 0.09)
+                .position(x: size.width * 0.60, y: deckY)
+        case .coolShowcase:
+            ForEach(0..<4, id: \.self) { index in
+                LightPool(color: LumaStageDesign.coolBlue, width: size.width * 0.16, height: size.height * 0.07)
+                    .position(x: size.width * (0.30 + CGFloat(index) * 0.13), y: deckY)
+            }
+        case .partyFinale:
+            LightPool(color: LumaStageDesign.warmAmber, width: size.width * 0.20, height: size.height * 0.08)
+                .position(x: size.width * 0.33, y: deckY)
+            LightPool(color: LumaStageDesign.magenta, width: size.width * 0.20, height: size.height * 0.08)
+                .position(x: size.width * 0.50, y: deckY)
+            LightPool(color: LumaStageDesign.coolBlue, width: size.width * 0.20, height: size.height * 0.08)
+                .position(x: size.width * 0.67, y: deckY)
         }
     }
 
@@ -355,24 +491,25 @@ private struct ProjectTemplatePreviewImage: View {
     private func performerGroup(size: CGSize) -> some View {
         switch template.visualStyle {
         case .emptyStage:
+            // No performers — a blank, ready-to-design stage.
             EmptyView()
         case .warmConcert:
             ForEach(0..<3, id: \.self) { index in
                 performer
-                    .frame(width: 18, height: 42)
-                    .position(x: size.width * (0.43 + CGFloat(index) * 0.07), y: size.height * 0.68)
+                    .frame(width: 17, height: 40)
+                    .position(x: size.width * (0.43 + CGFloat(index) * 0.07), y: size.height * 0.63)
             }
         case .coolShowcase:
             ForEach(0..<5, id: \.self) { index in
                 performer
-                    .frame(width: 15, height: 36)
-                    .position(x: size.width * (0.36 + CGFloat(index) * 0.07), y: size.height * 0.69)
+                    .frame(width: 14, height: 34)
+                    .position(x: size.width * (0.36 + CGFloat(index) * 0.07), y: size.height * 0.64)
             }
         case .partyFinale:
             ForEach(0..<4, id: \.self) { index in
                 performer
-                    .frame(width: 17, height: 40)
-                    .position(x: size.width * (0.39 + CGFloat(index) * 0.075), y: size.height * 0.68)
+                    .frame(width: 16, height: 38)
+                    .position(x: size.width * (0.39 + CGFloat(index) * 0.075), y: size.height * 0.63)
             }
         }
     }
@@ -380,13 +517,39 @@ private struct ProjectTemplatePreviewImage: View {
     private var performer: some View {
         VStack(spacing: 2) {
             Circle()
-                .fill(Color.white.opacity(0.86))
+                .fill(Color.white.opacity(0.88))
                 .frame(width: 8, height: 8)
 
             RoundedRectangle(cornerRadius: 3, style: .continuous)
-                .fill(Color.white.opacity(0.78))
+                .fill(Color.white.opacity(0.8))
         }
-        .shadow(color: Color.white.opacity(0.18), radius: 6)
+        .shadow(color: palette.accent.opacity(0.35), radius: 6)
+    }
+
+    // Subtle darkening at the edges to focus the eye on the lit stage.
+    private func vignette(size: CGSize) -> some View {
+        RadialGradient(
+            colors: [.clear, Color.black.opacity(0.35)],
+            center: .center,
+            startRadius: size.width * 0.22,
+            endRadius: size.width * 0.72
+        )
+        .blendMode(.multiply)
+        .allowsHitTesting(false)
+    }
+
+    private func fixtureDotColor(index: Int) -> Color {
+        switch template.visualStyle {
+        case .emptyStage:
+            return .white
+        case .warmConcert:
+            return index.isMultiple(of: 2) ? LumaStageDesign.warmAmber : LumaStageDesign.coolBlue
+        case .coolShowcase:
+            return index.isMultiple(of: 2) ? LumaStageDesign.coolBlue : LumaStageDesign.softGreen
+        case .partyFinale:
+            let colors = [LumaStageDesign.warmAmber, LumaStageDesign.magenta, LumaStageDesign.coolBlue]
+            return colors[index % colors.count]
+        }
     }
 
     private func truss(width: CGFloat, height: CGFloat) -> Path {
@@ -422,6 +585,8 @@ private struct ProjectTemplatePreviewImage: View {
     }
 }
 
+/// A volumetric-looking beam: a soft coloured cone (bright at the fixture, fading to haze at the floor)
+/// with a hot near-white core, screen-blended so overlapping beams add luminance like real light.
 private struct ProjectLightBeam: View {
     let color: Color
     let rotation: Double
@@ -430,17 +595,56 @@ private struct ProjectLightBeam: View {
         ProjectBeamShape()
             .fill(
                 LinearGradient(
-                    colors: [
-                        color.opacity(0.08),
-                        color,
-                        color.opacity(0.02)
-                    ],
+                    colors: [color.opacity(0.6), color.opacity(0.2), .clear],
                     startPoint: .top,
                     endPoint: .bottom
                 )
             )
+            .overlay {
+                ProjectBeamShape()
+                    .fill(
+                        LinearGradient(
+                            colors: [Color.white.opacity(0.85), color.opacity(0.15), .clear],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .scaleEffect(x: 0.36, anchor: .center)
+            }
             .blur(radius: 3)
             .rotationEffect(.degrees(rotation))
+            .blendMode(.screen)
+    }
+}
+
+/// The per-template colour palette that drives every art layer (background, haze, backdrop, pools, dots).
+private struct StageArtPalette {
+    let backgroundTop: Color
+    let backgroundBottom: Color
+    let accent: Color
+    let secondary: Color
+    let atmosphere: Color
+}
+
+/// A soft elliptical pool of light on the stage deck where a beam lands, screen-blended to add luminance.
+private struct LightPool: View {
+    let color: Color
+    let width: CGFloat
+    let height: CGFloat
+
+    var body: some View {
+        Ellipse()
+            .fill(
+                RadialGradient(
+                    colors: [color.opacity(0.7), .clear],
+                    center: .center,
+                    startRadius: 0,
+                    endRadius: width / 2
+                )
+            )
+            .frame(width: width, height: height)
+            .blur(radius: 4)
+            .blendMode(.screen)
     }
 }
 
