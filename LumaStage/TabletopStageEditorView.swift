@@ -718,7 +718,19 @@ enum TabletopStageScene {
             if let existing = assembly.findEntity(named: name) {
                 container = existing
             } else {
-                container = makeFixtureProxy(named: name, hex: fixture.color.value)
+                // Aim the mini model exactly like `ImmersiveView.addRigFixture`: the zone-derived direction
+                // rotated by the fixture's authored `aimOffset` (SPEC 13). Built once with the proxy — the
+                // model is only rebuilt when the fixture id is new (regeneration), matching the old cone.
+                let baseDir = scenePoint(placement.aim) - scenePoint(placement.position)
+                let baseUnit = simd_length(baseDir) > 0.0001 ? simd_normalize(baseDir) : SIMD3<Float>(0, 0, -1)
+                let offset = fixture.aimOffset ?? .zero
+                let aimDir = LightEffectSystem.aim(base: baseUnit,
+                                                   panDegrees: offset.panDegrees,
+                                                   tiltDegrees: offset.tiltDegrees)
+                container = makeFixtureProxy(named: name,
+                                             model: fixture.renderModel,
+                                             hex: fixture.color.value,
+                                             aim: aimDir)
                 assembly.addChild(container)
             }
             container.position = scenePos
@@ -935,27 +947,35 @@ enum TabletopStageScene {
     /// the grey truss rods. Carries collision + input target so it's tappable/draggable, plus a (hidden)
     /// selection ring toggled by `syncFixtures`. Coloured by the fixture's cue colour so it reads as "a
     /// light" rather than structure.
-    private static func makeFixtureProxy(named name: String, hex: String) -> Entity {
+    private static func makeFixtureProxy(named name: String,
+                                         model: LightingFixtureVisualModel,
+                                         hex: String,
+                                         aim: SIMD3<Float>) -> Entity {
         let container = Entity()
         container.name = name
 
-        // Body: a short cone pointing down at the stage, like a hung head.
-        let body = ModelEntity(
-            mesh: .generateCone(height: sceneLength(0.45), radius: sceneLength(0.22)),
-            materials: [material(hex: "#2B2D31", metallic: true)]
-        )
-        body.orientation = simd_quatf(angle: .pi, axis: SIMD3<Float>(1, 0, 0)) // tip down
-        addInteraction(body)
+        // Body: the fixture's real model-type geometry (moving head / PAR / strobe / laser …) shrunk to the
+        // diorama and aimed front-first along `aim` — the SAME cached procedural model the 1:1 stage uses
+        // (`ImmersiveView.addRigFixture`), so the desk rig reads at a glance and matches the immersive look.
+        let body = FixtureRealityModel.makeStageFixture(for: model, targetHeight: sceneLength(0.4), aim: aim)
+        body.name = "fixture_model"
+        // The model is a container of nested meshes; make the whole subtree tappable/draggable with precise
+        // per-mesh collision (mirrors the old cone's `addInteraction`, but recursive over the model tree).
+        body.generateCollisionShapes(recursive: true)
+        body.components.set(InputTargetComponent())
         container.addChild(body)
 
-        // Lens: an emissive disc on the (downward) tip so the proxy glows in its colour. Named
-        // `"fixture_lens"` so `syncFixtures` can recolour it to the CURRENT cue's colour every pass (#14).
+        // Lens: an emissive disc at the model's aim-front so the proxy glows in its colour — on the tabletop
+        // there are no real spotlights, so this disc is the ONLY per-fixture colour cue. Named `"fixture_lens"`
+        // so `syncFixtures` can recolour it to the CURRENT cue's colour every pass (#14).
+        let aimUnit = simd_length(aim) > 0.0001 ? simd_normalize(aim) : SIMD3<Float>(0, -1, 0)
         let lens = ModelEntity(
-            mesh: .generateCylinder(height: sceneLength(0.04), radius: sceneLength(0.16)),
+            mesh: .generateCylinder(height: sceneLength(0.03), radius: sceneLength(0.13)),
             materials: [lensMaterial(hex: hex)]
         )
         lens.name = "fixture_lens"
-        lens.position = SIMD3<Float>(0, -sceneLength(0.22), 0)
+        lens.orientation = orientation(from: SIMD3<Float>(0, 1, 0), to: aimUnit)
+        lens.position = aimUnit * sceneLength(0.22)
         addInteraction(lens)
         container.addChild(lens)
 
