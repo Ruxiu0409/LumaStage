@@ -36,6 +36,14 @@ struct ContentView: View {
             } else {
                 VisionAIComposerBox()
                     .frame(width: 820)
+                    // Same safety net as the project-list branch above: when the embedded composer
+                    // appears (project open, stage closed), dismiss any lingering floating composer
+                    // window. Closing the stage runs `ImmersiveView.onDisappear`'s
+                    // `dismissWindow(aiComposerWindowID)`, but the system sometimes drops that during
+                    // the close transition — without this, the dropped dismiss leaves the floating
+                    // window composer AND this embedded one on screen at once (issue #11, scenario 1).
+                    // No-op if already dismissed.
+                    .onAppear { dismissWindow(id: AppModel.aiComposerWindowID) }
             }
         }
         // Reconcile whenever the desired scene changes AND whenever this window is (re)created — every

@@ -43,7 +43,13 @@ struct LumaStageApp: App {
         // user each time it opens. `.environment(appModel)` is required — `openWindow` doesn't
         // inherit the opener's environment. Opened/dismissed with the immersive space by
         // `ImmersiveView` (own-app windows aren't auto-hidden in full immersion).
-        WindowGroup(id: AppModel.aiComposerWindowID) {
+        //
+        // It MUST be a `Window`, not a `WindowGroup` (same fix as 燈光控制 below): the composer is a
+        // single reusable panel, but a `WindowGroup` spawns a NEW window on every `openWindow(id:)`,
+        // so a dropped dismiss during a space transition could leave two composers on screen at once
+        // (issue #11). A `Window` is a singleton scene — `openWindow` just brings the one instance
+        // forward instead of duplicating it.
+        Window("AI 對話框", id: AppModel.aiComposerWindowID) {
             VisionAIComposerBox()
                 .environment(appModel)
         }
