@@ -655,7 +655,7 @@ class AppModel {
         typedPrompt = ""
         aiUnderstoodCommand = "已開啟 \(project.name)"
         lastExplanation = project.lightingLook.explanation
-        generationSource = .foundationModels
+        generationSource = .openAI
         lastError = nil
         conversationState = .idle
         refreshModelAvailability()
@@ -801,7 +801,7 @@ class AppModel {
         resetGroups()
         selectedLightNumber = nil
         lastExplanation = look.explanation
-        generationSource = .foundationModels
+        generationSource = .openAI
         persistCurrentProjectState()
 
         // Retain so `setRigConstraint` can rebuild the show in place and `playMusicShow` can anchor the

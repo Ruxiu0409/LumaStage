@@ -95,7 +95,6 @@ struct LumaStageCoreSmokeTests {
         try await openAIServiceDecodesAndValidates()
         await openAIServiceSurfacesRefusal()
         await openAIServiceRejectsOutOfRangeViaValidator()
-        try await fallbackServiceFallsBackWhenPrimaryThrows()
         songAnalysisMakeBeatClockCoversThreePaths()
         try songAnalysisRoundTripsAndMeasuresSectionDuration()
         showPlanProducesBoundedCuesWithRanges()
@@ -2648,45 +2647,6 @@ struct LumaStageCoreSmokeTests {
         }
     }
 
-    // SPEC 10 work item 8.4 — the OpenAI-primary / FM-secondary composer: when the primary throws, the
-    // result comes from the secondary (source .foundationModels); when the primary succeeds, the
-    // secondary is never invoked.
-    private static func fallbackServiceFallsBackWhenPrimaryThrows() async throws {
-        let secondaryLook = LightingLook.mvpDemo()
-
-        // Primary throws .generationFailed; secondary returns a fixed FM look → result is the secondary's.
-        let throwingPrimary = StubLightingService(
-            availability: .available,
-            result: .failure(.generationFailed("OpenAI 服務暫時無法使用，請稍後再試。"))
-        )
-        let fmSecondary = SpyLightingService(
-            availability: .available,
-            result: .success(LightingGenerationResult(look: secondaryLook, source: .foundationModels))
-        )
-
-        let fallback = FallbackLightingService(primary: throwingPrimary, secondary: fmSecondary)
-        let result = try await fallback.generateLook(from: "做一個暖色開場")
-        expect(result.source == .foundationModels, "When the primary throws, the fallback must return the secondary's result")
-        try result.look.validate()
-        expect(fmSecondary.callCount == 1, "The secondary must be invoked exactly once when the primary fails")
-
-        // Primary succeeds → secondary must NOT be invoked.
-        let openAILook = LightingLook.mvpDemo()
-        let succeedingPrimary = StubLightingService(
-            availability: .available,
-            result: .success(LightingGenerationResult(look: openAILook, source: .openAI))
-        )
-        let untouchedSecondary = SpyLightingService(
-            availability: .available,
-            result: .success(LightingGenerationResult(look: secondaryLook, source: .foundationModels))
-        )
-
-        let happyPath = FallbackLightingService(primary: succeedingPrimary, secondary: untouchedSecondary)
-        let happyResult = try await happyPath.generateLook(from: "做一個暖色開場")
-        expect(happyResult.source == .openAI, "On the primary-success path the result must be the primary's")
-        expect(untouchedSecondary.callCount == 0, "The secondary must NOT be invoked when the primary succeeds")
-    }
-
     // MARK: - SPEC 05 P1: music → show + rig constraint
 
     private static func songAnalysisMakeBeatClockCoversThreePaths() {
@@ -3019,34 +2979,3 @@ struct LumaStageCoreSmokeTests {
 
 }
 
-// MARK: - Test doubles for the FallbackLightingService composer (SPEC 10 work item 8.4)
-
-/// A fixed `LightingLookGenerating` stub that reports a chosen availability and either succeeds with a
-/// fixed result or throws a fixed `LightingGenerationError`. Used as the FallbackLightingService primary.
-private struct StubLightingService: LightingLookGenerating {
-    let availability: LightingModelAvailability
-    let result: Result<LightingGenerationResult, LightingGenerationError>
-
-    func generateLook(from prompt: String) async throws -> LightingGenerationResult {
-        try result.get()
-    }
-}
-
-/// Like `StubLightingService` but a reference type that records how many times `generateLook` ran, so a
-/// test can assert the composer DID (or did NOT) reach the secondary backend.
-private final class SpyLightingService: LightingLookGenerating {
-    let availability: LightingModelAvailability
-    let result: Result<LightingGenerationResult, LightingGenerationError>
-    private(set) var callCount = 0
-
-    init(availability: LightingModelAvailability,
-         result: Result<LightingGenerationResult, LightingGenerationError>) {
-        self.availability = availability
-        self.result = result
-    }
-
-    func generateLook(from prompt: String) async throws -> LightingGenerationResult {
-        callCount += 1
-        return try result.get()
-    }
-}

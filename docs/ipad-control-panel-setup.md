@@ -6,7 +6,7 @@ doc covers the one part the code can't do for itself — creating the target and
 membership. (The project uses Xcode **synchronized folder groups**, so files in `LumaStage/` already
 belong to the visionOS target automatically; the iPad target needs membership set explicitly.)
 
-Requires Xcode 27 (see the root `CLAUDE.md`).
+Requires Xcode 26.4 (see the root `CLAUDE.md`).
 
 ## What's already in the repo
 
@@ -26,7 +26,7 @@ iPad side (`LumaStage/iPadPanel/`, all `#if os(iOS)`):
 
 ## 1. Add the iOS app target
 
-1. Open `LumaStage.xcodeproj` in Xcode 27.
+1. Open `LumaStage.xcodeproj` in Xcode 26.4.
 2. Menu bar: **File ▸ New ▸ Target…**. (Equivalent: click the blue **LumaStage** project icon at the
    top of the Project navigator → in the editor select the **project** row → at the bottom of the
    **TARGETS** list click the **＋** button.)
@@ -65,14 +65,14 @@ membership exceptions for the synchronized folder).
 > Why those domain files: the schema reuses `LightingLook` / `FixtureFineControl` (in
 > `LightingModels.swift`), which pull in `StageBuilderModels.swift`, `LightingFixtureCatalog.swift`,
 > and `LightingAIService.swift`. `LumaStageDesign.swift` is the same Foundation/SwiftUI token set the
-> headless smoke tests compile — known to build without UIKit / RealityKit / FoundationModels.
+> headless smoke tests compile — known to build without UIKit / RealityKit.
 
 **Do NOT add these to the iPad target** (they are visionOS- or host-only; the new target does not
 include them by default, so simply leave them unchecked for LumaStageControl): `LumaStageApp.swift`,
 `AppModel.swift`, `LumaSyncCoordinator.swift`, `ImmersiveView.swift`, `ContentView.swift`,
 `VisionAIComposerBox.swift`, `FixtureObservatoryView.swift`, `FixtureSpatialScene.swift`,
 `TabletopStageEditorView.swift`, `ProjectSelectionView.swift`, `LightingFixtureIntroView.swift`,
-`FoundationModelsLightingService.swift`, `SpeechTranscriber*`. (The `iPadPanel/` files stay in the
+`SpeechTranscriber*`. (The `iPadPanel/` files stay in the
 visionOS target too — harmless, they are `#if os(iOS)`-guarded to empty there.)
 
 ## 4. Local-network permission — for BOTH targets

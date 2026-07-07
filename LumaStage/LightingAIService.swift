@@ -46,13 +46,10 @@ enum LightingModelAvailability: Equatable {
 }
 
 enum LightingGenerationSource: String, Equatable {
-    case foundationModels
     case openAI
 
     var displayName: String {
         switch self {
-        case .foundationModels:
-            return "Apple Foundation Models"
         case .openAI:
             return "OpenAI（雲端）"
         }

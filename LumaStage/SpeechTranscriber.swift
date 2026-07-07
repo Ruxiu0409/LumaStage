@@ -85,31 +85,8 @@ final class SpeechTranscriber {
         let tapBlock: AVAudioNodeTapBlock = { [request] buffer, _ in
             request.append(buffer)
         }
-        // visionOS 27 deprecated the non-throwing `installTap`; the throwing OS 27 replacement turns a
-        // format mismatch — previously a fatal Obj-C exception ("Failed to create tap due to format
-        // mismatch") — into a catchable Swift error. Both replacement and deprecated form import under the
-        // same clean Swift name (`installTap(onBus:bufferSize:format:block:)`), where a plain `try` still
-        // binds to the preferred non-throwing (deprecated) one. Referencing the NS_REFINED raw symbol
-        // `__installTap(onBus:bufferSize:format:error:block:)` — the throwing variant, with the former
-        // `error:` slot imported as an empty-tuple placeholder — selects the OS 27 API with no deprecation.
-        let installTapThrowing: (AVAudioNodeBus, AVAudioFrameCount, AVAudioFormat?, (), @escaping AVAudioNodeTapBlock) throws -> Void =
-            inputNode.__installTap(onBus:bufferSize:format:error:block:)
-        // Try the input node's negotiated format first; if the audio route shifted under us (e.g.
-        // narration/music re-set the shared session between reading the format and starting the engine),
-        // retry with `nil` so the tap adopts the bus's own format, which cannot mismatch. Only surface an
-        // error (and skip starting the engine) if both attempts fail.
-        do {
-            try installTapThrowing(0, 1024, inputNode.outputFormat(forBus: 0), (), tapBlock)
-        } catch {
-            inputNode.removeTap(onBus: 0)
-            do {
-                try installTapThrowing(0, 1024, nil, (), tapBlock)
-            } catch {
-                recognitionRequest = nil
-                lastError = "無法啟動麥克風錄音（音訊格式不相容）。"
-                throw SpeechTranscriberError.audioSessionUnavailable
-            }
-        }
+        // Vision 26 only has the non-throwing installTap
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: inputNode.outputFormat(forBus: 0), block: tapBlock)
 
         audioEngine.prepare()
         try audioEngine.start()

@@ -1,10 +1,12 @@
 # LumaStage Apple Vision Pro / iPad MVP 系統規格書
 
-> 註：目標平台為 **visionOS 27**（主 app，部署目標 27.0）＋ **iPadOS 27**（可選的「LumaStage Control」控制面板 companion target，透過 Multipeer Connectivity 即時遠端連線）。兩者皆需 **Xcode 27**（OS 27 SDK + 裝置端 Foundation Models）。
+> 註：目標平台為 **visionOS 26**（主 app，部署目標 26.0）＋ **iPadOS 26**（可選的「LumaStage Control」控制面板 companion target，透過 Multipeer Connectivity 即時遠端連線）。兩者皆需 **Xcode 26.4**（OS 26 SDK）。
 >
-> 註：iPad 子系統（第 7 章）已從產品中移除，LumaStage 現為 **visionOS 單一 app**；AI 生成層改用 Apple 裝置端 Foundation Models。原 iPad 微調控制（cue 切換、front light dimmer、background wash color、reset）目前未在任何 visionOS 介面提供。以下章節保留作為歷史規格紀錄。
+> 註（2026-07，visionOS 26 港版）：本次降版把 AI 生成層**改回 OpenAI 雲端獨佔**——**Apple 裝置端 Foundation Models 已完整移除**（`FoundationModelsLightingService.swift`／`FallbackLightingService.swift` 皆刪除、無 `import FoundationModels`、無裝置端生成、無備援鏈、無「強制裝置端／隱私模式」開關）。下方所有提及「裝置端 Foundation Models」的歷史 註仍保留作紀錄，但**現況**一律以 OpenAI 雲端生成為準。此外三個 visionOS 27-only 的 RealityKit API 在 26 上不可用而移除：房間溢光的 `SpotLightComponent.SurroundingsLight`（房間溢光模式仍切透視 + `.preferredSurroundingsEffect(.dim)` + 隱藏不透明場景，但虛擬燈**無法**打亮真實房間）、軟陰影細部（`Shadow.lightSize` penumbra + per-role `quality`，改用基本 `SpotLightComponent.Shadow()`）、gobo 投影（`SpotLightComponent.ProjectiveTexture`，見下方 gobo 註）。
 >
-> 註：燈具現以真實 RealityKit `SpotLight` 渲染，並支援可選的投影圖案（gobo：breakup／stripes／stars／grid）。gobo **僅由裝置端 Foundation Models 在生成時選擇**（沒有手動控制介面），目前只在會被渲染的 frontLight／backgroundWash 角色上呈現；`resetSelectedCue` 會還原 AI 基準的 gobo，而非清除它。
+> 註：iPad 子系統（第 7 章）已從產品中移除，LumaStage 現為 **visionOS 單一 app**（外加可選 iPad 控制面板）。原 iPad 微調控制（cue 切換、front light dimmer、background wash color、reset）目前未在任何 visionOS 介面提供。以下章節保留作為歷史規格紀錄。
+>
+> 註：燈具現以真實 RealityKit `SpotLight` 渲染。gobo（breakup／stripes／stars／grid）資料仍由 AI 在雲端生成時選擇、經 `validate()` 保存於專案中，但在 **visionOS 26 上僅為資料、不再投影**（`SpotLightComponent.ProjectiveTexture` 為 27-only 已移除）；`resetSelectedCue` 會還原 AI 基準的 gobo 欄位，而非清除它。
 
 ## 1. 文件目的
 
@@ -92,7 +94,7 @@
 | iPad Control Panel | 提供 selected cue 的少量精準微調控制。 |
 | Speech-to-text Pipeline | 將使用者語音轉成 transcript，保留中英混講內容。 |
 | AI Command Parser | 將 transcript 或 typed prompt 轉成結構化 lighting look 或 patch intent。 |
-| On-Device Generation Layer | 以 Apple Foundation Models（Apple Intelligence）產生 MVP Lighting Look 與 explanation。 |
+| Cloud Generation Layer | 以 OpenAI 雲端（Responses API + strict `json_schema`，model `gpt-5.5`）產生 Lighting Look 與 explanation。〔歷史上曾改用 Apple 裝置端 Foundation Models，visionOS 26 港版已改回 OpenAI 雲端獨佔。〕 |
 | Shared Stage State | 保存目前 lighting look、selected cue、fixture group 狀態與 UI 狀態。 |
 | RealityKit Stage Renderer | 根據 selected cue 渲染燈光狀態，並在 cue 切換時做 transition animation。 |
 
@@ -209,9 +211,11 @@ iPad MVP 只提供三個控制：
 - 不提供環境光 preset 切換。
 - 不提供 DMX / console export。
 
-> 註：本週起 AI 生成層由雲端 OpenAI API 改為 Apple 裝置端 Foundation Models（Apple Intelligence）。以下「結構化輸出」與「驗證」規格不變，只是改由裝置端模型透過 `@Generable` 結構化輸出產生，並在無 Apple Intelligence 時顯示無法使用狀態、不再提供本機 demo fallback。
+> 註（歷史）：曾一度將 AI 生成層由雲端 OpenAI API 改為 Apple 裝置端 Foundation Models（Apple Intelligence），透過 `@Generable` 結構化輸出產生。
+>
+> 註（2026-07，現況，visionOS 26 港版）：上述裝置端 Foundation Models 改動**已完全逆轉**——AI 生成層**改回 OpenAI 雲端獨佔**（Responses API + strict `json_schema`，model `gpt-5.5`，金鑰存 Keychain、經 `ProjectSelectionView` 齒輪 → `OpenAISettingsView` 設定，有非空金鑰才可用，失敗一律 `.generationFailed(<繁中>)`）。以下「結構化輸出」與「驗證」規格不變。
 
-## 8. Speech-to-text 與 Apple Foundation Models 規格
+## 8. Speech-to-text 與 OpenAI 雲端生成規格
 
 ### 8.1 Speech-to-text
 
