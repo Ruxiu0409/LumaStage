@@ -20,6 +20,7 @@
 		F71ABA1C2FE95B54007848FC /* Exceptions for "LumaStage" folder in "LumaStageControl" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
+				CuePlayback.swift,
 				FixtureGroups.swift,
 				iPadPanel/LumaPanelApp.swift,
 				iPadPanel/LumaPanelModel.swift,
