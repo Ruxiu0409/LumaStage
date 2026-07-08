@@ -74,9 +74,15 @@ struct TabletopStageEditorView: View {
             TabletopStageScene.seatAssemblyOnSurface(in: turntable)
 
             if let controls = attachments.entity(for: "controls") {
-                // Float the control bar just above and in front of the model. It hangs off `placement`, not
-                // the turntable, so it stays facing the user while the model spins.
-                controls.position = SIMD3<Float>(0, 0.34, 0.18)
+                // Float the control bar clearly IN FRONT OF and BELOW the diorama — like a lighting console
+                // the user looks down at — so the large, real-world-sized attachment no longer occludes the
+                // tiny 0.07-scaled model. It still hangs off `placement` (not the turntable), so it stays put
+                // and facing the user while the model spins; z is pushed past the model's max spun-footprint
+                // radius so "舞台左轉/右轉" never turns the model back under it. Recline (~50° about X) lays the
+                // wide panel back into a console surface instead of a wall in front of the model.
+                // Spatial offsets are device-tuned, same caveat as `floatingPlacement`.
+                controls.position = SIMD3<Float>(0, 0.12, 0.42)
+                controls.orientation = simd_quatf(angle: -Float.pi * 50 / 180, axis: SIMD3<Float>(1, 0, 0))
                 placement.addChild(controls)
             }
         } update: { _, _ in
