@@ -58,7 +58,7 @@ struct SelectedLightControlView: View {
             angleRow(number: number, editable: editable)
             followCueButton(number: number, editable: editable)
             if !editable {
-                Text("播放中僅供檢視，切換到「編程」階段即可編輯。")
+                Text("播放中僅供檢視，切換到「調控」階段即可編輯。")
                     .font(.caption2)
                     .foregroundStyle(LumaStageDesign.textSecondary)
             }

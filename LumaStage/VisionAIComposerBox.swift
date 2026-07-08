@@ -34,7 +34,6 @@ struct VisionAIComposerBox: View {
             inputField(text: promptText, isRecording: isRecording)
             feedbackPanel
             cueSection
-            statusRow
             controlRow
             debugPanel
         }
@@ -252,46 +251,6 @@ struct VisionAIComposerBox: View {
         .animation(reduceMotion ? nil : .smooth(duration: 0.2), value: isRecording)
     }
 
-    private var statusRow: some View {
-        let statusChips = ComposerStatusChipPolicy.make(
-            projectName: appModel.selectedProject?.name,
-            cueName: appModel.selectedCue?.localizedDisplayName ?? "開場",
-            musicStatusTitle: appModel.isMusicShowActive ? musicStatusChipTitle : nil
-        )
-
-        return HStack(spacing: 10) {
-            HStack(spacing: 7) {
-                Image(systemName: stateIcon)
-                Text(stateLabel)
-            }
-            .font(.callout.weight(.semibold))
-            .foregroundStyle(stateTint)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 7)
-            .lumaNativeGlass(tint: stateTint.opacity(0.18), radius: 14)
-
-            if let projectName = statusChips.projectName {
-                LumaStatusChip(title: projectName, tint: LumaStageDesign.coolBlue)
-            }
-            LumaStatusChip(title: statusChips.cueName, tint: LumaStageDesign.warmAmber)
-
-            if let musicStatusTitle = statusChips.musicStatusTitle {
-                LumaStatusChip(title: musicStatusTitle, tint: LumaStageDesign.coolBlue)
-            }
-
-            Spacer()
-        }
-    }
-
-    /// Compact "playing/stopped · BPM" label for the live music chip in `statusRow`.
-    private var musicStatusChipTitle: String {
-        let state = appModel.isMusicPlaying ? "播放中" : "已停止"
-        if let bpm = appModel.musicBPM {
-            return "\(state) · BPM \(Int(bpm.rounded()))"
-        }
-        return state
-    }
-
     private var controlRow: some View {
         HStack(spacing: 12) {
             Button("返回專案", systemImage: "folder", action: returnToProjects)
@@ -392,8 +351,7 @@ struct VisionAIComposerBox: View {
         .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: appModel.conversationState)
     }
 
-    /// What `feedbackPanel` renders for the current state. View-level (it references SwiftUI colors),
-    /// consistent with `stateLabel`/`stateIcon`/`stateTint`.
+    /// What `feedbackPanel` renders for the current state. View-level (it references SwiftUI colors).
     private struct ComposerFeedback {
         var icon: String
         var tint: Color
@@ -630,59 +588,6 @@ struct VisionAIComposerBox: View {
         appModel.stageImmersionMode == .roomSpill
             ? "停止將燈光投射到你的房間"
             : "將舞台燈光投射到你的房間"
-    }
-
-    private var stateTint: Color {
-        switch appModel.conversationState {
-        case .idle:
-            return LumaStageDesign.coolBlue
-        case .listening, .transcribing:
-            return LumaStageDesign.warmAmber
-        case .interpreting, .applying:
-            return LumaStageDesign.coolBlue
-        case .explaining:
-            return LumaStageDesign.softGreen
-        case .error:
-            return .red
-        }
-    }
-
-    private var stateIcon: String {
-        switch appModel.conversationState {
-        case .idle:
-            return "wand.and.stars"
-        case .listening:
-            return "waveform"
-        case .transcribing:
-            return "text.bubble"
-        case .interpreting:
-            return "brain"
-        case .applying:
-            return "lightbulb.max"
-        case .explaining:
-            return "checkmark.seal"
-        case .error:
-            return "exclamationmark.triangle"
-        }
-    }
-
-    private var stateLabel: String {
-        switch appModel.conversationState {
-        case .idle:
-            return "自動設計"
-        case .listening:
-            return "聆聽中"
-        case .transcribing:
-            return "轉錄中"
-        case .interpreting:
-            return "AI 解讀中"
-        case .applying:
-            return "套用燈光中"
-        case .explaining:
-            return "已生成"
-        case .error:
-            return "需要重試"
-        }
     }
 
     private func sendPrompt() {

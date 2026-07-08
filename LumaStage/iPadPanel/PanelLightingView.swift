@@ -103,7 +103,7 @@ private struct LightingOverview: View {
                 }
             }
             if model.workflowPhase == .rigging {
-                Text("Vision Pro 目前在「架設」階段（桌面編輯），iPad 僅能切換編程／播放。")
+                Text("Vision Pro 目前在「架設」階段（桌面編輯），iPad 僅能切換調控／播放。")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }

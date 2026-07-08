@@ -62,7 +62,7 @@ struct OpenAILightingService: LightingLookGenerating {
             let (data, response) = try await httpSend(request)
 
             if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-                throw Self.mapHTTPStatus(http.statusCode)
+                throw Self.mapHTTPStatus(http.statusCode, body: data)
             }
 
             let innerJSON = try Self.extractOutputText(from: data)
@@ -93,6 +93,11 @@ struct OpenAILightingService: LightingLookGenerating {
     private static func makeRequest(prompt: String, apiKey: String, model: String) throws -> URLRequest {
         // Responses API flattens name/strict/schema under `text.format` — NOT the Chat Completions
         // `response_format.json_schema` shape (which would 400 here).
+        //
+        // No `temperature`: GPT-5-class reasoning models reject sampling parameters on `/v1/responses`
+        // with an HTTP 400 ("Unsupported parameter: 'temperature'"), which the old default error branch
+        // silently relabelled as "無法解讀模型回應" — so generation appeared to "fail to parse" when the
+        // request was actually being rejected. The model's default temperature is used instead.
         let body: [String: Any] = [
             "model": model,
             "instructions": instructions,
@@ -104,8 +109,7 @@ struct OpenAILightingService: LightingLookGenerating {
                     "strict": true,
                     "schema": jsonSchema
                 ]
-            ],
-            "temperature": 0.9
+            ]
         ]
 
         var request = URLRequest(url: endpoint)
@@ -154,7 +158,7 @@ struct OpenAILightingService: LightingLookGenerating {
 
     // MARK: - Error mapping (all → .generationFailed; NEVER .modelUnavailable)
 
-    private static func mapHTTPStatus(_ status: Int) -> LightingGenerationError {
+    private static func mapHTTPStatus(_ status: Int, body: Data) -> LightingGenerationError {
         switch status {
         case 401, 403:
             return .generationFailed("OpenAI API 金鑰無效或未授權。")
@@ -163,8 +167,29 @@ struct OpenAILightingService: LightingLookGenerating {
         case 500...599:
             return .generationFailed("OpenAI 服務暫時無法使用，請稍後再試。")
         default:
-            return .generationFailed(decodeFailureReason)
+            // Surface the REAL OpenAI error rather than masking every unhandled non-2xx as a parse failure.
+            // A 400 (an unsupported parameter, an unknown model id, a malformed schema…) was previously
+            // indistinguishable from a genuine decode miss, so users chased the wrong problem. Include the
+            // status and, when present, OpenAI's own `error.message`.
+            if let message = openAIErrorMessage(from: body) {
+                return .generationFailed("OpenAI 回應錯誤（狀態 \(status)）：\(message)")
+            }
+            return .generationFailed("OpenAI 回應錯誤（狀態 \(status)）。請再試一次。")
         }
+    }
+
+    /// Best-effort extraction of the `error.message` string from an OpenAI error response body, for a
+    /// human-readable failure instead of a generic parse-failure message.
+    private static func openAIErrorMessage(from data: Data) -> String? {
+        guard
+            let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let error = root["error"] as? [String: Any],
+            let message = error["message"] as? String,
+            !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            return nil
+        }
+        return message
     }
 
     private static func mapURLError(_ error: URLError) -> String {

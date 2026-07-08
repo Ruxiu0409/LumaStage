@@ -213,6 +213,11 @@ class AppModel {
     @ObservationIgnored
     private var syncCoordinator: LumaSyncCoordinator?
 
+    /// On-device persistence for the project list, so projects the user creates or edits survive an app
+    /// relaunch instead of the list reseeding to only the built-in showcase every launch.
+    @ObservationIgnored
+    private let projectStore = ProjectStore()
+
     init(
         aiClient: (any LightingLookGenerating)? = nil,
         songAnalyzer: (any SongAnalyzing)? = nil,
@@ -223,6 +228,11 @@ class AppModel {
         self.songAnalyzer = songAnalyzer ?? MusicUnderstandingService()
         self.songLibrary = songLibrary ?? MusicKitSongLibrary()
         modelAvailability = resolvedClient.availability
+        // Restore projects saved on-device so created/edited projects survive an app relaunch. A missing or
+        // unreadable store leaves `projects` on its built-in defaults (seeded at the property declaration).
+        if let saved = projectStore.load(), !saved.isEmpty {
+            projects = saved
+        }
     }
 
     private static func makeDefaultLightingClient() -> any LightingLookGenerating {
@@ -847,8 +857,12 @@ class AppModel {
         selectedProjectId = project.id
         // Ask for the 1:1 stage space; `ContentView` opens it once it's the front-most window.
         desiredImmersiveScene = .stage
-        // SPEC 20: a freshly opened project lands on the 編程 page (the 1:1 stage), not 架設.
-        workflowPhase = .programming
+        // SPEC 20: a freshly opened project lands on the 調控 page (the 1:1 stage), not 架設 — EXCEPT a
+        // music-demo project (`autoLoadDemoMusicShow`) opens straight on the 播放 page so its auto-loaded
+        // show is ready to run with the playback timeline visible. Both phases live on the same stage
+        // space (only 架設 uses the tabletop), so this needs no scene-swap — a direct assignment matches
+        // how `setWorkflowPhase(.playback)` behaves when not editing the tabletop.
+        workflowPhase = project.autoLoadDemoMusicShow ? .playback : .programming
         stageState = StageState(lightingLook: project.lightingLook)
         lightOverrides = [:]
         selectedFixtureId = nil
@@ -868,6 +882,21 @@ class AppModel {
         lastError = nil
         conversationState = .idle
         refreshModelAvailability()
+
+        // The demo showcase opts into opening as a music-driven show (`autoLoadDemoMusicShow`): load the
+        // built-in demo song and build its beat-locked cue "場景" so the project opens ready to press 播放
+        // (load-only — it does NOT auto-play). Runs after the synchronous open because `useBuiltInDemoSong`
+        // is async; guarded on the still-selected project id so a fast project switch mid-load can't apply
+        // the show to the wrong project. `useBuiltInDemoSong` rebuilds the show each open, so the audio (a
+        // session-only resource that isn't persisted) is always reloaded — deliberately at the cost of not
+        // preserving manual edits to this demo project across reopens.
+        if project.autoLoadDemoMusicShow {
+            let targetProjectId = project.id
+            Task { [weak self] in
+                guard let self, self.selectedProjectId == targetProjectId else { return }
+                await self.useBuiltInDemoSong()
+            }
+        }
     }
 
     func createProject() {
@@ -877,11 +906,15 @@ class AppModel {
     func createProject(template: ProjectCreationTemplate.Kind) {
         let project = LumaStageProject.newProject(index: projects.count + 1, template: template)
         projects.insert(project, at: 0)
+        saveProjects()
         openProject(id: project.id)
     }
 
     func closeProject() {
         persistCurrentProjectState()
+        // Persist on the normal "返回專案" path so the just-edited look survives an app relaunch, not just
+        // the project's existence. Cheap (a small JSON write) and off any per-frame path.
+        saveProjects()
         selectedProjectId = nil
         // No project → no immersive space. Also end any tabletop editing session (its layout no longer
         // has a home once the project closes); `ContentView` then opens nothing.
@@ -1777,6 +1810,7 @@ class AppModel {
 
             projects[projectIndex].stageLayout = layout
             projects[projectIndex].lastEditedDescription = "舞台佈局已更新"
+            saveProjects()
             aiUnderstoodCommand = "已更新 \(layout.name) 的舞台建構佈局"
             lastError = nil
             conversationState = .idle
@@ -1869,6 +1903,13 @@ class AppModel {
 
         projects[projectIndex].lightingLook = stageState.lightingLook
         projects[projectIndex].lastEditedDescription = "目前工作階段"
+    }
+
+    /// Writes the project list to on-device storage (best-effort; never throws). Called after the discrete,
+    /// non-per-frame mutations that should survive an app relaunch — project creation, stage-layout saves,
+    /// and closing a project (which first commits the working look via `persistCurrentProjectState`).
+    private func saveProjects() {
+        projectStore.save(projects)
     }
 
     private static func understoodCommand(for prompt: String) -> String {

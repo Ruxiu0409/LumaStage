@@ -13,13 +13,13 @@ import Foundation
 /// name is Traditional Chinese for the UI.
 enum WorkflowPhase: String, Codable, CaseIterable, Equatable {
     case rigging       // 架設
-    case programming   // 編程
+    case programming   // 調控
     case playback      // 播放
 
     var localizedDisplayName: String {
         switch self {
         case .rigging: return "架設"
-        case .programming: return "編程"
+        case .programming: return "調控"
         case .playback: return "播放"
         }
     }

@@ -232,12 +232,10 @@ struct TabletopStageEditorView: View {
                     TabletopStageScene.syncFixtureStand(in: fixtureContainer,
                                                         position: resolved,
                                                         layout: appModel.stageLayout)
-                    // #20: show the translucent "hangable region" volume so the user can see where the
-                    // dragged light will hang (inside) vs stand (outside). Idempotent — only fades in on the
-                    // first frame of the drag; Reduce Motion hard-toggles it (no fade), like the sweep/spin.
-                    TabletopStageScene.setHangZoneVisible(true, in: turntable,
-                                                          layout: appModel.stageLayout,
-                                                          animated: !reduceMotion)
+                    // The #20 translucent "hangable region" volume is intentionally NOT shown while dragging:
+                    // its large low-alpha box read as a blue backdrop appearing behind the diorama whenever a
+                    // fixture was pinch-dragged, which the user found distracting. The live hang↔stand snap
+                    // (fixture position + stand toggle above) already communicates where the light will land.
                     return
                 }
                 // Otherwise a truss/deck piece: ground-plane drag with live connector-node snapping.
@@ -1119,7 +1117,14 @@ enum TabletopStageScene {
             return
         }
         assembly.position.y = 0
-        let bottom = assembly.visualBounds(relativeTo: root).min.y
+        // Seat on the STABLE ground plate only — never the whole assembly's visual bounds. This runs every
+        // `update:` pass, and the assembly's bounds shift as the user drags a rig fixture (it snaps up to
+        // hanging height / down to a floor stand), which re-measured the whole assembly and bobbed the entire
+        // diorama up and down every frame (the "stage moves when I move a light" bug). The `tabletop_ground`
+        // plate is the fixed base of the model and the diorama's true lowest point, so seating on it keeps the
+        // stage locked in place regardless of where the fixtures are.
+        let reference = assembly.findEntity(named: "tabletop_ground") ?? assembly
+        let bottom = reference.visualBounds(relativeTo: root).min.y
         assembly.position.y = -bottom
     }
 

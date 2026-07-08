@@ -1239,6 +1239,11 @@ struct LumaStageProject: Codable, Equatable, Identifiable {
     /// The locked rig (鎖定燈具) generation must obey (SPEC 05). Additive + back-compat: defaults to
     /// unconstrained, and old project JSON without the key decodes to unconstrained via `decodeIfPresent`.
     var rigConstraint: RigConstraint = RigConstraint(fixtureCount: nil, allowedModels: [])
+    /// When true, opening this project auto-loads the built-in demo song and builds its beat-locked
+    /// multi-cue "場景" show (via `AppModel.useBuiltInDemoSong`), ready for the user to press 播放 — the
+    /// seeded 舞團演出 Showcase demo opts in. Additive + back-compat: defaults false, and project JSON
+    /// without the key decodes false via `decodeIfPresent`.
+    var autoLoadDemoMusicShow: Bool = false
 
     init(
         id: String,
@@ -1248,7 +1253,8 @@ struct LumaStageProject: Codable, Equatable, Identifiable {
         lastEditedDescription: String,
         stageLayout: StageLayout,
         lightingLook: LightingLook,
-        rigConstraint: RigConstraint = RigConstraint(fixtureCount: nil, allowedModels: [])
+        rigConstraint: RigConstraint = RigConstraint(fixtureCount: nil, allowedModels: []),
+        autoLoadDemoMusicShow: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -1258,6 +1264,7 @@ struct LumaStageProject: Codable, Equatable, Identifiable {
         self.stageLayout = stageLayout
         self.lightingLook = lightingLook
         self.rigConstraint = rigConstraint
+        self.autoLoadDemoMusicShow = autoLoadDemoMusicShow
     }
 
     // Custom decoding so old project JSON without a `rigConstraint` key decodes to unconstrained — a
@@ -1274,6 +1281,8 @@ struct LumaStageProject: Codable, Equatable, Identifiable {
         lightingLook = try container.decode(LightingLook.self, forKey: .lightingLook)
         rigConstraint = try container.decodeIfPresent(RigConstraint.self, forKey: .rigConstraint)
             ?? RigConstraint(fixtureCount: nil, allowedModels: [])
+        autoLoadDemoMusicShow = try container.decodeIfPresent(Bool.self, forKey: .autoLoadDemoMusicShow)
+            ?? false
     }
 
     static func defaultProjects() -> [LumaStageProject] {
@@ -1292,7 +1301,10 @@ struct LumaStageProject: Codable, Equatable, Identifiable {
                 eventType: "舞團成發",
                 lastEditedDescription: "可直接播放的示範秀",
                 stageLayout: .defaultStudentOutdoor(),
-                lightingLook: showcaseLook
+                lightingLook: showcaseLook,
+                // The demo showcase opens as a music-driven show: opening it auto-loads the built-in demo
+                // song and builds the matching beat-locked cue "場景", ready for the user to press 播放.
+                autoLoadDemoMusicShow: true
             )
         ]
     }

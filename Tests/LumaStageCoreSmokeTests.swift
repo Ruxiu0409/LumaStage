@@ -6,6 +6,7 @@ struct LumaStageCoreSmokeTests {
     static func main() async throws {
         try validatesDemoLookDefaults()
         try defaultProjectsShipPlayableShowcase()
+        try projectStoreRoundTripsToDisk()
         spotLightRenderMathMapsIntensityAndBeamAngle()
         laserBeamMathDerivesCoreAndSheathLayers()
         spotBeamScatterMathDerivesConeLayers()
@@ -147,6 +148,38 @@ struct LumaStageCoreSmokeTests {
         expect(showcase?.id == "project_dance_showcase", "the default project is the showcase show")
         expect((showcase?.lightingLook.cues.count ?? 0) >= 2, "a playable show ships at least Opening + Highlight cues")
         try showcase?.lightingLook.validate()
+        // The showcase opts into opening as a music-driven show (auto-loads the built-in demo song +
+        // beat-locked cue "場景"); the flag must survive a Codable round-trip so it persists on disk.
+        expect(showcase?.autoLoadDemoMusicShow == true, "the showcase must opt into auto-loading the demo music show")
+        let roundTripped = try JSONDecoder().decode(
+            LumaStageProject.self, from: JSONEncoder().encode(try expectUnwrapped(showcase, "showcase must exist"))
+        )
+        expect(roundTripped.autoLoadDemoMusicShow, "autoLoadDemoMusicShow must survive a Codable round-trip")
+    }
+
+    private static func projectStoreRoundTripsToDisk() throws {
+        // Persistence (issue: created/edited projects must survive an app relaunch). A fresh, empty store has
+        // nothing to load, so the app falls back to the built-in defaults.
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LumaStageProjectStoreTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let store = ProjectStore(directory: dir)
+        expect(store.load() == nil, "an empty store must load nil so the app can fall back to defaults")
+
+        // Save a project list that includes a freshly-created project on top of the shipped showcase, then a
+        // SEPARATE store (simulating an app relaunch) must load it back identically — this is what lets
+        // created/edited projects survive quitting the app.
+        var projects = LumaStageProject.defaultProjects()
+        projects.insert(LumaStageProject.newProject(index: 2, template: .campusMusic), at: 0)
+        expect(store.save(projects), "saving the project list must succeed")
+
+        let reopened = ProjectStore(directory: dir).load()
+        expect(reopened?.count == projects.count, "a relaunch must load every saved project")
+        expect(reopened?.first?.id == projects.first?.id, "the newly created project must survive a relaunch")
+        expect(reopened?.last?.id == "project_dance_showcase", "the showcase default must also survive a relaunch")
+        // The whole project graph (StageLayout / LightingLook) must round-trip, not just the ids.
+        try reopened?.first?.lightingLook.validate()
     }
 
     private static func spotLightRenderMathMapsIntensityAndBeamAngle() {
@@ -3426,6 +3459,8 @@ struct LumaStageCoreSmokeTests {
         let project = try JSONDecoder().decode(LumaStageProject.self, from: data)
         expect(project.rigConstraint.isUnconstrained,
                "A legacy project JSON without rigConstraint must decode to an unconstrained rig")
+        expect(!project.autoLoadDemoMusicShow,
+               "A legacy project JSON without autoLoadDemoMusicShow must decode to false (back-compat)")
     }
 
     // SPEC 12 WI-2: the Foundation-only selection seam. Pins the loopback's browse/search/resolve

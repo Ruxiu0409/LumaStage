@@ -20,6 +20,11 @@ struct ImmersiveView: View {
     // a stable origin (not the running value) for the duration of the gesture. nil between drags.
     @State private var dragBaseIntensity: Double?
 
+    // Flips true once the additive-blend beam program has compiled (see `AdditiveBeamProgram`). Read at
+    // body level below so the async compile completing re-evaluates `body`, which re-runs `update:` and
+    // relights every beam cone with the additive material instead of the transient alpha-blend fallback.
+    @State private var additiveBeamProgramReady = false
+
     var body: some View {
         // Establish a body-level Observation dependency on the lighting look so a generation-
         // or cue-driven look change re-evaluates this body, which re-runs the RealityView
@@ -40,6 +45,9 @@ struct ImmersiveView: View {
         // And on the group submasters (SPEC 08) so an iPad fader ride re-runs the update closure and
         // folds the new master into the relight. Same Observation footgun as the reads above.
         let _ = appModel.groupMasters
+        // And on the additive-beam-program readiness so the async shader compile completing re-runs the
+        // update closure and swaps the beam cones from the alpha fallback to the additive material.
+        let _ = additiveBeamProgramReady
 
         RealityView { content in
             let root = Self.makeStageRoot(layout: appModel.stageLayout)
@@ -140,6 +148,13 @@ struct ImmersiveView: View {
         // system move bar and smooth, compositor-driven dragging instead of a hand-rolled entity
         // drag. The system does NOT auto-hide an app's own windows when an immersive space opens,
         // so it's opened with the space here and dismissed when the space closes.
+        // Compile the additive-blend beam program once, off the render path (it's async — shader
+        // compilation). Flipping `additiveBeamProgramReady` re-evaluates the body so `update:` relights
+        // the cones with the additive material. Idempotent: the compiled program is cached statically.
+        .task {
+            await AdditiveBeamProgram.loadIfNeeded()
+            additiveBeamProgramReady = true
+        }
         .onAppear {
             appModel.immersiveSpaceState = .open
             // Fresh stage session: clear any stale programmatic-dismiss guard so the windowed
@@ -1492,16 +1507,52 @@ struct ImmersiveView: View {
         return (try? MeshResource.generate(from: [descriptor])) ?? .generateCylinder(height: length, radius: baseRadius)
     }
 
+    /// Additive-blend program for the aerial beam cones, compiled once and cached. Building an
+    /// `UnlitMaterial.Program` is **async** (shader compilation), so it can't be created inside the
+    /// synchronous material builder / render closures; `ImmersiveView.task` compiles it on stage appear and
+    /// stashes it here. Additive blending (`.add`) is the reason overlapping cones MIX like real light — a
+    /// red beam crossing a green one reads yellow where they cross — instead of the near cone alpha-painting
+    /// over the far one (alpha-over can't cross-mix intersecting translucent geometry; it depth-sorts and
+    /// one cone wins). This is the only additive path available on visionOS 26: `UnlitMaterial.Blending`
+    /// offers just `.opaque`/`.transparent`, and `CustomMaterial`'s `.add` init is `@available(visionOS,
+    /// unavailable)` — but `UnlitMaterial.Program.Descriptor.blendMode = .add` is a visionOS-2.0 API.
+    private enum AdditiveBeamProgram {
+        static var shared: UnlitMaterial.Program?
+
+        /// Compiles the additive program once (idempotent — a no-op once cached).
+        static func loadIfNeeded() async {
+            guard shared == nil else { return }
+            var descriptor = UnlitMaterial.Program.Descriptor()
+            descriptor.blendMode = .add
+            shared = await UnlitMaterial.Program(descriptor: descriptor)
+        }
+    }
+
     /// The cone sheath material (saturated cue hue). See `SpotBeamScatterMath.sheathRGBA`. When `isFaint`
     /// (front-of-house key / side fixtures — `RigPlacement.AerialBeamConeVisibility.faint`), the alpha is
     /// scaled down by `SpotBeamScatterConfig.faintAlphaScale` so the cone reads as a see-through veil.
-    /// **Material footgun:** on visionOS 26, an `UnlitMaterial` tint's alpha channel does NOT alpha-blend
-    /// on its own — the cone rendered as a fully opaque wedge despite a ~0.02 tint alpha. Translucency must
-    /// be requested via `blending = .transparent(opacity:)`, so this helper returns the whole material
-    /// (opaque tint + transparent blending) rather than a UIColor.
+    ///
+    /// Once the additive program (`AdditiveBeamProgram`) has compiled the cone uses **additive blending** so
+    /// crossing beams sum into a mixed hue. Because `.add` composites the source colour into the framebuffer
+    /// (rather than alpha-over), the intended brightness is carried by PREMULTIPLYING the sheath RGB by its
+    /// alpha with the material's own alpha left at 1 — this is robust whether or not RealityKit's add path
+    /// also scales the source by its alpha. The material is built the known-good way (`UnlitMaterial(color:)`,
+    /// which populates the colour parameter block) and then has the additive program assigned; `program`
+    /// (the shader/blend state) and the colour parameter block are separate, so the colour survives the swap.
+    ///
+    /// **Fallback:** until the async compile finishes, the cone uses `blending = .transparent(opacity:)`
+    /// (visionOS-26 footgun: an `UnlitMaterial` tint's alpha does not blend on its own — it must go through
+    /// `.transparent`). Over the dark venue a single alpha cone reads fine; only cross-mixing needs `.add`.
     private static func spotBeamSheathMaterial(hex: String, intensity: Double, beamAngleDegrees: Double, isFaint: Bool) -> UnlitMaterial {
         let c = SpotBeamScatterMath.sheathRGBA(hex: hex, intensity: intensity, beamAngleDegrees: beamAngleDegrees)
         let alpha = isFaint ? c.alpha * SpotBeamScatterConfig.default.faintAlphaScale : c.alpha
+
+        if let program = AdditiveBeamProgram.shared {
+            var material = UnlitMaterial(color: UIColor(red: c.red * alpha, green: c.green * alpha, blue: c.blue * alpha, alpha: 1))
+            material.program = program
+            return material
+        }
+
         var material = UnlitMaterial(color: UIColor(red: c.red, green: c.green, blue: c.blue, alpha: 1))
         material.blending = .transparent(opacity: .init(floatLiteral: Float(alpha)))
         return material
