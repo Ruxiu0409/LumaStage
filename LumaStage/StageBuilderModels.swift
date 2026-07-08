@@ -1248,6 +1248,12 @@ struct StageLayout: Codable, Equatable, Identifiable {
     var objects: [StageObject]
     var metadata: StageLayoutMetadata
 
+    /// 使用者在桌面編輯器擺的表演者站位（model 公尺；只用 x/z，y 由 renderer 釘到甲板頂）。
+    /// additive：舊 JSON 缺鍵→nil（synthesized Codable 對 optional 自動 decodeIfPresent）。
+    /// nil = 沿用預設站位（甲板中心，見 `ImmersiveView.addPerformerStandIn`）＝ 前光/spot aim 不微調
+    /// （見 `RigPlacement.performerNudgedAim`）。跨 AI 重生成存活——屬舞台佈局，不隨 `generate` 清除。
+    var performerPosition: Vector3Meters? = nil
+
     var id: String { stageLayoutId }
 
     static let connectorSnapThreshold = 0.15

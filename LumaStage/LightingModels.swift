@@ -2091,14 +2091,19 @@ enum RigPlacement {
         let trussOnly = mountsOnTrussOnly(fixture.renderModel)
         let zone = trussOnly ? .stageBack : fixture.zone
         let zonePlacement = placement(zone: zone, slot: slot, count: count, layout: layout)
+        // SPEC 22: front/side key & spot aim nudges partially toward the user-placed performer (opt-in via
+        // `layout.performerPosition`). Backlight/laser and a nil performerPosition are a byte-identical no-op,
+        // so existing generation/music-show aim is unchanged. Only the aim is affected — never the position.
+        let aim = performerNudgedAim(zoneAim: zonePlacement.aim, zone: zone,
+                                     model: fixture.renderModel, layout: layout)
         guard let manual = fixture.manualPosition else {
-            return zonePlacement
+            return (zonePlacement.position, aim)
         }
         var position = Vector3Meters(x: manual.x, y: manual.y, z: manual.z)
         if trussOnly {
             position = clampedToTruss(position, layout: layout)
         }
-        return (position, zonePlacement.aim)
+        return (position, aim)
     }
 
     /// The stage-centre point (model metres) the tabletop "瞄準舞台中心" button aims a fixture at: the deck
@@ -2111,6 +2116,39 @@ enum RigPlacement {
         let centerZ = stageBase?.position.z ?? 0
         let topY = (stageBase?.position.y ?? size.height / 2) + size.height / 2
         return Vector3Meters(x: centerX, y: topY + 0.4, z: centerZ)
+    }
+}
+
+// MARK: - SPEC 22: performer-aware aim nudge (partial blend, opt-in, front/side only)
+
+extension RigPlacement {
+    /// 前光/spot aim 朝表演者微調的比例（0＝純 zone aim，1＝完全對準人偶）。初值 0.5，永遠 < 1（微調而非
+    /// 接管）；實機微調（見 SPEC 22 Caveats——0.5 是否把 FOH 打歪、側 boom 追蹤是否過頭需實機驗）。
+    static let performerAimNudgeFraction = 0.5
+
+    /// 哪些 zone 的 aim 會追蹤表演者：只有「前打/側打的 key/spot」。背景洗（`.stageBack`/`.fullStage`）與
+    /// 雷射（truss-only）維持 zone aim，確保既有生成／音樂秀「洗背板」的打光方向完全不變。
+    static func aimTracksPerformer(zone: StageZone, model: LightingFixtureVisualModel) -> Bool {
+        guard !mountsOnTrussOnly(model) else { return false }   // 雷射不受影響
+        switch zone {
+        case .stageFront, .stageLeft, .stageRight: return true
+        case .stageBack, .fullStage:               return false
+        }
+    }
+
+    /// 把 zone 推算的 aim 朝 layout 的 `performerPosition` **部分 blend**（lerp fraction），且只對
+    /// `aimTracksPerformer` 為真的 fixture。`performerPosition` 為 nil 或非追蹤 zone → **原樣回傳**（byte-identical
+    /// no-op）。這是「微調而非接管」：blend 分量固定 < 1，且 opt-in（沒放人偶就完全無作用），既有打光方向不被破壞。
+    static func performerNudgedAim(zoneAim: Vector3Meters, zone: StageZone,
+                                   model: LightingFixtureVisualModel, layout: StageLayout) -> Vector3Meters {
+        guard let target = layout.performerPosition,
+              aimTracksPerformer(zone: zone, model: model) else { return zoneAim }
+        let f = performerAimNudgeFraction
+        return Vector3Meters(
+            x: zoneAim.x + (target.x - zoneAim.x) * f,
+            y: zoneAim.y + (target.y - zoneAim.y) * f,
+            z: zoneAim.z + (target.z - zoneAim.z) * f
+        )
     }
 }
 

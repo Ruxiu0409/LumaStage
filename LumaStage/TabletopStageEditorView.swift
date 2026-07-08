@@ -168,7 +168,12 @@ struct TabletopStageEditorView: View {
         SpatialTapGesture()
             .targetedToAnyEntity()
             .onEnded { value in
-                if let fixtureId = TabletopStageScene.fixtureId(of: value.entity) {
+                if TabletopStageScene.performerContainer(of: value.entity) != nil {
+                    // SPEC 22: the performer stand-in owns selection contextually — clear both the fixture
+                    // and stage-object selection so nothing else stays highlighted while it's the focus.
+                    appModel.selectFixture(id: nil)
+                    appModel.selectStageObject(id: nil)
+                } else if let fixtureId = TabletopStageScene.fixtureId(of: value.entity) {
                     appModel.selectStageObject(id: nil)
                     appModel.selectFixture(id: fixtureId)
                 } else {
@@ -188,6 +193,18 @@ struct TabletopStageEditorView: View {
         DragGesture()
             .targetedToAnyEntity()
             .updating($dragGrabOffset) { value, state, _ in
+                // SPEC 22: the performer stand-in — free XZ drag (Y preserved, no node-snap). Distinct from
+                // the fixture/stageobj branches (its container is name-matched, not prefix-matched), so it
+                // never intercepts their drags and vice versa.
+                if let performer = TabletopStageScene.performerContainer(of: value.entity),
+                   let parent = performer.parent {
+                    let grab = value.convert(value.location3D, from: .local, to: parent)
+                    let offset = state ?? (performer.position - grab)
+                    state = offset
+                    let target = grab + offset
+                    performer.position = SIMD3<Float>(target.x, performer.position.y, target.z)
+                    return
+                }
                 // A light proxy: free XZ drag (no truss node-snap); the dragged XZ decides Y (#19 Option A).
                 if let fixtureContainer = TabletopStageScene.fixtureContainer(of: value.entity),
                    let parent = fixtureContainer.parent {
@@ -232,6 +249,13 @@ struct TabletopStageEditorView: View {
                 // fixture drag; hiding unconditionally here mirrors the snap indicator's instant hide).
                 TabletopStageScene.setHangZoneVisible(false, in: turntable,
                                                       layout: appModel.stageLayout, animated: false)
+                // SPEC 22: performer stand-in — commit its final XZ (Y is re-pinned to the deck top by
+                // `AppModel.moveStagePerformer`). Persisted in the layout, so the 1:1 stage reflects it.
+                if let performer = TabletopStageScene.performerContainer(of: value.entity) {
+                    let meters = TabletopStageScene.sceneToMeters(performer.position)
+                    appModel.moveStagePerformer(toX: meters.x, z: meters.z)
+                    return
+                }
                 // Light proxy: commit the footprint-aware Y (hang vs floor) from the final XZ, in every cue.
                 // Recompute via the shared `resolvedDragPosition` so the persisted Y matches the live preview.
                 // Lasers are unaffected — `AppModel.moveFixture` re-clamps them onto the truss (stay hanging).
@@ -865,6 +889,55 @@ enum TabletopStageScene {
         }
 
         applySelection(in: root, selectedId: selectedId)
+        syncPerformer(root, layout: layout)
+    }
+
+    // MARK: - SPEC 22: performer stand-in proxy (single, draggable)
+
+    static let performerEntityName = "tabletopperformer"
+
+    /// Walks up from a hit entity to the single performer proxy (name-matched, not prefix — there is only one).
+    static func performerContainer(of entity: Entity) -> Entity? {
+        var node: Entity? = entity
+        while let current = node {
+            if current.name == performerEntityName {
+                return current
+            }
+            node = current.parent
+        }
+        return nil
+    }
+
+    /// The performer's feet position (model metres): `layout.performerPosition` when the user has placed one,
+    /// else the default centre-deck stand — the SAME source `ImmersiveView.addPerformerStandIn` falls back to.
+    /// Y is the deck top so the figure stands on the deck.
+    static func performerFeetPosition(layout: StageLayout) -> Vector3Meters {
+        let stageBase = layout.objects.first(where: { $0.type == .stageBase })
+        let depth = stageBase?.size?.depth ?? 3
+        let defaultX = stageBase?.position.x ?? 0
+        let defaultZ = (stageBase?.position.z ?? 0) + depth * 0.12
+        let x = layout.performerPosition?.x ?? defaultX
+        let z = layout.performerPosition?.z ?? defaultZ
+        return Vector3Meters(x: x, y: RigPlacement.deckTopY(in: layout), z: z)
+    }
+
+    /// Builds/repositions the single performer proxy under the assembly (so it shares `scenePoint` +
+    /// the seat offset with the stage objects and light proxies). Repositioning here is cheap and reflects
+    /// a committed move; the live drag repositions the entity directly. Placing a performer doesn't change
+    /// the layout signature, so the assembly isn't rebuilt on a move — this reconciles the proxy in place.
+    static func syncPerformer(_ root: Entity, layout: StageLayout) {
+        guard let assembly = root.children.first(where: { $0.name.hasPrefix("tabletop_layout_") }) else {
+            return
+        }
+        let container: Entity
+        if let existing = assembly.findEntity(named: performerEntityName) {
+            container = existing
+        } else {
+            let built = makePerformerProxy(named: performerEntityName)
+            assembly.addChild(built)
+            container = built
+        }
+        container.position = scenePoint(performerFeetPosition(layout: layout))
     }
 
     /// Builds/refreshes the selectable, draggable light proxies for the look's rig fixtures, parented under
@@ -1208,6 +1281,47 @@ enum TabletopStageScene {
         ring.position = SIMD3<Float>(0, -sceneLength(0.3), 0)
         ring.isEnabled = false
         container.addChild(ring)
+
+        return container
+    }
+
+    /// A small, recognizable standing figure marking the performer's position: an amber torso cylinder + a
+    /// head sphere (distinct from the grey truss rods and the red deck top), tappable/draggable, with a
+    /// floating "表演者" billboard caption. The container origin sits at the feet, so the body is built
+    /// upward from y = 0.
+    private static func makePerformerProxy(named name: String) -> Entity {
+        let container = Entity()
+        container.name = name
+
+        let bodyMaterial = material(hex: "#F5A623") // warm amber — reads as a person, distinct from structure
+
+        let torsoHeight = sceneLength(1.35)
+        let torso = ModelEntity(
+            mesh: .generateCylinder(height: torsoHeight, radius: sceneLength(0.16)),
+            materials: [bodyMaterial]
+        )
+        torso.name = "performer_body"
+        torso.position = SIMD3<Float>(0, torsoHeight / 2, 0)
+        addInteraction(torso)
+        container.addChild(torso)
+
+        let headRadius = sceneLength(0.17)
+        let head = ModelEntity(
+            mesh: .generateSphere(radius: headRadius),
+            materials: [bodyMaterial]
+        )
+        head.name = "performer_head"
+        head.position = SIMD3<Float>(0, torsoHeight + headRadius, 0)
+        addInteraction(head)
+        container.addChild(head)
+
+        // Floating "表演者" caption, billboarded so the turntable spin doesn't turn it away.
+        let labelHost = Entity()
+        labelHost.name = "performer_label"
+        labelHost.position = SIMD3<Float>(0, torsoHeight + headRadius * 2 + sceneLength(0.25), 0)
+        labelHost.components.set(BillboardComponent())
+        labelHost.addChild(makeFixtureCaption(named: "performer_caption", text: "表演者"))
+        container.addChild(labelHost)
 
         return container
     }

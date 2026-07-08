@@ -390,6 +390,17 @@ class AppModel {
         }
     }
 
+    /// SPEC 22: the tabletop editor commits a dragged performer stand-in to some XZ (model metres). The
+    /// performer is layout data (persisted with the project and surviving AI regeneration — unlike
+    /// `manualPosition`/`lightOverrides`); Y is pinned to the deck top so the feet rest on the deck. Routes
+    /// through `saveStageLayout` (which validates), mirroring `moveStageObject`.
+    func moveStagePerformer(toX x: Double, z: Double) {
+        var layout = stageLayout
+        layout.performerPosition = Vector3Meters(x: x, y: RigPlacement.deckTopY(in: layout), z: z)
+        recordStageEditingUndoSnapshot()
+        saveStageLayout(layout)
+    }
+
     /// Rotates the selected stage object by 90° about the vertical axis (stage rotations must stay
     /// right-angle aligned, which `StageLayout.validate()` enforces).
     func rotateSelectedStageObject() {

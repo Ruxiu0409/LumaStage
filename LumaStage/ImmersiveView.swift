@@ -990,8 +990,12 @@ struct ImmersiveView: View {
         }
 
         let deckTopY = stageBase.position.y + stageSize.height / 2
-        let standX = stageBase.position.x
-        let standZ = stageBase.position.z + stageSize.depth * 0.12
+        // SPEC 22: the user can place the performer in the tabletop editor (persisted in
+        // `layout.performerPosition`); use its X/Z when set, else the default centre-deck stand. Y is always
+        // the deck top so the feet rest on the deck. The front/spot aim tracking follows automatically via
+        // `RigPlacement.resolvedPlacement` (used by `syncRig`), so no change to `syncRig` is needed here.
+        let standX = layout.performerPosition?.x ?? stageBase.position.x
+        let standZ = layout.performerPosition?.z ?? (stageBase.position.z + stageSize.depth * 0.12)
 
         let feet = Vector3Meters(x: standX, y: deckTopY, z: standZ)
         let plan = HumanoidFigurePlan.make(feet: feet)

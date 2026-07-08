@@ -91,6 +91,8 @@ struct LumaStageCoreSmokeTests {
         resolvesLightOverridesOntoCueValues()
         rigPlacementSpreadsFixturesAcrossZone()
         try fixtureManualPositionOverridesZonePlacement()
+        try stageLayoutPerformerPositionCodableDefaultsNil()
+        performerNudgeMovesFrontAimNotBacklight()
         fixtureSupportPolicyClassifiesTrussVsStand()
         dragResolvedPositionSnapsHangVsFloorAndIsIdempotent()
         nudgingFixtureAcrossTrussBoundaryReSnapsHeight()
@@ -1712,6 +1714,94 @@ struct LumaStageCoreSmokeTests {
         // Round-trip: a set manualPosition survives encode/decode.
         let roundTripped = try JSONDecoder().decode(FixtureGroup.self, from: JSONEncoder().encode(placed))
         expect(roundTripped.manualPosition == manual, "manualPosition must survive a Codable round-trip")
+    }
+
+    // SPEC 22: the additive `StageLayout.performerPosition` must default to nil for old JSON (synthesized
+    // Codable uses decodeIfPresent for optionals, and the encoder omits a nil), and survive a round-trip.
+    private static func stageLayoutPerformerPositionCodableDefaultsNil() throws {
+        // The shipped default carries no performer — nil, so it stays a byte-identical no-op (see WI-2).
+        var layout = StageLayout.defaultStudentOutdoor()
+        expect(layout.performerPosition == nil, "defaultStudentOutdoor must not seed a performerPosition")
+
+        // Encoding a nil optional omits the key; decoding it back yields nil (proves the missing-key path).
+        let decodedNil = try JSONDecoder().decode(StageLayout.self, from: JSONEncoder().encode(layout))
+        expect(decodedNil.performerPosition == nil,
+               "Encoding a nil performerPosition then decoding must stay nil")
+
+        // An explicit legacy JSON with no performerPosition key at all → nil.
+        let legacyJSON = """
+        {"schemaVersion":"1.0","stageLayoutId":"layout_legacy","name":"Legacy","units":"meters",
+         "gridSize":0.5,"objects":[],"metadata":{"updatedAt":"2026-01-01T00:00:00Z"}}
+        """
+        let legacy = try JSONDecoder().decode(StageLayout.self, from: Data(legacyJSON.utf8))
+        expect(legacy.performerPosition == nil,
+               "A StageLayout JSON without a performerPosition key must decode to nil")
+
+        // A set value survives encode → decode.
+        let placed = Vector3Meters(x: 1.5, y: 0.8, z: -0.4)
+        layout.performerPosition = placed
+        let roundTripped = try JSONDecoder().decode(StageLayout.self, from: JSONEncoder().encode(layout))
+        expect(roundTripped.performerPosition == placed,
+               "A set performerPosition must survive a Codable round-trip")
+    }
+
+    // SPEC 22 (risk mitigation, pinned): the performer aim nudge is a PARTIAL, opt-in blend that touches
+    // only front/side key/spot aim — never backlight, never lasers — and a nil performerPosition is a
+    // byte-identical no-op (existing generation/music-show aim is unchanged).
+    private static func performerNudgeMovesFrontAimNotBacklight() {
+        var layout = StageLayout.defaultStudentOutdoor()
+
+        func front() -> FixtureGroup {
+            FixtureGroup(id: "front", name: "Front", role: .frontLight, zone: .stageFront,
+                         enabled: true, intensity: 0.6, color: FixtureColor(mode: .rgb, value: "#FFFFFF"))
+        }
+        func back() -> FixtureGroup {
+            FixtureGroup(id: "back", name: "Back", role: .backgroundWash, zone: .stageBack,
+                         enabled: true, intensity: 0.6, color: FixtureColor(mode: .rgb, value: "#FFFFFF"))
+        }
+        // A laser resolves onto `.stageBack` and is truss-only, so it must be excluded from the nudge.
+        func laser() -> FixtureGroup {
+            FixtureGroup(id: "laser", name: "Laser", role: .backgroundWash, zone: .stageBack,
+                         enabled: true, intensity: 0.6, color: FixtureColor(mode: .rgb, value: "#FFFFFF"),
+                         model: .laser)
+        }
+
+        let frontZone = RigPlacement.placement(zone: .stageFront, slot: 0, count: 1, layout: layout).aim
+        let backZone = RigPlacement.placement(zone: .stageBack, slot: 0, count: 1, layout: layout).aim
+
+        // (a) nil performerPosition → resolved aim is EXACTLY the zone aim for every fixture (no regression).
+        layout.performerPosition = nil
+        expect(RigPlacement.resolvedPlacement(fixture: front(), slot: 0, count: 1, layout: layout).aim == frontZone,
+               "nil performerPosition must leave the front aim byte-identical to the zone aim")
+        expect(RigPlacement.resolvedPlacement(fixture: back(), slot: 0, count: 1, layout: layout).aim == backZone,
+               "nil performerPosition must leave the backlight aim byte-identical to the zone aim")
+        expect(RigPlacement.resolvedPlacement(fixture: laser(), slot: 0, count: 1, layout: layout).aim == backZone,
+               "nil performerPosition must leave the laser aim byte-identical to the zone aim")
+
+        // (b) A performer far off-centre → the front aim blends toward it by EXACTLY the nudge fraction,
+        //     strictly between the zone aim and the performer (never either endpoint). Backlight + laser stay.
+        let performer = Vector3Meters(x: 2.5, y: 1.4, z: 1.2)
+        layout.performerPosition = performer
+        let f = RigPlacement.performerAimNudgeFraction
+        expect(f > 0 && f < 1, "The nudge fraction must be a partial blend (0 < f < 1), never full takeover")
+
+        let frontAim = RigPlacement.resolvedPlacement(fixture: front(), slot: 0, count: 1, layout: layout).aim
+        let expected = Vector3Meters(
+            x: frontZone.x + (performer.x - frontZone.x) * f,
+            y: frontZone.y + (performer.y - frontZone.y) * f,
+            z: frontZone.z + (performer.z - frontZone.z) * f
+        )
+        expect(frontAim == expected, "The front aim must be the exact lerp of the zone aim toward the performer")
+        expect(frontAim != frontZone, "The front aim must move once a performer is placed")
+        expect(frontAim != performer, "The front aim must not fully reach the performer (partial blend only)")
+        expect(abs(frontAim.x - performer.x) < abs(frontZone.x - performer.x),
+               "The front aim must sit nearer the performer's X than the zone aim did")
+
+        // Backlight (background wash) and laser aim must be untouched by a placed performer.
+        expect(RigPlacement.resolvedPlacement(fixture: back(), slot: 0, count: 1, layout: layout).aim == backZone,
+               "A placed performer must NOT move the backlight (background wash) aim")
+        expect(RigPlacement.resolvedPlacement(fixture: laser(), slot: 0, count: 1, layout: layout).aim == backZone,
+               "A placed performer must NOT move the laser aim (truss-only, excluded)")
     }
 
     private static func fixtureSupportPolicyClassifiesTrussVsStand() {
