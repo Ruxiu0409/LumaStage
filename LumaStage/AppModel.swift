@@ -412,6 +412,11 @@ class AppModel {
             return
         }
 
+        // The stage deck (base platform) is the fixed foundation of the diorama — it must not be movable in
+        // the tabletop editor. The user builds truss / structures / fixtures ON it; only the deck is locked
+        // (truss segments and composite structures stay draggable).
+        guard object.type != .stageBase else { return }
+
         object.position = Vector3Meters(x: x, y: object.position.y, z: z)
         do {
             try layout.updateObject(layout.snappedObject(object))

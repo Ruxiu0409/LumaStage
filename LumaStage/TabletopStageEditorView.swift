@@ -244,6 +244,9 @@ struct TabletopStageEditorView: View {
                 guard let container = TabletopStageScene.objectContainer(of: value.entity),
                       let id = TabletopStageScene.objectId(of: value.entity),
                       let parent = container.parent else { return }
+                // The stage deck is locked (see `AppModel.moveStageObject`) — don't preview-drag it either,
+                // so grabbing the base platform does nothing instead of sliding then snapping back.
+                if appModel.stageLayout.object(id: id)?.type == .stageBase { return }
                 let grab = value.convert(value.location3D, from: .local, to: parent)
                 let offset = state ?? (container.position - grab)
                 state = offset
