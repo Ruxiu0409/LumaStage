@@ -1894,12 +1894,18 @@ struct SpotBeamScatterConfig: Equatable {
     /// Beam-angle alpha falloff: alpha ×= (1 - widthAlphaFalloff · normalizedWidth), where
     /// normalizedWidth = (outer - 10)/50 ∈ 0…1; a wider cone gets fainter so it doesn't read as a fog bank.
     var widthAlphaFalloff: Double
+    /// Alpha multiplier for `.faint`-visibility fixtures (front-of-house key / side fixtures per
+    /// `RigPlacement.aerialBeamConeVisibility`) — a small fraction of the normal alpha so their cone reads
+    /// as a see-through veil (the stage stays visible behind it) instead of the full-strength beam that
+    /// filled the viewer's field of view at close range.
+    var faintAlphaScale: Double
 
     static let `default` = SpotBeamScatterConfig(
         sheathAlpha: 0.10,
         coreAlpha: 0.035,
         coreWhiteness: 0.40,
-        widthAlphaFalloff: 0.75
+        widthAlphaFalloff: 0.75,
+        faintAlphaScale: 0.3
     )
 }
 
@@ -2175,18 +2181,26 @@ extension RigPlacement {
         }
     }
 
-    /// 哪些 fixture 會畫「空中光束光錐」(`spotbeam_<id>`,SPEC 19)。只有上舞台/後方洗燈與搖頭光束燈會在
-    /// 空氣中投出可見光束(經典演唱會光束感);前方 key/wash(`.stageFront`)與側燈(`.stageLeft`/`.stageRight`)
-    /// 只打亮表面——它們貼近觀眾、光錐會佔滿視野並遮住舞台,所以不畫光柱。雷射(`mountsOnTrussOnly`)有自己的
-    /// beam fan(`addLaserProjector`),一律排除。純判斷式,`ImmersiveView.addRigFixture` 是唯一消費者。
-    static func rendersAerialBeamCone(model: LightingFixtureVisualModel, zone: StageZone) -> Bool {
-        guard !mountsOnTrussOnly(model) else { return false }   // 雷射:自己的 beam fan
+    /// 一盞 fixture 的「空中光束光錐」(`spotbeam_<id>`,SPEC 19)能見度。上舞台/後方洗燈與搖頭光束燈
+    /// 是 `.full`(經典演唱會光束感,正常 alpha);前方 key/wash(`.stageFront`)與側燈(`.stageLeft`/
+    /// `.stageRight`)貼近觀眾,全強度光錐會佔滿視野遮住舞台,但完全不畫又看不出「這盞燈有開」——所以
+    /// 給 `.faint`:alpha 乘上 `SpotBeamScatterConfig.faintAlphaScale` 的極低半透明紗,舞台從光錐後面
+    /// 仍清楚可見。雷射(`mountsOnTrussOnly`)有自己的 beam fan(`addLaserProjector`),一律 `.hidden`。
+    /// 純判斷式;`ImmersiveView`(1:1 舞台)吃三段,`TabletopStageScene`(架設 diorama)只畫 `.full`。
+    enum AerialBeamConeVisibility: Equatable {
+        case hidden
+        case faint
+        case full
+    }
+
+    static func aerialBeamConeVisibility(model: LightingFixtureVisualModel, zone: StageZone) -> AerialBeamConeVisibility {
+        guard !mountsOnTrussOnly(model) else { return .hidden }   // 雷射:自己的 beam fan
         switch zone {
         case .stageBack, .fullStage:
-            return true
+            return .full
         case .stageFront, .stageLeft, .stageRight:
-            // 搖頭光束燈不論擺哪都讀成光束;其餘前/側燈只打表面,不畫光柱。
-            return model == .movingHeadBeam
+            // 搖頭光束燈不論擺哪都讀成光束;其餘前/側燈給極低 alpha 的半透明紗,不搶視線。
+            return model == .movingHeadBeam ? .full : .faint
         }
     }
 

@@ -1850,24 +1850,27 @@ struct LumaStageCoreSmokeTests {
     }
 
     private static func aerialBeamConePolicyGatesFrontAndSide() {
-        // Upstage / back wash -> beam.
-        expect(RigPlacement.rendersAerialBeamCone(model: .backgroundBatten, zone: .stageBack),
-               "A back wash fixture must render an aerial beam cone")
-        expect(RigPlacement.rendersAerialBeamCone(model: .ledPar, zone: .fullStage),
-               "A fullStage (upstage-truss) fixture must render an aerial beam cone")
-        // Moving head reads as a beam wherever placed.
-        expect(RigPlacement.rendersAerialBeamCone(model: .movingHeadBeam, zone: .stageFront),
-               "A moving-head beam must render an aerial cone even in a front zone")
-        expect(RigPlacement.rendersAerialBeamCone(model: .movingHeadBeam, zone: .stageBack),
-               "A moving-head beam upstage must render an aerial cone")
-        // Front key / side fixtures do NOT (they occluded the stage).
-        expect(!RigPlacement.rendersAerialBeamCone(model: .frontFresnel, zone: .stageFront),
-               "A front-of-house key must NOT render an aerial cone")
-        expect(!RigPlacement.rendersAerialBeamCone(model: .ledPar, zone: .stageLeft),
-               "A side PAR must NOT render an aerial cone")
+        // Upstage / back wash -> full-strength beam.
+        expect(RigPlacement.aerialBeamConeVisibility(model: .backgroundBatten, zone: .stageBack) == .full,
+               "A back wash fixture must render a full-strength aerial beam cone")
+        expect(RigPlacement.aerialBeamConeVisibility(model: .ledPar, zone: .fullStage) == .full,
+               "A fullStage (upstage-truss) fixture must render a full-strength aerial beam cone")
+        // Moving head reads as a full beam wherever placed.
+        expect(RigPlacement.aerialBeamConeVisibility(model: .movingHeadBeam, zone: .stageFront) == .full,
+               "A moving-head beam must render a full-strength aerial cone even in a front zone")
+        expect(RigPlacement.aerialBeamConeVisibility(model: .movingHeadBeam, zone: .stageBack) == .full,
+               "A moving-head beam upstage must render a full-strength aerial cone")
+        // Front key / side fixtures get a FAINT see-through veil, not full strength (full occluded the stage).
+        expect(RigPlacement.aerialBeamConeVisibility(model: .frontFresnel, zone: .stageFront) == .faint,
+               "A front-of-house key must render only a faint aerial cone")
+        expect(RigPlacement.aerialBeamConeVisibility(model: .ledPar, zone: .stageLeft) == .faint,
+               "A side PAR must render only a faint aerial cone")
         // Laser is excluded (it draws its own beam fan) regardless of zone.
-        expect(!RigPlacement.rendersAerialBeamCone(model: .laser, zone: .stageBack),
+        expect(RigPlacement.aerialBeamConeVisibility(model: .laser, zone: .stageBack) == .hidden,
                "A laser must be excluded from the spotbeam cone (own fan)")
+        // The faint tier must genuinely dim (a fraction), not hide or leave unchanged.
+        expect(SpotBeamScatterConfig.default.faintAlphaScale > 0 && SpotBeamScatterConfig.default.faintAlphaScale < 1,
+               "faintAlphaScale must be a fraction (dims, does not fully hide or leave unchanged)")
     }
 
     private static func fixtureSupportPolicyClassifiesTrussVsStand() {

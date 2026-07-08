@@ -699,12 +699,13 @@ struct ImmersiveView: View {
             beamAngleDegrees: fixture.effectiveFineControl.beamAngleDegrees
         )
 
-        // Only fixtures that read as a beam in the air get a volumetric cone (SPEC 19): upstage/back wash
-        // and moving-head beams. Front-of-house key/wash and side fixtures sit close to the viewer and their
-        // large cones filled the field of view / occluded the stage, so they are skipped (they still light
-        // surfaces via their SpotLight). Lasers draw their own fan (`addLaserProjector`) — the predicate
-        // excludes them, preserving the old `!= .laser` skip (footgun ①).
-        if RigPlacement.rendersAerialBeamCone(model: fixture.renderModel, zone: fixture.zone) {
+        // Three-tier aerial-cone visibility (SPEC 19): `.full` for upstage/back wash + moving-head beams,
+        // `.faint` (alpha × `faintAlphaScale`) for front-of-house key/wash and side fixtures — a see-through
+        // veil so the stage stays visible even though the cone crosses the viewer's line of sight — and
+        // `.hidden` for lasers, which draw their own fan (`addLaserProjector`), preserving the old
+        // `!= .laser` skip (footgun ①).
+        let beamVisibility = RigPlacement.aerialBeamConeVisibility(model: fixture.renderModel, zone: fixture.zone)
+        if beamVisibility != .hidden {
             addSpotBeamCone(
                 name: "spotbeam_\(fixture.id)",
                 to: rig,
@@ -712,7 +713,8 @@ struct ImmersiveView: View {
                 aim: restingDir,
                 throwMeters: placement.position.distance(to: placement.aim),
                 beamAngleDegrees: fixture.effectiveFineControl.beamAngleDegrees,
-                colorHex: fixture.color.value
+                colorHex: fixture.color.value,
+                isFaint: beamVisibility == .faint
             )
         }
 
@@ -1430,7 +1432,8 @@ struct ImmersiveView: View {
         aim: SIMD3<Float>,
         throwMeters: Double,
         beamAngleDegrees: Double,
-        colorHex: String
+        colorHex: String,
+        isFaint: Bool
     ) {
         let container = Entity()
         container.name = name
@@ -1454,7 +1457,7 @@ struct ImmersiveView: View {
         let sheathRadius = sceneLength(SpotBeamScatterMath.sheathBaseRadius(lengthMeters: beamLengthMeters, beamAngleDegrees: beamAngleDegrees))
         let sheath = ModelEntity(
             mesh: beamConeMesh(length: length, baseRadius: sheathRadius),
-            materials: [UnlitMaterial(color: spotBeamSheathUIColor(hex: colorHex, intensity: 1, beamAngleDegrees: beamAngleDegrees))]
+            materials: [UnlitMaterial(color: spotBeamSheathUIColor(hex: colorHex, intensity: 1, beamAngleDegrees: beamAngleDegrees, isFaint: isFaint))]
         )
         sheath.name = "\(name)_sheath"
         sheath.position = apex
@@ -1487,23 +1490,27 @@ struct ImmersiveView: View {
         return (try? MeshResource.generate(from: [descriptor])) ?? .generateCylinder(height: length, radius: baseRadius)
     }
 
-    /// The low-alpha cone sheath colour (saturated cue hue). See `SpotBeamScatterMath.sheathRGBA`.
-    private static func spotBeamSheathUIColor(hex: String, intensity: Double, beamAngleDegrees: Double) -> UIColor {
+    /// The low-alpha cone sheath colour (saturated cue hue). See `SpotBeamScatterMath.sheathRGBA`. When
+    /// `isFaint` (front-of-house key / side fixtures — `RigPlacement.AerialBeamConeVisibility.faint`), the
+    /// alpha is scaled down by `SpotBeamScatterConfig.faintAlphaScale` so the cone reads as a see-through
+    /// veil (the stage stays visible through it) instead of a full-strength beam.
+    private static func spotBeamSheathUIColor(hex: String, intensity: Double, beamAngleDegrees: Double, isFaint: Bool) -> UIColor {
         let c = SpotBeamScatterMath.sheathRGBA(hex: hex, intensity: intensity, beamAngleDegrees: beamAngleDegrees)
-        return UIColor(red: c.red, green: c.green, blue: c.blue, alpha: c.alpha)
+        let alpha = isFaint ? c.alpha * SpotBeamScatterConfig.default.faintAlphaScale : c.alpha
+        return UIColor(red: c.red, green: c.green, blue: c.blue, alpha: alpha)
     }
 
     /// Per-cue update for a spotlight's volumetric cone: recolor the single outer shell to the resolved cue
     /// colour and hide it when the fixture is effectively off. Like the laser, the `UnlitMaterial` swap
     /// hard-cuts (it is not an implicitly-animatable component) — the `spot_<id>` surface spill still
     /// cross-fades in `updateSpotLight` (footgun ②).
-    private static func updateSpotBeam(named name: String, in root: Entity, colorHex: String, intensity: Double, beamAngleDegrees: Double) {
+    private static func updateSpotBeam(named name: String, in root: Entity, colorHex: String, intensity: Double, beamAngleDegrees: Double, isFaint: Bool) {
         guard let container = root.findEntity(named: name) else {
             return
         }
 
         let visible = SpotBeamScatterMath.beamVisible(intensity)
-        let sheathColor = spotBeamSheathUIColor(hex: colorHex, intensity: intensity, beamAngleDegrees: beamAngleDegrees)
+        let sheathColor = spotBeamSheathUIColor(hex: colorHex, intensity: intensity, beamAngleDegrees: beamAngleDegrees, isFaint: isFaint)
         for child in container.children {
             guard let model = child as? ModelEntity else { continue }
             child.isEnabled = visible
@@ -1565,7 +1572,8 @@ struct ImmersiveView: View {
                     in: root,
                     colorHex: resolved.color,
                     intensity: resolved.intensity,
-                    beamAngleDegrees: fixture.effectiveFineControl.beamAngleDegrees
+                    beamAngleDegrees: fixture.effectiveFineControl.beamAngleDegrees,
+                    isFaint: RigPlacement.aerialBeamConeVisibility(model: fixture.renderModel, zone: fixture.zone) == .faint
                 )
             }
 

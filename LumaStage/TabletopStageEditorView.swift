@@ -1001,7 +1001,7 @@ enum TabletopStageScene {
                               colorHex: fixture.color.value,
                               intensity: fixture.intensity,
                               enabled: fixture.enabled,
-                              rendersBeam: RigPlacement.rendersAerialBeamCone(model: fixture.renderModel, zone: fixture.zone),
+                              rendersBeam: RigPlacement.aerialBeamConeVisibility(model: fixture.renderModel, zone: fixture.zone) == .full,
                               animated: !reduceMotion)
 
             // #13: a floating "N · 型號" caption. The number is this fixture's 1-based index in cue order —
@@ -1436,9 +1436,10 @@ enum TabletopStageScene {
                                   animated: Bool) {
         guard let beam = container.findEntity(named: beamEntityName) as? ModelEntity else { return }
 
-        // Same gate as the 1:1 stage (`RigPlacement.rendersAerialBeamCone`): front-of-house key + side
-        // fixtures draw NO aerial cone (theirs occluded the view), only upstage/back wash and moving-head
-        // beams do. Hide the preview cone entirely for a non-beam fixture instead of drawing it faint.
+        // Derived from the 1:1 stage policy (`RigPlacement.aerialBeamConeVisibility`): the diorama previews
+        // a cone only for `.full` fixtures (upstage/back wash + moving-head beams). `.faint` front/side
+        // fixtures stay hidden here — `PreviewBeamCone.maxAlpha` (0.35) is far higher than the 1:1 stage's,
+        // so even a scaled-down cone would re-occlude the tiny model.
         guard rendersBeam else {
             beam.isEnabled = false
             return
