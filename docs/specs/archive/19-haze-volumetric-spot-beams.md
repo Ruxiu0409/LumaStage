@@ -1,6 +1,6 @@
 # SPEC 19 — 煙幕（haze）：讓聚光燈的光束路徑在空氣中可見（issue #2）
 
-> Status: proposed
+> Status: done
 
 **Goal**：讓一般 `SpotLight` 的光錐在空氣中「看得到」——目前只有 `.laser` 有可見的空中光束（core+sheath 圓柱扇），一般聚光燈的光錐在空氣中是隱形的，只看得到打在表面的光斑。作法：**把雷射的幾何式 core+sheath 分層做法推廣到聚光燈光錐**——每盞 `spot_<id>` 加一組半透明體積光錐（cone mesh），顏色/透明度/半徑由 cue 的 hex + intensity + beam angle 推導，數學放 Foundation-only 檔並補 smoke test（比照 `LaserScatterMath`/`LaserScatterConfig`/`SpotLightRenderMath` 的分層慣例）。**明確不走粒子路線**（`ParticleEmitterComponent` 已試過並移除：不受場景光照，1:1 尺度下呈離軸噪點）。呼應 `docs/demo-runbook.md` 的展演視覺震撼與 1:1 數位孿生的沉浸擬真度——延續雷射 show-stopper 的「空中可見光」語彙，讓整組 rig 都有真實舞台的煙幕光束觀感。
 

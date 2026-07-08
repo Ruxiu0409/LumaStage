@@ -1,6 +1,6 @@
 # SPEC 23 — 擴充舞台結構詞彙（側塔／地面 boom 架／中場第二桁架）＋清理未接線的 deck 資產
 
-> Status: proposed
+> Status: done
 
 **Goal**：兩件事，一份 spec（issue #27）——
 (a)**先做、低風險**：清掉 `StageAssetId` 那三個從未能被加入舞台的 deck 資產（死詞彙，會誤導後續開發）。

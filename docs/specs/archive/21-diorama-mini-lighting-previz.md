@@ -1,6 +1,6 @@
 # SPEC 21 — 桌面 diorama 迷你燈光預覽（掌上 previz，issue #24）
 
-> Status: proposed
+> Status: done
 
 **Goal**：桌面舞台編輯器（`TabletopStageEditorView` 的「架設」階段）目前 diorama 上只有結構（桁架／台座）＋燈具型號代理，**看不到目前 cue 打出來的光**——要看打光得離開編輯器回 1:1 舞台。本 spec 讓 diorama 直接顯示目前 cue 的打光：每盞燈畫一支**半透明彩色光束錐**（顏色／亮度／朝向依該 cue 的 fixture 狀態），控制列加 **‹ cue ›** 切換就地預覽整套 cue，並（進階／可選）在音樂秀播放時讓整檯模型跟著節拍跑。呼應「空間運算 previz」與「科技賦能」社會價值——不必進 1:1 沉浸就能在桌上把整套 look 看完。與 **SPEC 02**（型號專屬幾何上台，已 shipped）＋ **issue #25**（桌面 rig 型號幾何，本輪 shipped——`syncFixtures` 已用 `FixtureRealityModel.makeStageFixture` 建代理）成對：#25 讓桌上 rig **可讀**，本 spec 讓它**可預覽**。
 

@@ -1,6 +1,6 @@
 # SPEC 20 — 工作流程三階段頁面：架設 / 編程 / 播放（issues #8 / #9 / #10）
 
-> Status: proposed
+> Status: done
 
 ## Goal
 

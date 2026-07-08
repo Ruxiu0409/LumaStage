@@ -1,4 +1,4 @@
-> Status: BLOCKED — 需使用者決策，尚不可實作（依 AGENTS.md「先問人」）
+> Status: resolved — 維持幾何方案，不做粒子（#3 已關閉 2026-07-08）
 
 # 取捨說明：Laser 光束改用粒子效果（issue #3）
 

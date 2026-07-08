@@ -1,6 +1,6 @@
 # SPEC 18 移除語音朗讀與 VoiceOver 標註
 
-> Status: in-progress
+> Status: done
 
 ## Goal
 

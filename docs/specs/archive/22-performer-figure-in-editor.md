@@ -1,6 +1,6 @@
 # SPEC 22 — 表演者人偶進編輯迴圈（可拖位、燈光瞄準）（issue #26）
 
-> Status: proposed
+> Status: done
 
 **Goal**：把 1:1 舞台上既有的表演者人偶（`ImmersiveView.addPerformerStandIn`）變成**可控物件**——位置存進 `StageLayout`、在桌面編輯器裡可拖，並讓**前光／spot** 的 aim 朝人偶位置**微調**，把工作流升級成「圍繞表演者設計燈光」。對應 MAIC 社會價值「以人為本、教育賦能」。**影響面較大（動到共用 aim 推導），屬 M–L，需獨立評估。**
 
