@@ -1,6 +1,9 @@
 # 後續待修分析（Fable 5 覆核）
 
-> **狀態更新（2026-07-08，commit 5ff3086）**：本報告中 Fable 覆核找到的 **E-1、E-2、E-5（程式）與 E-3、E-4（文件）已修正**並重跑 smoke + build 綠。下方 E 節與 D 節仍保留原始描述供追溯；尚待處理者為 A 節（你的決策）、B 節（延後實作）、C 節（實機驗收）、D 節部分殘口、E-6/E-7/E-8（P3 邊角）、F 節（既有問題）。
+> **完成更新（2026-07-08，已合入 main `7ebbd9b..5a617e6`）**：
+> - **A 節決策已全部拍板**：5 份 SPEC 經使用者核可並**已實作+驗證+合入**（#2/SPEC19、#8·#9·#10/SPEC20、#24/SPEC21、#26/SPEC22、#27/SPEC23 a+b）；**#3 決定維持幾何、已關閉**；分支已 fast-forward 合入 main 並 push（協作 repo，push 前 fetch 確認 main 未動）。GitHub 上 **0 個 open issue**。
+> - Fable 覆核找到的 **E-1、E-2、E-5（程式）+ E-3、E-4（文件）已修正**（commit 5ff3086）並重跑 smoke + build 綠。
+> - **仍待處理者**：C 節（實機驗收，各 SPEC 實作的 [需實機] 項）、D 節部分殘口（#11 情境 3/4、落地架高度調參、UnlitMaterial 半透明呈現等）、E-6/E-7/E-8（P3 邊角）、F 節（既有問題，如 .DS_Store 已被追蹤宜 gitignore、docs/foundation-models-setup.md 檔名待改）。下方 A/B/E 節保留原始描述供追溯。
 
 > 覆核範圍：`codex-issue-sweep` 分支（未推送）對 `main` 的全部程式碼 diff（9 個已修 issue + iPad target 修復）、5 份新 SPEC（19–23）、#3 取捨備忘（24）、掃雷報告（issue-*.md / spec-first.md）。
 > 我獨立重跑驗證：**smoke `LumaStageCoreSmokeTests passed`**、**visionOS full build `** BUILD SUCCEEDED **`**（皆在該分支工作樹親自執行，非轉述）。
