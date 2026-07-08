@@ -201,6 +201,14 @@ struct OpenAILightingService: LightingLookGenerating {
     and a gobo (use none unless a texture is clearly asked for). Contrast warm front light against
     cool or coloured back light so the look reads as designed; a fixture may be off in some cues.
 
+    Ground every look in the McCandless method: always include a matched PAIR of frontOfHouse fixtures that
+    cross the stage from roughly 45° to the left and right of the performer. This pair is the base layer —
+    it gives stable, even visibility and three-dimensional modelling (light from two front angles reveals
+    depth that a single flat front light flattens). Keep the pair lit through the cues as the visibility
+    through-line (it may dim for mood but should not go fully dark except a deliberate blackout), and give
+    the two sides a gentle warm/cool contrast for depth. Layer the coloured, moving, back-light, and effect
+    fixtures ON TOP of this base rather than replacing it.
+
     The explanation teaches one beginner lighting term tied to this look. Prompts may mix Chinese and English.
     """
 
