@@ -807,7 +807,16 @@ private struct MusicShowSheet: View {
             subtitle: "裝置端離線分析節拍與段落，自動生成整場節拍同步演出。",
             systemImage: "waveform"
         ) {
-            VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+                Button("使用內建示範曲", systemImage: "music.note.list") {
+                    Task { await appModel.useBuiltInDemoSong() }
+                }
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.capsule)
+                .lumaGazeTarget()
+                .frame(maxWidth: .infinity)
+                .help("載入預先分析好的內建示範曲（含裝置端合成的原創背景音軌，有聲音）；再按「播放演出」即可聽到 — 現場零失敗")
+                
                 Button("匯入音檔", systemImage: "square.and.arrow.down") {
                     isImportingSong = true
                 }
@@ -818,23 +827,14 @@ private struct MusicShowSheet: View {
                 .frame(maxWidth: .infinity)
                 .help("從檔案選擇一首歌（裝置端分析，不會上傳）")
 
-                Button("使用內建示範曲", systemImage: "music.note.list") {
-                    Task { await appModel.useBuiltInDemoSong() }
-                }
-                .buttonStyle(.bordered)
-                .buttonBorderShape(.capsule)
-                .lumaGazeTarget()
-                .frame(maxWidth: .infinity)
-                .help("載入預先分析好的內建示範曲（含裝置端合成的原創背景音軌，有聲音）；再按「播放演出」即可聽到 — 現場零失敗")
-
-                Button("從音樂資料庫選曲", systemImage: "music.note.list") {
-                    isShowingLibraryPicker = true
-                }
-                .buttonStyle(.bordered)
-                .buttonBorderShape(.capsule)
-                .lumaGazeTarget()
-                .frame(maxWidth: .infinity)
-                .help("從你的本機音樂資料庫挑一首歌（裝置端分析，受保護的串流曲目無法分析）")
+//                Button("從音樂資料庫選曲", systemImage: "music.note.list") {
+//                    isShowingLibraryPicker = true
+//                }
+//                .buttonStyle(.bordered)
+//                .buttonBorderShape(.capsule)
+//                .lumaGazeTarget()
+//                .frame(maxWidth: .infinity)
+//                .help("從你的本機音樂資料庫挑一首歌（裝置端分析，受保護的串流曲目無法分析）")
             }
         }
     }

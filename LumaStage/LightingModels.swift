@@ -1901,7 +1901,7 @@ struct SpotBeamScatterConfig: Equatable {
     var faintAlphaScale: Double
 
     static let `default` = SpotBeamScatterConfig(
-        sheathAlpha: 0.10,
+        sheathAlpha: 0.30,
         coreAlpha: 0.035,
         coreWhiteness: 0.40,
         widthAlphaFalloff: 0.75,

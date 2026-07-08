@@ -272,7 +272,7 @@ struct LumaStageCoreSmokeTests {
         expect(sheath.green < 0.0001 && sheath.blue < 0.0001, "The sheath must keep the saturated hue")
 
         // Alpha is low and scales with intensity.
-        expect(sheath.alpha < 0.15, "The sheath alpha must stay low so it reads as a halo, not a solid cone")
+        expect(sheath.alpha < 0.35, "The sheath alpha must stay translucent (a halo, not an opaque cone) — the cap was raised from 0.15 when the cone material started actually alpha-blending and the tuned SpotBeamScatterConfig.sheathAlpha rose to make the beam clearly visible")
         expect(SpotBeamScatterMath.sheathRGBA(hex: "#FF0000", intensity: 0.5, beamAngleDegrees: 40).alpha < sheath.alpha,
                "A dimmer cue must give a fainter cone")
 
