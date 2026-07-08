@@ -1167,6 +1167,7 @@ enum TabletopStageScene {
                               colorHex: fixture.color.value,
                               intensity: fixture.intensity,
                               enabled: fixture.enabled,
+                              rendersBeam: RigPlacement.rendersAerialBeamCone(model: fixture.renderModel, zone: fixture.zone),
                               animated: !reduceMotion)
 
             // #13: a floating "N · 型號" caption. The number is this fixture's 1-based index in cue order —
@@ -1597,8 +1598,17 @@ enum TabletopStageScene {
                                   colorHex: String,
                                   intensity: Double,
                                   enabled: Bool,
+                                  rendersBeam: Bool,
                                   animated: Bool) {
         guard let beam = container.findEntity(named: beamEntityName) as? ModelEntity else { return }
+
+        // Same gate as the 1:1 stage (`RigPlacement.rendersAerialBeamCone`): front-of-house key + side
+        // fixtures draw NO aerial cone (theirs occluded the view), only upstage/back wash and moving-head
+        // beams do. Hide the preview cone entirely for a non-beam fixture instead of drawing it faint.
+        guard rendersBeam else {
+            beam.isEnabled = false
+            return
+        }
 
         let dim = PreviewBeamCone.dimensions(beamAngleDegrees: beamAngleDegrees,
                                              throwMeters: throwMeters,
