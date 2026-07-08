@@ -20,6 +20,10 @@ struct LightEffectComponent: Component {
     var effect: LightEffect = .none
     var baseAim: SIMD3<Float> = SIMD3<Float>(0, 0, -1)
     var baseLumens: Float = 0
+    /// Name of the fixture's VISIBLE aerial beam container (`spotbeam_<id>` or `laser_<id>`), a sibling of
+    /// this spot under the `rig`. `LightEffectSystem` pulses its `OpacityComponent` for intensity-driving
+    /// effects (strobe/chase) so the flash reads on the cone, not just on the (invisible) SpotLight lumens.
+    var beamEntityName: String? = nil
 }
 
 /// Ticks every fixture's `LightEffect` each frame and writes it into the `SpotLight`.
@@ -62,6 +66,17 @@ final class LightEffectSystem: System {
             // Strobe / chase own the dimmer; sweeps leave intensity to the cue's cross-fade.
             if component.effect.drivesIntensity {
                 spot.light.intensity = component.baseLumens * Float(out.intensityScale)
+            }
+
+            // The SpotLight above lights SURFACES; the visible aerial cone is an `UnlitMaterial` that doesn't
+            // react to it, so a beat-locked strobe/chase wouldn't read in the dark venue unless we also
+            // modulate the cone. Drive the sibling beam container's `OpacityComponent` (hierarchical → covers
+            // the sheath / laser layers) so the flash is visible. Non-intensity effects (sweeps) leave the
+            // cone at its per-cue opacity, which `updateSpotBeam` resets to 1 on each cue.
+            if component.effect.drivesIntensity,
+               let beamName = component.beamEntityName,
+               let beam = spot.parent?.findEntity(named: beamName) {
+                beam.components.set(OpacityComponent(opacity: Float(out.intensityScale)))
             }
         }
     }

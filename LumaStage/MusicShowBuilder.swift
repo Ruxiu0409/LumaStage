@@ -116,7 +116,10 @@ enum MusicShowBuilder {
         let phase = (Double(slot) * 0.2).truncatingRemainder(dividingBy: 1)
         switch model {
         case .movingHeadBeam:
-            return LightEffect(kind: .panSweep, speedHz: 0.5, sizeDegrees: 26, phase: phase)
+            // High-energy: the prominent centre beams hard-strobe on the beat (drivesIntensity → the visible
+            // cone flashes via LightEffectSystem's OpacityComponent drive). Low-energy cues author no effect,
+            // so movers fall back to a gentle panSweep (LightEffect.suggested) — verse sweeps, chorus flashes.
+            return LightEffect(kind: .strobe, speedHz: 4, sizeDegrees: 0, phase: phase)
         case .ledStrobeBar:
             return LightEffect(kind: .strobe, speedHz: 8, sizeDegrees: 0, phase: phase)
         case .audienceBlinder:

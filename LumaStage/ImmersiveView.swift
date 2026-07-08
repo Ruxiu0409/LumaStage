@@ -696,7 +696,8 @@ struct ImmersiveView: View {
             from: placement.position,
             aim: placement.aim,
             restingAimDirection: restingDir,
-            beamAngleDegrees: fixture.effectiveFineControl.beamAngleDegrees
+            beamAngleDegrees: fixture.effectiveFineControl.beamAngleDegrees,
+            beamEntityName: fixture.renderModel == .laser ? "laser_\(fixture.id)" : "spotbeam_\(fixture.id)"
         )
 
         // Three-tier aerial-cone visibility (SPEC 19): `.full` for upstage/back wash + moving-head beams,
@@ -1138,7 +1139,8 @@ struct ImmersiveView: View {
         from sourceModel: Vector3Meters,
         aim aimModel: Vector3Meters,
         restingAimDirection: SIMD3<Float>? = nil,
-        beamAngleDegrees: Double
+        beamAngleDegrees: Double,
+        beamEntityName: String? = nil
     ) -> SpotLight {
         let spot = SpotLight()
         spot.name = name
@@ -1169,7 +1171,7 @@ struct ImmersiveView: View {
             spot.orientation = LightEffectSystem.lookOrientation(forward: aim)
             // Capture the resting aim so the dynamic-effects system can sweep around it (effect kind +
             // base lumens are filled in per cue by `apply`).
-            spot.components.set(LightEffectComponent(effect: .none, baseAim: aim, baseLumens: 0))
+            spot.components.set(LightEffectComponent(effect: .none, baseAim: aim, baseLumens: 0, beamEntityName: beamEntityName))
         }
 
         root.addChild(spot)
@@ -1521,6 +1523,10 @@ struct ImmersiveView: View {
             child.isEnabled = visible
             model.model?.materials = [sheathMaterial]
         }
+        // A previous cue's strobe/chase may have left an OpacityComponent on the container (driven per frame
+        // by LightEffectSystem); reset it to 1 each cue so a non-strobing cue shows the cone at full per-cue
+        // opacity. During a strobing cue the per-frame system re-drives it immediately.
+        container.components.set(OpacityComponent(opacity: 1))
     }
 
     /// Relights every fixture in the cue: each `FixtureGroup` drives its own `spot_<id>` spotlight
