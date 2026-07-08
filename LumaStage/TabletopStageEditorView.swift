@@ -58,6 +58,10 @@ struct TabletopStageEditorView: View {
         let _ = appModel.selectedStageObjectId
         let _ = appModel.lightingLook
         let _ = appModel.selectedFixtureId
+        // SPEC 21: the ‹ cue › switcher changes `selectedCueId` (which rides along with `lightingLook`, but
+        // read it explicitly to be safe) so switching cues re-runs `syncFixtures` and repaints every preview
+        // beam cone in the new cue's colour/intensity — same Observation footgun as the reads above.
+        let _ = appModel.selectedCueId
 
         RealityView { content, attachments in
             placement.name = "tabletop_placement"
@@ -66,7 +70,7 @@ struct TabletopStageEditorView: View {
             placement.addChild(turntable)
             content.add(placement)
             TabletopStageScene.sync(turntable, layout: appModel.stageLayout, selectedId: appModel.selectedStageObjectId)
-            TabletopStageScene.syncFixtures(turntable, look: appModel.lightingLook, layout: appModel.stageLayout, selectedFixtureId: appModel.selectedFixtureId, dragActive: dragGrabOffset != nil)
+            TabletopStageScene.syncFixtures(turntable, look: appModel.lightingLook, layout: appModel.stageLayout, selectedFixtureId: appModel.selectedFixtureId, dragActive: dragGrabOffset != nil, reduceMotion: reduceMotion)
             TabletopStageScene.seatAssemblyOnSurface(in: turntable)
 
             if let controls = attachments.entity(for: "controls") {
@@ -77,7 +81,7 @@ struct TabletopStageEditorView: View {
             }
         } update: { _, _ in
             TabletopStageScene.sync(turntable, layout: appModel.stageLayout, selectedId: appModel.selectedStageObjectId)
-            TabletopStageScene.syncFixtures(turntable, look: appModel.lightingLook, layout: appModel.stageLayout, selectedFixtureId: appModel.selectedFixtureId, dragActive: dragGrabOffset != nil)
+            TabletopStageScene.syncFixtures(turntable, look: appModel.lightingLook, layout: appModel.stageLayout, selectedFixtureId: appModel.selectedFixtureId, dragActive: dragGrabOffset != nil, reduceMotion: reduceMotion)
             TabletopStageScene.seatAssemblyOnSurface(in: turntable)
         } attachments: {
             Attachment(id: "controls") {
@@ -280,6 +284,13 @@ struct TabletopStageEditorView: View {
         HStack(spacing: 14) {
             // Keep a visible readout of the current selection; the 3D highlight alone is easy to miss.
             selectionStatus
+
+            // SPEC 21: preview the whole cue stack in place. ‹ / › step through cues via the existing
+            // wrapping `goToPreviousCue`/`goToNextCue` (both persist + narrate through `AppModel.selectCue`),
+            // and the diorama's preview beams recolour to the newly-selected cue. Disabled with <2 cues.
+            cueSwitcher
+
+            Divider().frame(height: 26)
 
             Picker("舞台尺寸", selection: stageSizeBinding) {
                 Text("小").tag(StagePlatformPreset.small4x2)
@@ -500,6 +511,45 @@ struct TabletopStageEditorView: View {
                         .lineLimit(1)
                 }
             }
+        }
+    }
+
+    /// SPEC 21: a ‹ <cue name> › switcher that previews each cue on the diorama in place. The chevrons reuse
+    /// the wrapping `goToPreviousCue`/`goToNextCue` (persist + narrate under the hood); the centre shows the
+    /// cue's Traditional-Chinese scene name and its "場景 N/總數" position. Disabled with fewer than 2 cues.
+    private var cueSwitcher: some View {
+        let cueCount = appModel.lightingLook.cues.count
+        return HStack(spacing: 6) {
+            Button("上一個場景", systemImage: "chevron.left") {
+                appModel.goToPreviousCue()
+            }
+            .labelStyle(.iconOnly)
+            .buttonStyle(.bordered)
+            .buttonBorderShape(.circle)
+            .lumaGazeTarget()
+            .disabled(cueCount < 2)
+            .help("預覽上一個場景")
+
+            VStack(spacing: 1) {
+                Text(appModel.selectedCue?.localizedDisplayName ?? "")
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(LumaStageDesign.textPrimary)
+                    .lineLimit(1)
+                Text("場景 \(appModel.selectedCueNumber)/\(cueCount)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(LumaStageDesign.textSecondary)
+            }
+            .frame(minWidth: 84)
+
+            Button("下一個場景", systemImage: "chevron.right") {
+                appModel.goToNextCue()
+            }
+            .labelStyle(.iconOnly)
+            .buttonStyle(.bordered)
+            .buttonBorderShape(.circle)
+            .lumaGazeTarget()
+            .disabled(cueCount < 2)
+            .help("預覽下一個場景")
         }
     }
 
@@ -945,7 +995,7 @@ enum TabletopStageScene {
     /// offset apply identically). Reconciles by fixture id: removes proxies whose fixture is gone, adds new
     /// ones, and repositions surviving ones to their resolved placement (so add/remove/move all reflect).
     /// Cheap to call every `update:` pass.
-    static func syncFixtures(_ root: Entity, look: LightingLook, layout: StageLayout, selectedFixtureId: String?, dragActive: Bool) {
+    static func syncFixtures(_ root: Entity, look: LightingLook, layout: StageLayout, selectedFixtureId: String?, dragActive: Bool, reduceMotion: Bool) {
         guard let assembly = root.children.first(where: { $0.name.hasPrefix("tabletop_layout_") }) else {
             return
         }
@@ -1032,6 +1082,20 @@ enum TabletopStageScene {
             // #14: recolour the emissive lens to the CURRENT cue's colour on every pass — the proxy is
             // built once, but the cue colour changes when the user switches cue or recolours the fixture.
             (container.findEntity(named: "fixture_lens") as? ModelEntity)?.model?.materials = [lensMaterial(hex: fixture.color.value)]
+
+            // SPEC 21: extend the lens colour into a translucent preview beam cone so the diorama shows the
+            // CURRENT cue's throw without entering the 1:1 stage. Length/base/alpha come from the
+            // deterministic `PreviewBeamCone`; the throw is the model-metre distance from the fixture to its
+            // (zone-derived, aim-offset-included) aim target. Recoloured/resized every pass, so a cue switch
+            // repaints it — gated hidden when the fixture is off or dark, matching the 1:1 stage.
+            let throwMeters = distanceMeters(placement.position, placement.aim)
+            updateFixtureBeam(in: container,
+                              beamAngleDegrees: fixture.effectiveFineControl.beamAngleDegrees,
+                              throwMeters: throwMeters,
+                              colorHex: fixture.color.value,
+                              intensity: fixture.intensity,
+                              enabled: fixture.enabled,
+                              animated: !reduceMotion)
 
             // #13: a floating "N · 型號" caption. The number is this fixture's 1-based index in cue order —
             // the SAME "Light N" the 1:1 stage and voice commands use — and the model name is the catalog name.
@@ -1272,6 +1336,25 @@ enum TabletopStageScene {
         addInteraction(lens)
         container.addChild(lens)
 
+        // SPEC 21: a translucent preview beam cone extending from the lens toward the stage target, so the
+        // diorama shows the CURRENT cue's throw (colour/intensity/beam) without entering the 1:1 stage. The
+        // cone mesh has its apex at the local origin opening toward +Y (like `ImmersiveView.beamConeMesh`),
+        // so aim that +Y along `aimUnit` and seat the apex on the lens — tip at the light, base toward the
+        // stage. Pure VISUAL: NO InputTarget / collision (it must never steal a tap/drag from the fixture
+        // body — same rule as `fixture_caption`), and it is a sibling of the collidable `fixture_model`, so
+        // that model's recursive `generateCollisionShapes` never touches it. Its mesh/colour/alpha/visibility
+        // are set per-cue in `syncFixtures.updateFixtureBeam`; only the baked orientation lives here (it is
+        // rebuilt with the whole proxy when the aim changes, via the `fixture_aim_<sig>` marker).
+        let beam = ModelEntity(
+            mesh: beamConeMesh(length: sceneLength(PreviewBeamCone.minLengthMeters), baseRadius: sceneLength(0.05)),
+            materials: [beamMaterial(hex: hex, alpha: 0)]
+        )
+        beam.name = beamEntityName
+        beam.orientation = orientation(from: SIMD3<Float>(0, 1, 0), to: aimUnit)
+        beam.position = aimUnit * sceneLength(0.22)
+        beam.isEnabled = false // syncFixtures gives it real size/colour/visibility on the same pass
+        container.addChild(beam)
+
         // Selection ring (hidden by default), toggled on while this fixture is selected.
         let ring = ModelEntity(
             mesh: .generateBox(width: sceneLength(0.6), height: sceneLength(0.05), depth: sceneLength(0.6), cornerRadius: sceneLength(0.05)),
@@ -1423,6 +1506,101 @@ enum TabletopStageScene {
         var m = UnlitMaterial(color: UIColor(red: rgb.red, green: rgb.green, blue: rgb.blue, alpha: 1))
         m.blending = .opaque
         return m
+    }
+
+    // MARK: - SPEC 21: preview beam cone
+
+    static let beamEntityName = "fixture_beam"
+
+    /// Per-cue update for a fixture proxy's translucent preview beam cone (`fixture_beam`): recolour it to
+    /// the CURRENT cue's colour at the deterministic `PreviewBeamCone` alpha, resize the cone when the
+    /// rounded size (beam angle × throw) changes, and gate it hidden when the fixture is off or dark — the
+    /// SAME gate as the 1:1 stage. The mesh is regenerated ONLY on a size-signature change (a hidden
+    /// `beam_size_<sig>` marker child stamps it, mirroring the caption/aim-signature idiom), so an unchanged
+    /// pass just swaps the (cheap) material. A hidden→visible transition fades the cone in via
+    /// `OpacityComponent` when `animated` (mirrors `setHangZoneVisible`); Reduce Motion hard-cuts.
+    static func updateFixtureBeam(in container: Entity,
+                                  beamAngleDegrees: Double,
+                                  throwMeters: Double,
+                                  colorHex: String,
+                                  intensity: Double,
+                                  enabled: Bool,
+                                  animated: Bool) {
+        guard let beam = container.findEntity(named: beamEntityName) as? ModelEntity else { return }
+
+        let dim = PreviewBeamCone.dimensions(beamAngleDegrees: beamAngleDegrees,
+                                             throwMeters: throwMeters,
+                                             intensity: intensity)
+
+        // Rebuild the mesh only when the rounded size changes (avoid regenerating a cone mesh every pass).
+        let sig = beamSizeSignature(length: dim.length, baseRadius: dim.baseRadius)
+        if beam.findEntity(named: "beam_size_\(sig)") == nil {
+            for child in beam.children where child.name.hasPrefix("beam_size_") { child.removeFromParent() }
+            beam.model?.mesh = beamConeMesh(length: sceneLength(dim.length), baseRadius: sceneLength(dim.baseRadius))
+            let marker = Entity()
+            marker.name = "beam_size_\(sig)"
+            marker.isEnabled = false // signature stamp only — no geometry/collision
+            beam.addChild(marker)
+        }
+
+        // Recolour to the current cue colour every pass (like `fixture_lens`) at the WI-1 alpha.
+        beam.model?.materials = [beamMaterial(hex: colorHex, alpha: dim.alpha)]
+
+        let wantVisible = enabled && intensity > 0
+        let wasVisible = beam.isEnabled
+        beam.isEnabled = wantVisible
+        guard wantVisible else { return }
+        if !wasVisible && animated {
+            beam.components.set(OpacityComponent(opacity: 0))
+            let fade = FromToByAnimation(from: Float(0), to: Float(1),
+                                         duration: 0.2, timing: .easeInOut,
+                                         bindTarget: .opacity)
+            if let resource = try? AnimationResource.generate(with: fade) {
+                beam.playAnimation(resource)
+            }
+        }
+        beam.components.set(OpacityComponent(opacity: 1))
+    }
+
+    /// The translucent cone `UnlitMaterial` — cue colour at `PreviewBeamCone`'s alpha, no blending override
+    /// so the sub-1 alpha drives translucency (the existing `hangZoneMaterial` approach).
+    private static func beamMaterial(hex: String, alpha: Double) -> UnlitMaterial {
+        let rgb = RGBComponents(hex: hex) ?? .white
+        return UnlitMaterial(color: UIColor(red: rgb.red, green: rgb.green, blue: rgb.blue, alpha: alpha))
+    }
+
+    /// A stable signature of a preview cone's size (length + base radius, in scene units, rounded) used as a
+    /// hidden marker-child name so `updateFixtureBeam` rebuilds the mesh only on an actual size change.
+    private static func beamSizeSignature(length: Double, baseRadius: Double) -> String {
+        func r(_ v: Double) -> Int { Int((sceneLength(v) * 1000).rounded()) }
+        return "\(r(length))_\(r(baseRadius))"
+    }
+
+    /// A hand-built cone mesh: apex at the local origin, base ring of `segments` points at `baseRadius` and
+    /// y = `length`, joined apex→ring[i]→ring[i+1] as a triangle-fan side surface (base cap omitted — the
+    /// side surface alone reads as a beam). Modelled on `ImmersiveView.beamConeMesh` / the selection-ring
+    /// `MeshDescriptor` idiom because RealityKit ships no `generateCone`; falls back to a cylinder if
+    /// descriptor generation fails.
+    private static func beamConeMesh(length: Float, baseRadius: Float, segments: Int = 24) -> MeshResource {
+        var positions: [SIMD3<Float>] = [SIMD3<Float>(0, 0, 0)] // apex at index 0
+        for i in 0..<segments {
+            let theta = Float(i) / Float(segments) * 2 * .pi
+            positions.append(SIMD3<Float>(cos(theta) * baseRadius, length, sin(theta) * baseRadius))
+        }
+        var indices: [UInt32] = []
+        for i in 0..<segments {
+            indices.append(contentsOf: [0, UInt32(1 + i), UInt32(1 + (i + 1) % segments)])
+        }
+        var descriptor = MeshDescriptor(name: "tabletop_beam_cone")
+        descriptor.positions = MeshBuffers.Positions(positions)
+        descriptor.primitives = .triangles(indices)
+        return (try? MeshResource.generate(from: [descriptor])) ?? .generateCylinder(height: length, radius: baseRadius)
+    }
+
+    /// Straight-line distance between two model-metre points (fixture → aim target), for the beam throw.
+    private static func distanceMeters(_ a: Vector3Meters, _ b: Vector3Meters) -> Double {
+        let dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z
+        return (dx * dx + dy * dy + dz * dz).squareRoot()
     }
 
     /// E-2: a stable signature of a fixture proxy's baked orientation — its aim direction rounded to 0.01

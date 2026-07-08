@@ -9,6 +9,7 @@ struct LumaStageCoreSmokeTests {
         spotLightRenderMathMapsIntensityAndBeamAngle()
         laserBeamMathDerivesCoreAndSheathLayers()
         spotBeamScatterMathDerivesConeLayers()
+        previewBeamConeScalesWithBeamThrowAndIntensity()
         try newProjectFactoryCreatesValidProject()
         try newProjectFactoryCreatesDefaultStageLayout()
         projectCreationOffersTemplatesWithBlankOption()
@@ -181,6 +182,35 @@ struct LumaStageCoreSmokeTests {
                "Below-range beam spread must clamp to the smallest shadow light size")
         expect(SpotLightRenderMath.shadowLightSize(beamAngleDegrees: 300) == SpotLightRenderMath.shadowLightSize(beamAngleDegrees: 120),
                "Above-range beam spread must clamp to the largest shadow light size")
+    }
+
+    private static func previewBeamConeScalesWithBeamThrowAndIntensity() {
+        // Wider beam angle → larger base radius (monotonic in beam spread).
+        let narrow = PreviewBeamCone.dimensions(beamAngleDegrees: 10, throwMeters: 3, intensity: 1)
+        let wide = PreviewBeamCone.dimensions(beamAngleDegrees: 90, throwMeters: 3, intensity: 1)
+        expect(wide.baseRadius > narrow.baseRadius, "A wider beam angle must widen the preview cone base")
+
+        // Longer throw → longer cone AND wider base (base radius scales with the length).
+        let near = PreviewBeamCone.dimensions(beamAngleDegrees: 30, throwMeters: 2, intensity: 1)
+        let far = PreviewBeamCone.dimensions(beamAngleDegrees: 30, throwMeters: 6, intensity: 1)
+        expect(far.length > near.length, "A longer throw must lengthen the preview cone")
+        expect(far.baseRadius > near.baseRadius, "A longer throw must widen the preview cone base")
+
+        // Alpha: 0 → 0, 1 → maxAlpha, 0.5 strictly between, and out-of-range clamps into [0, maxAlpha].
+        expect(PreviewBeamCone.dimensions(beamAngleDegrees: 30, throwMeters: 3, intensity: 0).alpha == 0,
+               "Zero intensity must map to zero alpha")
+        expect(abs(PreviewBeamCone.dimensions(beamAngleDegrees: 30, throwMeters: 3, intensity: 1).alpha - PreviewBeamCone.maxAlpha) < 0.0001,
+               "Full intensity must map to the alpha ceiling")
+        let mid = PreviewBeamCone.dimensions(beamAngleDegrees: 30, throwMeters: 3, intensity: 0.5).alpha
+        expect(mid > 0 && mid < PreviewBeamCone.maxAlpha, "Half intensity must sit between zero and the alpha ceiling")
+        expect(PreviewBeamCone.dimensions(beamAngleDegrees: 30, throwMeters: 3, intensity: -0.5).alpha == 0,
+               "Negative intensity must clamp to zero alpha")
+        expect(abs(PreviewBeamCone.dimensions(beamAngleDegrees: 30, throwMeters: 3, intensity: 2).alpha - PreviewBeamCone.maxAlpha) < 0.0001,
+               "Above-one intensity must clamp to the alpha ceiling")
+
+        // A near-zero throw must not degenerate: the length floors to the visible minimum.
+        expect(abs(PreviewBeamCone.dimensions(beamAngleDegrees: 30, throwMeters: 0, intensity: 1).length - PreviewBeamCone.minLengthMeters) < 0.0001,
+               "A near-zero throw must floor the cone length to the visible minimum")
     }
 
     private static func laserBeamMathDerivesCoreAndSheathLayers() {

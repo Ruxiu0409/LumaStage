@@ -1753,6 +1753,37 @@ enum SpotLightRenderMath {
     }
 }
 
+// MARK: - Tabletop preview beam cone (SPEC 21)
+
+/// Deterministic geometry for the tabletop diorama's translucent preview beam cone (SPEC 21): from a
+/// fixture's beam spread, throw distance, and 0...1 intensity it derives the cone's length / base radius /
+/// alpha. Pure and platform-agnostic (model metres in, model metres out; the view converts to scene units
+/// via `sceneLength`). Like `LaserScatterMath`/`SpotLightRenderMath`, the smoke test pins only the *shape*
+/// of the mapping (monotonic, clamped, endpoints), not the exact constants — so `maxAlpha`, the half-angle
+/// factor, and `minLengthMeters` stay retunable from device previews without touching tests.
+enum PreviewBeamCone {
+    /// Alpha ceiling at full intensity: bright enough to read as "light in the air", still translucent
+    /// enough to see the grey diorama structure behind it. [需實機] tune.
+    static let maxAlpha: Double = 0.35
+    /// Shortest visible cone length, so a near-zero throw doesn't degenerate into an invisible sliver.
+    static let minLengthMeters: Double = 0.4
+
+    /// - length: `max(throwMeters, minLengthMeters)` — a near-zero (or negative) throw floors to a visible
+    ///   minimum, otherwise the cone reaches the fixture's aim target.
+    /// - baseRadius: `length * tan(coneAngles(beamAngleDegrees:).outer)` — the 1:1 stage's outer cone angle
+    ///   reused as the half-spread, so a wider beam widens the base and a longer cone widens with it.
+    ///   (`coneAngles` already clamps beamAngle to 5...120.)
+    /// - alpha: `clamp(intensity, 0, 1) * maxAlpha` — 0 → 0, 1 → `maxAlpha`, monotonic in between.
+    static func dimensions(beamAngleDegrees: Double, throwMeters: Double, intensity: Double)
+        -> (length: Double, baseRadius: Double, alpha: Double) {
+        let length = max(throwMeters, minLengthMeters)
+        let halfAngle = SpotLightRenderMath.coneAngles(beamAngleDegrees: beamAngleDegrees).outer
+        let baseRadius = length * tan(halfAngle * .pi / 180)
+        let alpha = min(max(intensity, 0), 1) * maxAlpha
+        return (length: length, baseRadius: baseRadius, alpha: alpha)
+    }
+}
+
 // MARK: - Laser volumetric scatter
 
 /// Tunable "look" constants for the volumetric laser beam — the numbers behind the two visible
