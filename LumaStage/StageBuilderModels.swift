@@ -12,9 +12,6 @@ enum StageObjectType: String, Codable, CaseIterable {
 
 enum StageAssetId: String, Codable, CaseIterable {
     case stageBase = "stage_base"
-    case stageDeck1x1 = "stage_deck_1x1"
-    case stageDeck2x1 = "stage_deck_2x1"
-    case stageDeck2x2 = "stage_deck_2x2"
     case truss1m = "truss_1m"
     case truss2m = "truss_2m"
 
@@ -22,12 +19,6 @@ enum StageAssetId: String, Codable, CaseIterable {
         switch self {
         case .stageBase:
             return "Stage Base"
-        case .stageDeck1x1:
-            return "Small Stage Deck"
-        case .stageDeck2x1:
-            return "Long Stage Deck"
-        case .stageDeck2x2:
-            return "Standard Stage Deck"
         case .truss1m:
             return "1m Truss"
         case .truss2m:
@@ -39,8 +30,6 @@ enum StageAssetId: String, Codable, CaseIterable {
         switch self {
         case .stageBase:
             return .stageBase
-        case .stageDeck1x1, .stageDeck2x1, .stageDeck2x2:
-            return .stageDeck
         case .truss1m, .truss2m:
             return .trussSegment
         }
@@ -50,12 +39,6 @@ enum StageAssetId: String, Codable, CaseIterable {
         switch self {
         case .stageBase:
             return StageObjectSize(width: 4, depth: 2, height: 0.8)
-        case .stageDeck1x1:
-            return StageObjectSize(width: 1, depth: 1, height: 0.8)
-        case .stageDeck2x1:
-            return StageObjectSize(width: 2, depth: 1, height: 0.8)
-        case .stageDeck2x2:
-            return StageObjectSize(width: 2, depth: 2, height: 0.8)
         case .truss1m, .truss2m:
             return nil
         }
@@ -67,7 +50,7 @@ enum StageAssetId: String, Codable, CaseIterable {
             return 1
         case .truss2m:
             return 2
-        case .stageBase, .stageDeck1x1, .stageDeck2x1, .stageDeck2x2:
+        case .stageBase:
             return nil
         }
     }
@@ -676,6 +659,8 @@ enum StageBuilderDropPlanner {
                 size: StageObjectSize(width: 4, depth: 2, height: 0.8)
             )
         case .stageDeck:
+            // No StageAssetId maps to .stageDeck anymore; kept only so this
+            // switch stays exhaustive over StageObjectType. Unreachable at runtime.
             return nil
         case .trussSegment:
             return .trussSegment(
@@ -693,6 +678,8 @@ enum StageBuilderDropPlanner {
             let baseCount = existingObjects.filter { $0.type == .stageBase }.count
             return Vector3Meters(x: 0, y: 0, z: Double(baseCount) * 0.5)
         case .stageDeck:
+            // No StageAssetId maps to .stageDeck anymore; kept only so this
+            // switch stays exhaustive over StageObjectType. Unreachable at runtime.
             let deckCount = existingObjects.filter { $0.type == .stageDeck }.count
             return Vector3Meters(x: Double(deckCount % 4) - 1.5, y: 0, z: Double(deckCount / 4))
         case .trussSegment:
@@ -939,6 +926,10 @@ struct StageObject: Codable, Equatable, Identifiable {
     var connectorIds: [String]
     var locked: Bool
 
+    /// Dead: no `StageAssetId` maps to `.stageDeck` anymore, so no path can
+    /// produce a validating deck object. Kept (with the inert `.stageDeck`
+    /// StageObjectType geometry) per SPEC 23 part (a) i-min; removing it is the
+    /// deferred i-full clean-up.
     static func stageDeck(
         id: String,
         assetId: StageAssetId,

@@ -549,10 +549,6 @@ struct LumaStageCoreSmokeTests {
             "Truss drops should create a stage object"
         )
 
-        expect(
-            StageBuilderDropPlanner.object(assetId: .stageDeck2x2, id: "deck_drop", existingObjects: [], dropPosition: .zero) == nil,
-            "Standalone stage deck drops should be blocked because deck boards are represented inside the stage base"
-        )
         expect(abs(base.position.y - 0.4) < 0.0001, "Dragged stage bases should sit on the ground by half their height")
         expect(truss.position.y == 3, "Dragged truss segments should keep the default rigging height")
     }
