@@ -1834,6 +1834,104 @@ enum LaserScatterMath {
     }
 }
 
+// MARK: - Volumetric spotlight beam (haze)
+
+/// Tunable "look" constants for a spotlight's volumetric cone — the two visible layers (core + sheath),
+/// modelled on `LaserScatterConfig`. The peak alphas are deliberately much lower than the laser's
+/// because a spotlight is a wide cone, not a pencil beam: the same alpha would read as a solid block of
+/// fog. The smoke tests pin only the *shape* of the mapping (gate/ordering/monotonicity/range), not
+/// these values, so retuning from device previews is safe.
+struct SpotBeamScatterConfig: Equatable {
+    /// Peak sheath alpha at full intensity and a narrow cone (well below the laser sheath — the cone is
+    /// far wider).
+    var sheathAlpha: Double
+    /// Core alpha (a touch above the sheath so the centre reads, still far below the laser core).
+    var coreAlpha: Double
+    /// How far the core hue lerps toward white (0 = pure hue, 1 = white).
+    var coreWhiteness: Double
+    /// Beam-angle alpha falloff: alpha ×= (1 - widthAlphaFalloff · normalizedWidth), where
+    /// normalizedWidth = (outer - 10)/50 ∈ 0…1; a wider cone gets fainter so it doesn't read as a fog bank.
+    var widthAlphaFalloff: Double
+    /// Beam geometry length (model metres) — a fixed throw distance; tune on device to "cone tip → deck".
+    var beamLengthMeters: Double
+
+    static let `default` = SpotBeamScatterConfig(
+        sheathAlpha: 0.06,
+        coreAlpha: 0.10,
+        coreWhiteness: 0.40,
+        widthAlphaFalloff: 0.6,
+        beamLengthMeters: 9.0
+    )
+}
+
+/// Pure mapping from a spotlight cue's `#RRGGBB` + 0…1 intensity + beam angle → the numbers the
+/// volumetric cone renderer needs for its two layers (core cone colour/alpha, sheath cone colour/alpha,
+/// and the two cones' base radii). Foundation-only, `ImmersiveView` the only consumer. The layering
+/// rationale is the laser's: the core is brighter and whiter, the sheath is wider and fainter so the
+/// saturated hue bleeds out and the hard edge dies, letting the cone read as light in the air rather
+/// than a solid cone. **No particles** (see root CLAUDE.md "haze particles removed").
+enum SpotBeamScatterMath {
+    /// A plain RGBA (0...1 per channel) so the math stays UIKit/RealityKit-free. Intentionally a separate
+    /// copy of `LaserScatterMath.RGBA` so the two look-maths stay independently tunable.
+    struct RGBA: Equatable { var red, green, blue, alpha: Double }
+
+    /// The cone is fully hidden (core + sheath together) at or below this cue intensity, matching the
+    /// laser `beamsVisible` gate.
+    static func beamVisible(_ intensity: Double) -> Bool { intensity > 0.03 }
+
+    private static func clamp01(_ v: Double) -> Double { min(max(v, 0), 1) }
+    private static func components(hex: String) -> RGBComponents { RGBComponents(hex: hex) ?? .white }
+
+    /// normalizedWidth ∈ 0…1, linear in the outer cone angle (10°…60°); used for alpha falloff.
+    static func normalizedWidth(beamAngleDegrees: Double) -> Double {
+        clamp01((SpotLightRenderMath.coneAngles(beamAngleDegrees: beamAngleDegrees).outer - 10) / 50)
+    }
+
+    private static func widthScaledAlpha(_ base: Double, beamAngleDegrees: Double, intensity: Double,
+                                         config: SpotBeamScatterConfig) -> Double {
+        let w = normalizedWidth(beamAngleDegrees: beamAngleDegrees)
+        return base * clamp01(intensity) * (1 - clamp01(config.widthAlphaFalloff) * w)
+    }
+
+    /// Core cone colour: cue hue dimmed by intensity, then lerped toward white; alpha scales with
+    /// intensity and falls off with cone width.
+    static func coreRGBA(hex: String, intensity: Double, beamAngleDegrees: Double,
+                         config: SpotBeamScatterConfig = .default) -> RGBA {
+        let d = components(hex: hex).dimmed(by: clamp01(intensity))
+        let w = clamp01(config.coreWhiteness)
+        return RGBA(red: d.red + (1 - d.red) * w, green: d.green + (1 - d.green) * w,
+                    blue: d.blue + (1 - d.blue) * w,
+                    alpha: widthScaledAlpha(config.coreAlpha, beamAngleDegrees: beamAngleDegrees,
+                                            intensity: intensity, config: config))
+    }
+
+    /// Sheath cone colour: fully saturated cue hue at a low alpha (scaled by intensity and cone width).
+    static func sheathRGBA(hex: String, intensity: Double, beamAngleDegrees: Double,
+                           config: SpotBeamScatterConfig = .default) -> RGBA {
+        let c = components(hex: hex)
+        return RGBA(red: c.red, green: c.green, blue: c.blue,
+                    alpha: widthScaledAlpha(config.sheathAlpha, beamAngleDegrees: beamAngleDegrees,
+                                            intensity: intensity, config: config))
+    }
+
+    // MARK: Geometry (metres)
+
+    /// Cone base radius (model metres) = length · tan(half-angle). The half-angle uses `coneAngles`'
+    /// inner (core) / outer (sheath) so the visible cone lines up with the actual `SpotLight` cone.
+    /// (The outer angle is treated as a half-angle for visual alignment — tune on device, see Caveats.)
+    static func baseRadius(lengthMeters: Double, halfAngleDegrees: Double) -> Double {
+        lengthMeters * tan(min(max(halfAngleDegrees, 1), 89) * .pi / 180)
+    }
+    static func coreBaseRadius(lengthMeters: Double, beamAngleDegrees: Double) -> Double {
+        baseRadius(lengthMeters: lengthMeters,
+                   halfAngleDegrees: SpotLightRenderMath.coneAngles(beamAngleDegrees: beamAngleDegrees).inner)
+    }
+    static func sheathBaseRadius(lengthMeters: Double, beamAngleDegrees: Double) -> Double {
+        baseRadius(lengthMeters: lengthMeters,
+                   halfAngleDegrees: SpotLightRenderMath.coneAngles(beamAngleDegrees: beamAngleDegrees).outer)
+    }
+}
+
 // MARK: - Dynamic rig: fixture-type rendering metadata + zone placement
 
 /// `LightingFixtureVisualModel` lives in the fixture catalog as the visual vocabulary; here it gains

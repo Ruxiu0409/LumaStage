@@ -8,6 +8,7 @@ struct LumaStageCoreSmokeTests {
         try defaultProjectsShipPlayableShowcase()
         spotLightRenderMathMapsIntensityAndBeamAngle()
         laserBeamMathDerivesCoreAndSheathLayers()
+        spotBeamScatterMathDerivesConeLayers()
         try newProjectFactoryCreatesValidProject()
         try newProjectFactoryCreatesDefaultStageLayout()
         projectCreationOffersTemplatesWithBlankOption()
@@ -208,6 +209,53 @@ struct LumaStageCoreSmokeTests {
                "Same inputs must be deterministic")
         let bogus = LaserScatterMath.sheathRGBA(hex: "not-a-hex", intensity: 1)
         let white = LaserScatterMath.sheathRGBA(hex: "#FFFFFF", intensity: 1)
+        expect(bogus == white, "An invalid hex must fall back to white")
+    }
+
+    // SPEC 19: the volumetric spotlight cone's two-layer (core + sheath) look math, modelled on the
+    // laser's. Pins the mapping shape only (gate/ordering/monotonicity/width falloff/range), not the
+    // tunable config values, so device retuning stays safe.
+    private static func spotBeamScatterMathDerivesConeLayers() {
+        // Visibility gate (matches the laser).
+        expect(!SpotBeamScatterMath.beamVisible(0.03), "A near-dark cone must be gated off")
+        expect(SpotBeamScatterMath.beamVisible(0.5), "A lit fixture's cone must be visible")
+
+        // Layering: the sheath (outer cone) is wider than the core (inner cone).
+        let L = 9.0
+        expect(SpotBeamScatterMath.sheathBaseRadius(lengthMeters: L, beamAngleDegrees: 40)
+               > SpotBeamScatterMath.coreBaseRadius(lengthMeters: L, beamAngleDegrees: 40),
+               "The sheath (outer cone) must be wider than the core (inner cone)")
+
+        // The core lifts non-hue channels toward white; the sheath stays saturated.
+        let core = SpotBeamScatterMath.coreRGBA(hex: "#FF0000", intensity: 1, beamAngleDegrees: 40)
+        expect(core.green > 0 && core.blue > 0, "The white-hot core must lift the non-hue channels toward white")
+        let sheath = SpotBeamScatterMath.sheathRGBA(hex: "#FF0000", intensity: 1, beamAngleDegrees: 40)
+        expect(sheath.green < 0.0001 && sheath.blue < 0.0001, "The sheath must keep the saturated hue")
+
+        // Alpha is low and scales with intensity.
+        expect(sheath.alpha < 0.15, "The sheath alpha must stay low so it reads as a halo, not a solid cone")
+        expect(SpotBeamScatterMath.sheathRGBA(hex: "#FF0000", intensity: 0.5, beamAngleDegrees: 40).alpha < sheath.alpha,
+               "A dimmer cue must give a fainter cone")
+
+        // Alpha falls off with cone width: at the same intensity a wider cone is fainter than a narrow one.
+        expect(SpotBeamScatterMath.sheathRGBA(hex: "#FF0000", intensity: 1, beamAngleDegrees: 120).alpha
+               < SpotBeamScatterMath.sheathRGBA(hex: "#FF0000", intensity: 1, beamAngleDegrees: 5).alpha,
+               "A wide cone must be fainter than a narrow one")
+
+        // Base radius grows with beam angle and with length.
+        expect(SpotBeamScatterMath.sheathBaseRadius(lengthMeters: L, beamAngleDegrees: 120)
+               > SpotBeamScatterMath.sheathBaseRadius(lengthMeters: L, beamAngleDegrees: 5),
+               "A wider beam must give a larger base radius")
+        expect(SpotBeamScatterMath.sheathBaseRadius(lengthMeters: 18, beamAngleDegrees: 40)
+               > SpotBeamScatterMath.sheathBaseRadius(lengthMeters: 9, beamAngleDegrees: 40),
+               "A longer beam must give a larger base radius")
+
+        // Determinism + invalid-hex fallback to white.
+        expect(SpotBeamScatterMath.coreRGBA(hex: "#3366FF", intensity: 0.7, beamAngleDegrees: 30)
+               == SpotBeamScatterMath.coreRGBA(hex: "#3366FF", intensity: 0.7, beamAngleDegrees: 30),
+               "Same inputs must be deterministic")
+        let bogus = SpotBeamScatterMath.sheathRGBA(hex: "not-a-hex", intensity: 1, beamAngleDegrees: 40)
+        let white = SpotBeamScatterMath.sheathRGBA(hex: "#FFFFFF", intensity: 1, beamAngleDegrees: 40)
         expect(bogus == white, "An invalid hex must fall back to white")
     }
 
