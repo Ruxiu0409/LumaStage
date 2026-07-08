@@ -123,6 +123,27 @@ enum StagePlatformPreset: String, Codable, CaseIterable {
     }
 }
 
+/// 舞台結構詞彙（SPEC 23 part (b) / issue #27）：由既有 `.trussSegment` 組成的可加結構——側塔／地面 boom／
+/// 中場第二道桁架。純幾何、每件都是 `.trussSegment`，故 renderer / node-snap / support policy / footprint
+/// 全部自動吃到，**無需新增 render 型別或 `StageAssetId`**。位置一律從 `layout` 的 stage base 尺寸推導、
+/// 對齊 gridSize 網格（見 `StageLayout.structurePresetObjects`）。
+enum StageStructurePreset: String, Codable, CaseIterable {
+    case sideTowers = "side_towers"           // 左右對稱一對垂直側塔（供側掛雷射／搖頭燈）
+    case groundBoomStands = "ground_boom_stands"  // 左右對稱一對地面 boom（矮垂直桁架）
+    case midStageTruss = "mid_stage_truss"    // 上舞台 portal 之外、往台前的第二道水平桁架 portal
+
+    var displayName: String {
+        switch self {
+        case .sideTowers:
+            return "側塔一對"
+        case .groundBoomStands:
+            return "地面 Boom 架一對"
+        case .midStageTruss:
+            return "中場桁架"
+        }
+    }
+}
+
 struct Vector3Meters: Codable, Equatable {
     var x: Double
     var y: Double
@@ -1370,6 +1391,89 @@ struct StageLayout: Codable, Equatable, Identifiable {
             topIndex += 1
         }
 
+        return objects
+    }
+
+    /// SPEC 23 (b): the truss segments that make up a `StageStructurePreset`, positioned relative to the
+    /// layout's stage base — **not yet added or validated** (the caller `addObject`s each one, which snaps +
+    /// validates). Every returned object is a `.trussSegment` reusing the existing `.truss1m`/`.truss2m`
+    /// assets (same trick as `trussPortalPreset`), so node-snap, support classification and the truss
+    /// footprint all apply for free. All coordinates are derived from the stage base's width/depth and
+    /// rounded to the layout's grid so `snappedObject` never nudges the stacked alignment. The returned ids
+    /// are prototypes — `AppModel.addStageStructure` overwrites them with unique values.
+    static func structurePresetObjects(_ preset: StageStructurePreset, in layout: StageLayout) -> [StageObject] {
+        let base = layout.objects.first { $0.type == .stageBase }
+        let size = base?.size ?? StageObjectSize(width: 6, depth: 3, height: 0.8)
+        let grid = layout.gridSize > 0 ? layout.gridSize : 0.5
+        func snap(_ value: Double) -> Double { (value / grid).rounded() * grid }
+
+        let halfWidth = snap(size.width / 2)
+        let halfDepth = size.depth / 2
+        // Towers/booms stand on the floor just outside the deck edge on both sides.
+        let sideX = snap(size.width / 2 + 0.5)
+
+        switch preset {
+        case .sideTowers:
+            let z = snap(0)   // beside stage centre — usable for side-hung lasers / moving heads
+            return verticalTrussStack(atX: -sideX, z: z, height: 4, idPrefix: "\(preset.rawValue)_left")
+                + verticalTrussStack(atX: sideX, z: z, height: 4, idPrefix: "\(preset.rawValue)_right")
+        case .groundBoomStands:
+            let z = snap(halfDepth)   // toward the front of the stage
+            return verticalTrussStack(atX: -sideX, z: z, height: 2, idPrefix: "\(preset.rawValue)_left")
+                + verticalTrussStack(atX: sideX, z: z, height: 2, idPrefix: "\(preset.rawValue)_right")
+        case .midStageTruss:
+            let z = snap(-halfDepth * 0.2)   // a second overhead portal, nearer downstage than the upstage truss
+            let height = 4.0
+            return verticalTrussStack(atX: -halfWidth, z: z, height: height, idPrefix: "\(preset.rawValue)_left_leg")
+                + verticalTrussStack(atX: halfWidth, z: z, height: height, idPrefix: "\(preset.rawValue)_right_leg")
+                + horizontalTrussBeam(fromX: -halfWidth, toX: halfWidth, y: height, z: z, idPrefix: "\(preset.rawValue)_top")
+        }
+    }
+
+    /// A vertical truss leg tiled from the floor to `height` with stacked 2m segments capped by a 1m piece
+    /// when the remainder is odd — the exact stacked-leg loop `trussPortalPreset` uses (rotation z = 90 → the
+    /// segment runs along +Y). Shared by side towers, ground booms and the mid-stage portal's legs.
+    private static func verticalTrussStack(atX x: Double, z: Double, height: Double, idPrefix: String) -> [StageObject] {
+        var objects: [StageObject] = []
+        var currentY = 0.0
+        var index = 1
+        while currentY < height - 0.0001 {
+            let remaining = height - currentY
+            let assetId: StageAssetId = remaining >= 2 ? .truss2m : .truss1m
+            objects.append(
+                .trussSegment(
+                    id: "\(idPrefix)_\(index)",
+                    assetId: assetId,
+                    position: Vector3Meters(x: x, y: currentY, z: z),
+                    rotation: Vector3Degrees(x: 0, y: 0, z: 90)
+                )
+            )
+            currentY += assetId.trussLength ?? 1
+            index += 1
+        }
+        return objects
+    }
+
+    /// A horizontal truss beam tiled along +X from `startX` to `endX` (same tiling loop as the portal top
+    /// beam, rotation zero → the segment runs along +X). Used for the mid-stage portal's top chord.
+    private static func horizontalTrussBeam(fromX startX: Double, toX endX: Double, y: Double, z: Double, idPrefix: String) -> [StageObject] {
+        var objects: [StageObject] = []
+        var currentX = startX
+        var index = 1
+        while currentX < endX - 0.0001 {
+            let remaining = endX - currentX
+            let assetId: StageAssetId = remaining >= 2 ? .truss2m : .truss1m
+            objects.append(
+                .trussSegment(
+                    id: "\(idPrefix)_\(index)",
+                    assetId: assetId,
+                    position: Vector3Meters(x: currentX, y: y, z: z),
+                    rotation: .zero
+                )
+            )
+            currentX += assetId.trussLength ?? 1
+            index += 1
+        }
         return objects
     }
 

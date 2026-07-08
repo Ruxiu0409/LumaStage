@@ -46,6 +46,7 @@ struct LumaStageCoreSmokeTests {
         try fixtureMirroringFlipsXAndPan()
         try movingTrussDoesNotSnapBackOntoItsOwnEndpoints()
         try trussNodeSnapMarksActiveConnectorNode()
+        try stageStructurePresetsBuildTrussOnlyAndValidate()
         tabletopSurfaceSelectionPrefersNearestLargestTable()
         lightingFixtureCatalogCoversCurrentVocabulary()
         fixtureCarouselPagesAndWraps()
@@ -2120,6 +2121,53 @@ struct LumaStageCoreSmokeTests {
         // Non-truss objects have no connector endpoints, so they never node-snap.
         let base = StageObject.stageBase(id: "base", position: Vector3Meters(x: 0, y: 0, z: 0), size: StageObjectSize(width: 4, depth: 2, height: 0.8))
         expect(layout.trussNodeSnap(for: base) == nil, "Stage bases have no connector endpoints, so they never node-snap")
+    }
+
+    private static func stageStructurePresetsBuildTrussOnlyAndValidate() throws {
+        // SPEC 23 (b): every structure preset must expand into pure `.trussSegment` compositions so it
+        // reuses the renderer / node-snap / support / footprint for free — no new StageObjectType.
+        let base = StageLayout.defaultStudentOutdoor()
+        for preset in StageStructurePreset.allCases {
+            let objects = StageLayout.structurePresetObjects(preset, in: base)
+            expect(!objects.isEmpty, "\(preset) 應產生至少一段桁架")
+            expect(objects.allSatisfy { $0.type == .trussSegment }, "\(preset) 應全為 trussSegment（免費復用 renderer/snap/support）")
+
+            // Assign unique ids (as addStageStructure does) and add each piece — must snap + validate.
+            var layout = base
+            for (index, prototype) in objects.enumerated() {
+                var object = prototype
+                object.id = "\(preset.rawValue)_test_\(index)"
+                object.connectorIds = ["\(object.id)_a", "\(object.id)_b"]
+                try layout.addObject(object)
+            }
+            try layout.validate()
+
+            // The added truss expands the footprint (or at least keeps one) — support classification is live.
+            let before = RigPlacement.trussFootprint(in: base)
+            let after = RigPlacement.trussFootprint(in: layout)
+            expect(before != nil && after != nil, "\(preset) 加入後仍應有桁架 footprint")
+        }
+
+        // Side towers must be left/right symmetric about the stage centreline.
+        let towers = StageLayout.structurePresetObjects(.sideTowers, in: base)
+        let xs = towers.flatMap(\.trussEndpoints).map(\.x)
+        if let minX = xs.min(), let maxX = xs.max() {
+            expect(abs(abs(minX) - abs(maxX)) < 0.6, "側塔應左右對稱")
+        }
+
+        // Side towers widen the footprint beyond the bare upstage portal (the point of a side-hung position).
+        if let bare = RigPlacement.trussFootprint(in: base) {
+            var withTowers = base
+            for (index, prototype) in towers.enumerated() {
+                var object = prototype
+                object.id = "side_towers_widen_\(index)"
+                object.connectorIds = ["\(object.id)_a", "\(object.id)_b"]
+                try withTowers.addObject(object)
+            }
+            if let widened = RigPlacement.trussFootprint(in: withTowers) {
+                expect(widened.maxX - widened.minX > bare.maxX - bare.minX, "側塔應擴大 footprint 的寬度")
+            }
+        }
     }
 
     private static func tabletopSurfaceSelectionPrefersNearestLargestTable() {

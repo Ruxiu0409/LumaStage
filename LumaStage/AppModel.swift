@@ -483,6 +483,34 @@ class AppModel {
         }
     }
 
+    /// SPEC 23 (b): adds every truss segment of a `StageStructurePreset` (side towers / ground booms /
+    /// mid-stage truss) as a group — the composite mirror of `addStageObject`. Each segment gets a unique
+    /// id, is `addObject`ed (which snaps + validates + rejects duplicate ids), then the last piece is
+    /// selected so the user sees the addition. Respects the SPEC 20 rigging-phase edit guard like the other
+    /// stage-object mutators, records a single undo snapshot for the whole group, and persists once.
+    func addStageStructure(_ preset: StageStructurePreset) {
+        guard WorkflowPhasePolicy.allowsStageLayoutEdit(in: workflowPhase) else { return }   // SPEC 20: 架設 only
+        var layout = stageLayout
+        let objects = StageLayout.structurePresetObjects(preset, in: layout)
+        guard !objects.isEmpty else { return }
+        let token = UUID().uuidString.prefix(6).lowercased()
+        do {
+            var lastId: String?
+            for (index, prototype) in objects.enumerated() {
+                var object = prototype
+                object.id = "\(preset.rawValue)_\(token)_\(index)"
+                object.connectorIds = ["\(object.id)_a", "\(object.id)_b"]   // keep in sync with the trussSegment factory
+                try layout.addObject(object)
+                lastId = object.id
+            }
+            recordStageEditingUndoSnapshot()
+            saveStageLayout(layout)
+            selectedStageObjectId = lastId
+        } catch {
+            fail(error.localizedDescription)
+        }
+    }
+
     /// Removes the currently selected stage object and clears the selection. A locked object (e.g. the
     /// default stage base if it were locked) throws, which is surfaced as an error.
     func removeSelectedStageObject() {

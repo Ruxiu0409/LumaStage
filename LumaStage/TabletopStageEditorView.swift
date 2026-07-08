@@ -327,6 +327,21 @@ struct TabletopStageEditorView: View {
             .lumaGazeTarget()
             .help("加入一段桁架，拖到既有節點附近會自動對齊接上")
 
+            // SPEC 23 (b): composite structures — each is a bundle of `.trussSegment`s, so they render,
+            // node-snap and get support-classified for free (no new object type).
+            Menu {
+                ForEach(StageStructurePreset.allCases, id: \.self) { preset in
+                    Button(preset.displayName, systemImage: "plus") {
+                        appModel.addStageStructure(preset)
+                    }
+                }
+            } label: {
+                Label("新增結構", systemImage: "square.stack.3d.up")
+            }
+            .buttonStyle(.bordered)
+            .lumaGazeTarget()
+            .help("加入側塔／地面 boom／中場桁架；拖近既有節點會自動對齊接上，之後把燈拖到結構下方即會吊掛")
+
             Menu {
                 ForEach(Self.addableFixtureModels, id: \.self) { model in
                     if model == .laser {
