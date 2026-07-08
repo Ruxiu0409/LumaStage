@@ -100,6 +100,7 @@ struct LumaStageCoreSmokeTests {
         try fixtureManualPositionOverridesZonePlacement()
         try stageLayoutPerformerPositionCodableDefaultsNil()
         performerNudgeMovesFrontAimNotBacklight()
+        aerialBeamConePolicyGatesFrontAndSide()
         fixtureSupportPolicyClassifiesTrussVsStand()
         dragResolvedPositionSnapsHangVsFloorAndIsIdempotent()
         nudgingFixtureAcrossTrussBoundaryReSnapsHeight()
@@ -1846,6 +1847,27 @@ struct LumaStageCoreSmokeTests {
                "A placed performer must NOT move the backlight (background wash) aim")
         expect(RigPlacement.resolvedPlacement(fixture: laser(), slot: 0, count: 1, layout: layout).aim == backZone,
                "A placed performer must NOT move the laser aim (truss-only, excluded)")
+    }
+
+    private static func aerialBeamConePolicyGatesFrontAndSide() {
+        // Upstage / back wash -> beam.
+        expect(RigPlacement.rendersAerialBeamCone(model: .backgroundBatten, zone: .stageBack),
+               "A back wash fixture must render an aerial beam cone")
+        expect(RigPlacement.rendersAerialBeamCone(model: .ledPar, zone: .fullStage),
+               "A fullStage (upstage-truss) fixture must render an aerial beam cone")
+        // Moving head reads as a beam wherever placed.
+        expect(RigPlacement.rendersAerialBeamCone(model: .movingHeadBeam, zone: .stageFront),
+               "A moving-head beam must render an aerial cone even in a front zone")
+        expect(RigPlacement.rendersAerialBeamCone(model: .movingHeadBeam, zone: .stageBack),
+               "A moving-head beam upstage must render an aerial cone")
+        // Front key / side fixtures do NOT (they occluded the stage).
+        expect(!RigPlacement.rendersAerialBeamCone(model: .frontFresnel, zone: .stageFront),
+               "A front-of-house key must NOT render an aerial cone")
+        expect(!RigPlacement.rendersAerialBeamCone(model: .ledPar, zone: .stageLeft),
+               "A side PAR must NOT render an aerial cone")
+        // Laser is excluded (it draws its own beam fan) regardless of zone.
+        expect(!RigPlacement.rendersAerialBeamCone(model: .laser, zone: .stageBack),
+               "A laser must be excluded from the spotbeam cone (own fan)")
     }
 
     private static func fixtureSupportPolicyClassifiesTrussVsStand() {

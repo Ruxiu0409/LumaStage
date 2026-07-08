@@ -1875,31 +1875,31 @@ enum LaserScatterMath {
 
 // MARK: - Volumetric spotlight beam (haze)
 
-/// Tunable "look" constants for a spotlight's volumetric cone — the two visible layers (core + sheath),
-/// modelled on `LaserScatterConfig`. The peak alphas are deliberately much lower than the laser's
-/// because a spotlight is a wide cone, not a pencil beam: the same alpha would read as a solid block of
-/// fog. The smoke tests pin only the *shape* of the mapping (gate/ordering/monotonicity/range), not
-/// these values, so retuning from device previews is safe.
+/// Tunable "look" constants for a spotlight's volumetric cone. The renderer now draws only ONE layer —
+/// the outer `sheath` shell — so a viewer can see through the beam to the stage (core + sheath stacked
+/// to near-opaque; see `ImmersiveView.addSpotBeamCone`). The `core*` fields below feed only the
+/// smoke-test-pinned `SpotBeamScatterMath.coreRGBA`/`coreBaseRadius` math, which is retained but no longer
+/// rendered. The peak alpha is deliberately much lower than the laser's because a spotlight is a wide
+/// cone, not a pencil beam: the same alpha would read as a solid block of fog. The smoke tests pin only
+/// the *shape* of the mapping (gate/ordering/monotonicity/range), not these values, so retuning from
+/// device previews is safe.
 struct SpotBeamScatterConfig: Equatable {
-    /// Peak sheath alpha at full intensity and a narrow cone (well below the laser sheath — the cone is
-    /// far wider).
+    /// Peak sheath alpha at full intensity and a narrow cone. This is the ONLY rendered layer, so it can
+    /// sit a bit higher than when it stacked with a core and still read see-through as a lone shell.
     var sheathAlpha: Double
-    /// Core alpha (a touch above the sheath so the centre reads, still far below the laser core).
+    /// Core alpha — math only (see the type doc); no longer rendered.
     var coreAlpha: Double
-    /// How far the core hue lerps toward white (0 = pure hue, 1 = white).
+    /// How far the core hue lerps toward white (0 = pure hue, 1 = white) — math only; no longer rendered.
     var coreWhiteness: Double
     /// Beam-angle alpha falloff: alpha ×= (1 - widthAlphaFalloff · normalizedWidth), where
     /// normalizedWidth = (outer - 10)/50 ∈ 0…1; a wider cone gets fainter so it doesn't read as a fog bank.
     var widthAlphaFalloff: Double
-    /// Beam geometry length (model metres) — a fixed throw distance; tune on device to "cone tip → deck".
-    var beamLengthMeters: Double
 
     static let `default` = SpotBeamScatterConfig(
-        sheathAlpha: 0.06,
-        coreAlpha: 0.10,
+        sheathAlpha: 0.10,
+        coreAlpha: 0.035,
         coreWhiteness: 0.40,
-        widthAlphaFalloff: 0.6,
-        beamLengthMeters: 9.0
+        widthAlphaFalloff: 0.75
     )
 }
 
@@ -2172,6 +2172,21 @@ extension RigPlacement {
         switch zone {
         case .stageFront, .stageLeft, .stageRight: return true
         case .stageBack, .fullStage:               return false
+        }
+    }
+
+    /// 哪些 fixture 會畫「空中光束光錐」(`spotbeam_<id>`,SPEC 19)。只有上舞台/後方洗燈與搖頭光束燈會在
+    /// 空氣中投出可見光束(經典演唱會光束感);前方 key/wash(`.stageFront`)與側燈(`.stageLeft`/`.stageRight`)
+    /// 只打亮表面——它們貼近觀眾、光錐會佔滿視野並遮住舞台,所以不畫光柱。雷射(`mountsOnTrussOnly`)有自己的
+    /// beam fan(`addLaserProjector`),一律排除。純判斷式,`ImmersiveView.addRigFixture` 是唯一消費者。
+    static func rendersAerialBeamCone(model: LightingFixtureVisualModel, zone: StageZone) -> Bool {
+        guard !mountsOnTrussOnly(model) else { return false }   // 雷射:自己的 beam fan
+        switch zone {
+        case .stageBack, .fullStage:
+            return true
+        case .stageFront, .stageLeft, .stageRight:
+            // 搖頭光束燈不論擺哪都讀成光束;其餘前/側燈只打表面,不畫光柱。
+            return model == .movingHeadBeam
         }
     }
 

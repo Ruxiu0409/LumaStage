@@ -699,15 +699,18 @@ struct ImmersiveView: View {
             beamAngleDegrees: fixture.effectiveFineControl.beamAngleDegrees
         )
 
-        // Non-laser fixtures also get a translucent volumetric cone so the beam path reads in the air
-        // (SPEC 19), oriented on the same `restingDir` as the model + spotlight. Lasers already draw their
-        // own visible aerial beam fan, so adding a cone would double the beam — skip them (footgun ①).
-        if fixture.renderModel != .laser {
+        // Only fixtures that read as a beam in the air get a volumetric cone (SPEC 19): upstage/back wash
+        // and moving-head beams. Front-of-house key/wash and side fixtures sit close to the viewer and their
+        // large cones filled the field of view / occluded the stage, so they are skipped (they still light
+        // surfaces via their SpotLight). Lasers draw their own fan (`addLaserProjector`) — the predicate
+        // excludes them, preserving the old `!= .laser` skip (footgun ①).
+        if RigPlacement.rendersAerialBeamCone(model: fixture.renderModel, zone: fixture.zone) {
             addSpotBeamCone(
                 name: "spotbeam_\(fixture.id)",
                 to: rig,
                 source: placement.position,
                 aim: restingDir,
+                throwMeters: placement.position.distance(to: placement.aim),
                 beamAngleDegrees: fixture.effectiveFineControl.beamAngleDegrees,
                 colorHex: fixture.color.value
             )
@@ -1411,32 +1414,44 @@ struct ImmersiveView: View {
 
     // MARK: - Volumetric spotlight beam (haze)
 
-    /// Builds a non-laser fixture's visible aerial cone: two co-axial translucent cones — a brighter,
-    /// whiter core (inner cone) and a wider, fainter sheath (outer cone) — so the beam path reads as light
-    /// in the air, not just a spot landing on a surface (SPEC 19). Both are their own light source (a
-    /// `UnlitMaterial`, so they don't depend on the room being lit) and follow the same `restingDir` as the
-    /// `model_<id>`/`spot_<id>`. Recolored/gated per cue by `updateSpotBeam`. No particles (see CLAUDE.md).
+    /// Builds a non-laser fixture's visible aerial cone: a SINGLE translucent outer shell (the wider
+    /// "sheath" cone) so the beam path reads as light in the air, not just a spot landing on a surface
+    /// (SPEC 19). It is deliberately one thin hollow cone, not a filled/stacked volume: two co-axial cones
+    /// (the old core + sheath) plus overlap from neighbouring fixtures stacked enough alpha to read opaque
+    /// and occlude the stage behind the beam. One low-alpha shell lets the viewer see straight through the
+    /// cone to the stage. It is its own light source (a `UnlitMaterial`, so it doesn't depend on the room
+    /// being lit) and follows the same `restingDir` as the `model_<id>`/`spot_<id>`. Recolored/gated per cue
+    /// by `updateSpotBeam`. No particles (see CLAUDE.md). (The inner-core colour/geometry math in
+    /// `SpotBeamScatterMath` is retained — it is smoke-test-pinned — but no longer rendered.)
     private static func addSpotBeamCone(
         name: String,
         to rig: Entity,
         source: Vector3Meters,
         aim: SIMD3<Float>,
+        throwMeters: Double,
         beamAngleDegrees: Double,
         colorHex: String
     ) {
         let container = Entity()
         container.name = name
 
-        let config = SpotBeamScatterConfig.default
-        let length = sceneLength(config.beamLengthMeters)
+        // The cone tip sits on the fixture and its base must land on the *actual* aim target (the deck /
+        // performer), NOT a fixed distance: a hardcoded 9 m overshot the deck by metres, so the fat end of
+        // every front-light cone reached the viewer at the origin and filled the field of view. Derive the
+        // length from the throw (fixture → aim target) and floor it so a very short throw still shows a stub.
+        let beamLengthMeters = max(throwMeters, 1.0)
+        let length = sceneLength(beamLengthMeters)
         let apex = scenePoint(source)
         // The cone mesh has its apex at the local origin and opens toward +Y, so aim that +Y axis along the
         // resting direction and seat the apex on the fixture — cone tip at the light, opening toward aim.
         let direction = simd_length(aim) > 0.0001 ? simd_normalize(aim) : SIMD3<Float>(0, -1, 0)
         let coneOrientation = orientation(from: SIMD3<Float>(0, 1, 0), to: direction)
 
-        // Sheath (outer cone) first so the brighter core layers on top.
-        let sheathRadius = sceneLength(SpotBeamScatterMath.sheathBaseRadius(lengthMeters: config.beamLengthMeters, beamAngleDegrees: beamAngleDegrees))
+        // A single outer shell — the wider "sheath" cone. Its radius scales with the derived length so the
+        // cone stays the right girth for its (now shorter) throw instead of the old 9 m spread. The core
+        // (inner, brighter) cone was dropped: a lone low-alpha shell reads see-through so the stage stays
+        // visible behind the beam, whereas core + sheath stacked to near-opaque.
+        let sheathRadius = sceneLength(SpotBeamScatterMath.sheathBaseRadius(lengthMeters: beamLengthMeters, beamAngleDegrees: beamAngleDegrees))
         let sheath = ModelEntity(
             mesh: beamConeMesh(length: length, baseRadius: sheathRadius),
             materials: [UnlitMaterial(color: spotBeamSheathUIColor(hex: colorHex, intensity: 1, beamAngleDegrees: beamAngleDegrees))]
@@ -1445,16 +1460,6 @@ struct ImmersiveView: View {
         sheath.position = apex
         sheath.orientation = coneOrientation
         container.addChild(sheath)
-
-        let coreRadius = sceneLength(SpotBeamScatterMath.coreBaseRadius(lengthMeters: config.beamLengthMeters, beamAngleDegrees: beamAngleDegrees))
-        let core = ModelEntity(
-            mesh: beamConeMesh(length: length, baseRadius: coreRadius),
-            materials: [UnlitMaterial(color: spotBeamCoreUIColor(hex: colorHex, intensity: 1, beamAngleDegrees: beamAngleDegrees))]
-        )
-        core.name = "\(name)_core"
-        core.position = apex
-        core.orientation = coneOrientation
-        container.addChild(core)
 
         // Pure visual: no shadow marking (the cone must not block the beam) and no input/collision (it must
         // not be selectable or steal the `lightpick_<n>` hit).
@@ -1482,38 +1487,27 @@ struct ImmersiveView: View {
         return (try? MeshResource.generate(from: [descriptor])) ?? .generateCylinder(height: length, radius: baseRadius)
     }
 
-    /// The white-hot cone core colour (cue hue lerped toward white). See `SpotBeamScatterMath.coreRGBA`.
-    private static func spotBeamCoreUIColor(hex: String, intensity: Double, beamAngleDegrees: Double) -> UIColor {
-        let c = SpotBeamScatterMath.coreRGBA(hex: hex, intensity: intensity, beamAngleDegrees: beamAngleDegrees)
-        return UIColor(red: c.red, green: c.green, blue: c.blue, alpha: c.alpha)
-    }
-
     /// The low-alpha cone sheath colour (saturated cue hue). See `SpotBeamScatterMath.sheathRGBA`.
     private static func spotBeamSheathUIColor(hex: String, intensity: Double, beamAngleDegrees: Double) -> UIColor {
         let c = SpotBeamScatterMath.sheathRGBA(hex: hex, intensity: intensity, beamAngleDegrees: beamAngleDegrees)
         return UIColor(red: c.red, green: c.green, blue: c.blue, alpha: c.alpha)
     }
 
-    /// Per-cue update for a spotlight's volumetric cone: recolor both layers (core + sheath) to the
-    /// resolved cue colour and hide them when the fixture is effectively off. Like the laser, the
-    /// `UnlitMaterial` swap hard-cuts (it is not an implicitly-animatable component) — the `spot_<id>`
-    /// surface spill still cross-fades in `updateSpotLight` (footgun ②).
+    /// Per-cue update for a spotlight's volumetric cone: recolor the single outer shell to the resolved cue
+    /// colour and hide it when the fixture is effectively off. Like the laser, the `UnlitMaterial` swap
+    /// hard-cuts (it is not an implicitly-animatable component) — the `spot_<id>` surface spill still
+    /// cross-fades in `updateSpotLight` (footgun ②).
     private static func updateSpotBeam(named name: String, in root: Entity, colorHex: String, intensity: Double, beamAngleDegrees: Double) {
         guard let container = root.findEntity(named: name) else {
             return
         }
 
         let visible = SpotBeamScatterMath.beamVisible(intensity)
-        let coreColor = spotBeamCoreUIColor(hex: colorHex, intensity: intensity, beamAngleDegrees: beamAngleDegrees)
         let sheathColor = spotBeamSheathUIColor(hex: colorHex, intensity: intensity, beamAngleDegrees: beamAngleDegrees)
         for child in container.children {
             guard let model = child as? ModelEntity else { continue }
             child.isEnabled = visible
-            if child.name.hasSuffix("_core") {
-                model.model?.materials = [UnlitMaterial(color: coreColor)]
-            } else if child.name.hasSuffix("_sheath") {
-                model.model?.materials = [UnlitMaterial(color: sheathColor)]
-            }
+            model.model?.materials = [UnlitMaterial(color: sheathColor)]
         }
     }
 
