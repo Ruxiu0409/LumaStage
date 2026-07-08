@@ -243,8 +243,7 @@ struct OpenAILightingService: LightingLookGenerating {
         let fixture = object(properties: [
             "name": ["type": "string"],
             "type": ["type": "string", "enum": [
-                "frontFresnel", "ledFresnel", "spotBarrel", "washBar", "backgroundBatten",
-                "movingHeadBeam", "ledStrobeBar", "ledPar", "audienceBlinder", "laser"
+                "ledFresnel", "movingHeadBeam", "ledStrobeBar", "ledPar", "audienceBlinder", "laser"
             ]],
             "zone": ["type": "string", "enum": [
                 "frontOfHouse", "upstageTruss", "sideStageLeft", "sideStageRight", "floor"
@@ -308,16 +307,11 @@ private extension OpenAILightingService {
         }
 
         enum FixtureTypeDTO: String, Decodable {
-            case frontFresnel, ledFresnel, spotBarrel, washBar, backgroundBatten
-            case movingHeadBeam, ledStrobeBar, ledPar, audienceBlinder, laser
+            case ledFresnel, movingHeadBeam, ledStrobeBar, ledPar, audienceBlinder, laser
 
             var visualModel: LightingFixtureVisualModel {
                 switch self {
-                case .frontFresnel: return .frontFresnel
                 case .ledFresnel: return .ledFresnel
-                case .spotBarrel: return .spotBarrel
-                case .washBar: return .washBar
-                case .backgroundBatten: return .backgroundBatten
                 case .movingHeadBeam: return .movingHeadBeam
                 case .ledStrobeBar: return .ledStrobeBar
                 case .ledPar: return .ledPar

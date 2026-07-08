@@ -1091,9 +1091,9 @@ struct LightingLook: Codable, Equatable {
         // laser ¦ moving-head ¦ (centre) strobe ¦ moving-head ¦ laser.
         let specs: [Spec] = [
             // FOH stands: the symmetric key-light pair.
-            Spec(id: "key_l", name: "主光柔光燈（左）", model: .frontFresnel, zone: .stageFront, target: .downstage,
+            Spec(id: "key_l", name: "主光柔光燈（左）", model: .ledFresnel, zone: .stageFront, target: .downstage,
                  openingHex: "#FFE6C2", highlightHex: "#FFF1DC", openingIntensity: 0.55, highlightIntensity: 0.80, beam: 40, pan: -8, tilt: -35),
-            Spec(id: "key_r", name: "主光柔光燈（右）", model: .frontFresnel, zone: .stageFront, target: .downstage,
+            Spec(id: "key_r", name: "主光柔光燈（右）", model: .ledFresnel, zone: .stageFront, target: .downstage,
                  openingHex: "#FFE6C2", highlightHex: "#FFF1DC", openingIntensity: 0.55, highlightIntensity: 0.80, beam: 40, pan: 8, tilt: -35),
             // Upstage truss, palindromic so the pairs mirror: laser · moving head · centre strobe · moving head · laser.
             Spec(id: "laser_l", name: "雷射燈（左）", model: .laser, zone: .stageBack, target: .fullStage,
@@ -1988,10 +1988,10 @@ extension LightingFixtureVisualModel {
     /// A sensible visual model for a legacy/role-only fixture so 2-role MVP looks still render real gear.
     static func derived(role: FixtureRole, zone: StageZone) -> LightingFixtureVisualModel {
         switch role {
-        case .frontLight: return .frontFresnel
+        case .frontLight: return .ledFresnel
         case .backgroundWash: return .movingHeadBeam
-        case .wash: return .washBar
-        case .spot: return .spotBarrel
+        case .wash: return .ledPar
+        case .spot: return .movingHeadBeam
         }
     }
 
@@ -2000,10 +2000,9 @@ extension LightingFixtureVisualModel {
     /// and the debug panel — it no longer gates rendering).
     var derivedRole: FixtureRole {
         switch self {
-        case .frontFresnel, .ledFresnel, .audienceBlinder: return .frontLight
-        case .spotBarrel, .movingHeadBeam, .laser: return .spot
-        case .washBar, .ledStrobeBar, .ledPar: return .wash
-        case .backgroundBatten: return .backgroundWash
+        case .ledFresnel, .audienceBlinder: return .frontLight
+        case .movingHeadBeam, .laser: return .spot
+        case .ledStrobeBar, .ledPar: return .wash
         }
     }
 
@@ -2012,22 +2011,18 @@ extension LightingFixtureVisualModel {
     var maxLumens: Double {
         switch self {
         case .audienceBlinder: return 8000
-        case .spotBarrel: return 7000
-        case .frontFresnel: return 6000
         case .laser: return 5500   // intense but thin — the visible beam carries the look; the cone is a colour spill
         case .ledFresnel: return 5200
         case .movingHeadBeam: return 5000
         case .ledStrobeBar: return 5000
-        case .washBar: return 4500
         case .ledPar: return 4500
-        case .backgroundBatten: return 4000
         }
     }
 
     /// Front-facing key lights earn higher shadow quality; wash/effect fixtures stay medium.
     var isKeyLight: Bool {
         switch self {
-        case .frontFresnel, .ledFresnel, .spotBarrel: return true
+        case .ledFresnel, .movingHeadBeam: return true
         default: return false
         }
     }
@@ -2036,14 +2031,10 @@ extension LightingFixtureVisualModel {
     var defaultBeamDegrees: Double {
         switch self {
         case .laser: return 6     // a laser is a near-collimated pencil beam, the tightest fixture in the rig
-        case .spotBarrel: return 18
         case .movingHeadBeam: return 22
-        case .frontFresnel: return 35
         case .ledFresnel: return 30
         case .ledPar: return 40
         case .ledStrobeBar: return 55
-        case .washBar: return 60
-        case .backgroundBatten: return 70
         case .audienceBlinder: return 90
         }
     }
@@ -2052,8 +2043,8 @@ extension LightingFixtureVisualModel {
     /// AI a sensible default when it picks a fixture without stating a zone.
     var defaultMountZone: StageZone {
         switch self {
-        case .frontFresnel, .ledFresnel, .spotBarrel, .audienceBlinder: return .stageFront
-        case .washBar, .backgroundBatten, .movingHeadBeam, .ledStrobeBar, .laser: return .stageBack
+        case .ledFresnel, .audienceBlinder: return .stageFront
+        case .movingHeadBeam, .ledStrobeBar, .laser: return .stageBack
         case .ledPar: return .fullStage
         }
     }

@@ -62,10 +62,6 @@ enum FixtureRealityModel {
         }
         let assembly = Entity()
         switch model {
-        case .washBar: buildWashBar(into: assembly)
-        case .spotBarrel: buildSpotBarrel(into: assembly)
-        case .frontFresnel: buildFrontFresnel(into: assembly)
-        case .backgroundBatten: buildBackgroundBatten(into: assembly)
         case .ledStrobeBar: buildLedStrobeBar(into: assembly)
         case .movingHeadBeam: buildMovingHeadBeam(into: assembly)
         case .ledPar: buildLedPar(into: assembly)
@@ -102,10 +98,6 @@ enum FixtureRealityModel {
     private static func buildTemplate(for model: LightingFixtureVisualModel) -> Entity {
         let assembly = Entity()
         switch model {
-        case .washBar: buildWashBar(into: assembly)
-        case .spotBarrel: buildSpotBarrel(into: assembly)
-        case .frontFresnel: buildFrontFresnel(into: assembly)
-        case .backgroundBatten: buildBackgroundBatten(into: assembly)
         case .ledStrobeBar: buildLedStrobeBar(into: assembly)
         case .movingHeadBeam: buildMovingHeadBeam(into: assembly)
         case .ledPar: buildLedPar(into: assembly)
@@ -129,131 +121,6 @@ enum FixtureRealityModel {
         pivot.scale = SIMD3<Float>(repeating: scale)
         pivot.orientation = eulerQuat(x: -0.12, y: -0.44)
         return pivot
-    }
-
-    // MARK: - Fixture builders (mirrors LightingFixtureSceneFactory)
-
-    private static func buildWashBar(into root: Entity) {
-        root.addChild(box(1.78, 0.34, 0.08, .blackBody, 0.58, at: [0, 0.55, -0.05]))
-        root.addChild(box(1.70, 0.30, 0.26, .graphite, 0.55, at: [0, 0.55, 0]))
-
-        let topRail = cylinder(0.035, 1.72, .silverMetal, 0.82, at: [0, 0.75, -0.02])
-        topRail.orientation = eulerQuat(z: .pi / 2)
-        root.addChild(topRail)
-
-        let bottomRail = cylinder(0.030, 1.72, .darkMetal, 0.72, at: [0, 0.35, -0.02])
-        bottomRail.orientation = eulerQuat(z: .pi / 2)
-        root.addChild(bottomRail)
-
-        for index in 0..<5 {
-            let x = -0.62 + Float(index) * 0.31
-            let cup = cylinder(0.115, 0.055, .blackBody, 0.62, at: [x, 0.55, 0.16])
-            cup.orientation = eulerQuat(x: .pi / 2)
-            root.addChild(cup)
-
-            let lens = cylinder(0.086, 0.026, index.isMultiple(of: 2) ? .blueLens : .deepBlueLens, 0.08, alpha: 0.86, at: [x, 0.55, 0.195])
-            lens.orientation = eulerQuat(x: .pi / 2)
-            root.addChild(lens)
-
-            addRing(to: root, ringRadius: 0.098, pipeRadius: 0.007, at: [x, 0.55, 0.212], faceZ: true)
-            addScrew(to: root, at: [x - 0.075, 0.65, 0.215])
-            addScrew(to: root, at: [x + 0.075, 0.45, 0.215])
-        }
-
-        addCoolingSlots(to: root, originX: -0.72, y: 0.55, z: -0.17, count: 7, vertical: true)
-        addCoolingSlots(to: root, originX: 0.38, y: 0.55, z: -0.17, count: 7, vertical: true)
-        addHangingClamp(to: root, y: 0.84)
-    }
-
-    private static func buildSpotBarrel(into root: Entity) {
-        addStand(to: root)
-
-        root.addChild(box(0.82, 0.07, 0.12, .darkMetal, 0.65, at: [0, 0.30, 0]))
-        root.addChild(box(0.06, 0.46, 0.08, .darkMetal, 0.65, at: [-0.40, 0.08, 0]))
-        root.addChild(box(0.06, 0.46, 0.08, .darkMetal, 0.65, at: [0.40, 0.08, 0]))
-
-        addYokeKnob(to: root, at: [-0.44, 0.08, 0])
-        addYokeKnob(to: root, at: [0.44, 0.08, 0])
-
-        let barrel = cylinder(0.23, 0.82, .blackBody, 0.62, at: [0.06, 0.12, 0])
-        barrel.orientation = eulerQuat(y: -0.18, z: .pi / 2)
-        root.addChild(barrel)
-
-        let rearCap = cylinder(0.235, 0.055, .graphite, 0.7, at: [-0.37, 0.12, 0])
-        rearCap.orientation = eulerQuat(z: .pi / 2)
-        root.addChild(rearCap)
-
-        let snoot = cylinder(0.25, 0.16, .darkMetal, 0.68, at: [0.47, 0.12, 0])
-        snoot.orientation = eulerQuat(z: .pi / 2)
-        root.addChild(snoot)
-
-        let lens = cylinder(0.19, 0.035, .amberLens, 0.08, alpha: 0.84, at: [0.56, 0.12, 0])
-        lens.orientation = eulerQuat(z: .pi / 2)
-        root.addChild(lens)
-
-        for offset in [-0.18, -0.06, 0.06, 0.18] as [Float] {
-            let rib = cylinder(0.238, 0.014, .darkMetal, 0.76, at: [offset, 0.12, 0])
-            rib.orientation = eulerQuat(z: .pi / 2)
-            root.addChild(rib)
-        }
-
-        addCoolingSlots(to: root, originX: -0.20, y: 0.36, z: 0.02, count: 5, vertical: false)
-        addCable(to: root, fromX: -0.46, y: 0.16, z: -0.08)
-    }
-
-    private static func buildFrontFresnel(into root: Entity) {
-        addStand(to: root)
-
-        root.addChild(box(0.62, 0.48, 0.44, .darkMetal, 0.62, at: [0, 0.18, 0]))
-        root.addChild(box(0.88, 0.08, 0.08, .blackBody, 0.65, at: [0, 0.52, 0]))
-
-        for x in [-0.38, 0.38] as [Float] {
-            root.addChild(box(0.07, 0.54, 0.08, .blackBody, 0.65, at: [x, 0.25, 0]))
-        }
-
-        addYokeKnob(to: root, at: [-0.43, 0.27, 0])
-        addYokeKnob(to: root, at: [0.43, 0.27, 0])
-
-        root.addChild(box(0.48, 0.28, 0.035, .graphite, 0.55, at: [0, 0.18, -0.25]))
-        addCoolingSlots(to: root, originX: -0.16, y: 0.18, z: -0.285, count: 5, vertical: true)
-
-        let lens = cylinder(0.22, 0.06, .warmLens, 0.08, alpha: 0.86, at: [0, 0.18, 0.25])
-        lens.orientation = eulerQuat(x: .pi / 2)
-        root.addChild(lens)
-
-        for radius in [0.15, 0.21] as [Float] {
-            addRing(to: root, ringRadius: radius, pipeRadius: 0.009, at: [0, 0.18, 0.285], faceZ: true, color: .silverMetal, metalness: 0.7)
-        }
-
-        addBarnDoor(to: root, at: [0, 0.44, 0.34], angle: -0.22)
-        addBarnDoor(to: root, at: [0, -0.08, 0.34], angle: 0.22)
-        addScrew(to: root, at: [-0.25, 0.44, 0.28])
-        addScrew(to: root, at: [0.25, -0.08, 0.28])
-    }
-
-    private static func buildBackgroundBatten(into root: Entity) {
-        root.addChild(box(1.45, 0.62, 0.18, .blackBody, 0.55, at: [0, 0.18, 0]))
-        root.addChild(box(1.33, 0.48, 0.055, .graphite, 0.50, at: [0, 0.18, 0.12]))
-
-        for row in 0..<2 {
-            for column in 0..<6 {
-                let x = -0.55 + Float(column) * 0.22
-                let y = 0.08 + Float(row) * 0.20
-                let cup = cylinder(0.064, 0.026, .blackBody, 0.64, at: [x, y, 0.165])
-                cup.orientation = eulerQuat(x: .pi / 2)
-                root.addChild(cup)
-
-                root.addChild(sphere(0.046, column.isMultiple(of: 2) ? .blueLens : .deepBlueLens, 0.05, at: [x, y, 0.18]))
-            }
-        }
-
-        for x in [-0.78, 0.78] as [Float] {
-            root.addChild(box(0.10, 0.48, 0.08, .darkMetal, 0.70, at: [x, 0.18, -0.02]))
-        }
-
-        addCoolingSlots(to: root, originX: -0.50, y: -0.16, z: -0.13, count: 6, vertical: false)
-        addCable(to: root, fromX: 0.72, y: 0.02, z: -0.12)
-        addHangingClamp(to: root, y: 0.62)
     }
 
     // MARK: - Real-world product fixtures

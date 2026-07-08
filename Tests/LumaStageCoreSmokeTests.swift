@@ -773,8 +773,8 @@ struct LumaStageCoreSmokeTests {
         let roles = Set(catalog.map(\.role))
         let models = Set(catalog.map(\.visualModel))
 
-        expect(catalog.count == 10, "Fixture guide should cover the four role fixtures plus the six real-world products")
-        expect(roles == Set(FixtureRole.allCases), "Fixture guide should still cover every cue fixture role")
+        expect(catalog.count == 6, "Fixture guide should cover the six real-world product fixtures (the abstract role-teaching fixtures were removed)")
+        expect(roles.isSubset(of: Set(FixtureRole.allCases)), "Every guide fixture's teaching role should be one of the cue fixture roles")
         let products: Set<LightingFixtureVisualModel> = [.ledStrobeBar, .movingHeadBeam, .ledPar, .audienceBlinder, .ledFresnel, .laser]
         expect(products.isSubset(of: models), "Fixture guide should include the six real-world product fixtures")
         expect(models == Set(LightingFixtureVisualModel.allCases), "Every visual model should map to exactly one catalog entry")
@@ -790,7 +790,7 @@ struct LumaStageCoreSmokeTests {
     private static func fixtureCarouselPagesAndWraps() {
         let models = LightingFixtureCatalog.carouselModels
         expect(models == LightingFixtureCatalog.allFixtures.map(\.visualModel), "Carousel order should follow the catalog order")
-        expect(models.count == 10, "Carousel should page through all ten catalog fixtures")
+        expect(models.count == 6, "Carousel should page through all six catalog fixtures")
 
         var carousel = FixtureCarousel(startAt: .movingHeadBeam)
         expect(carousel.current == .movingHeadBeam, "Carousel should start at the tapped fixture model")
@@ -895,8 +895,8 @@ struct LumaStageCoreSmokeTests {
             name: "Opening",
             transition: .mvpDefault,
             fixtureGroups: [
-                fixture("f_front", role: .frontLight, zone: .stageFront, model: .frontFresnel),
-                fixture("f_back", role: .backgroundWash, zone: .stageBack, model: .backgroundBatten),
+                fixture("f_front", role: .frontLight, zone: .stageFront, model: .ledFresnel),
+                fixture("f_back", role: .backgroundWash, zone: .stageBack, model: .ledPar),
                 fixture("f_mover", role: .spot, zone: .stageBack, model: .movingHeadBeam),
                 fixture("f_par", role: .wash, zone: .stageLeft, model: .ledPar)
             ]
@@ -1358,8 +1358,8 @@ struct LumaStageCoreSmokeTests {
     // — and still produce a look that passes `validate()`.
     private static func stagedAssemblyReconcilesStateCounts() throws {
         let rig = [
-            LightingLookDraft.RigFixture(id: "fixture_0", name: "Front L", role: .frontLight, zone: .stageFront, model: .frontFresnel),
-            LightingLookDraft.RigFixture(id: "fixture_1", name: "Wash", role: .backgroundWash, zone: .stageBack, model: .washBar),
+            LightingLookDraft.RigFixture(id: "fixture_0", name: "Front L", role: .frontLight, zone: .stageFront, model: .ledFresnel),
+            LightingLookDraft.RigFixture(id: "fixture_1", name: "Wash", role: .backgroundWash, zone: .stageBack, model: .ledPar),
             LightingLookDraft.RigFixture(id: "fixture_2", name: "Beam", role: .spot, zone: .stageBack, model: .movingHeadBeam)
         ]
 
@@ -1419,10 +1419,10 @@ struct LumaStageCoreSmokeTests {
     // across cues (rig identity), cue ids must be the pinned `cue_0…`, and `selectedCueId` must resolve.
     private static func stagedAssemblyPreservesRigIdentityAcrossCues() throws {
         let rig = [
-            LightingLookDraft.RigFixture(id: "fixture_0", name: "A", role: .frontLight, zone: .stageFront, model: .frontFresnel),
-            LightingLookDraft.RigFixture(id: "fixture_1", name: "B", role: .wash, zone: .stageLeft, model: .washBar),
+            LightingLookDraft.RigFixture(id: "fixture_0", name: "A", role: .frontLight, zone: .stageFront, model: .ledFresnel),
+            LightingLookDraft.RigFixture(id: "fixture_1", name: "B", role: .wash, zone: .stageLeft, model: .ledPar),
             LightingLookDraft.RigFixture(id: "fixture_2", name: "C", role: .spot, zone: .stageRight, model: .movingHeadBeam),
-            LightingLookDraft.RigFixture(id: "fixture_3", name: "D", role: .backgroundWash, zone: .stageBack, model: .backgroundBatten)
+            LightingLookDraft.RigFixture(id: "fixture_3", name: "D", role: .backgroundWash, zone: .stageBack, model: .movingHeadBeam)
         ]
 
         func row(_ intensity: Double) -> [LightingLookDraft.StagedState] {
@@ -2758,10 +2758,8 @@ struct LumaStageCoreSmokeTests {
         // Wash/PAR/strobe/blinder are now AUTHORED-ONLY (.none) because an auto intensity-driving default
         // pulsed the static rig every frame and read as flicker; movement/strobe is opt-in via fixture.effect.
         expect(LightEffect.suggested(for: .movingHeadBeam, highEnergy: true, slot: 0).kind == .panSweep, "moving heads sweep")
-        expect(LightEffect.suggested(for: .frontFresnel, highEnergy: true, slot: 0).kind == .none, "front fresnels stay steady")
-        expect(LightEffect.suggested(for: .washBar, highEnergy: true, slot: 0).kind == .none, "wash bars are authored-only (no auto chase → no flicker)")
+        expect(LightEffect.suggested(for: .ledFresnel, highEnergy: true, slot: 0).kind == .none, "fresnels stay steady")
         expect(LightEffect.suggested(for: .ledPar, highEnergy: true, slot: 0).kind == .none, "PARs are authored-only (no auto chase → no flicker)")
-        expect(LightEffect.suggested(for: .backgroundBatten, highEnergy: true, slot: 0).kind == .none, "background battens are authored-only (no auto chase → no flicker)")
         expect(LightEffect.suggested(for: .ledStrobeBar, highEnergy: true, slot: 0).kind == .none, "strobe bars are authored-only now (no auto strobe)")
         expect(LightEffect.suggested(for: .audienceBlinder, highEnergy: true, slot: 0).kind == .none, "blinders are authored-only now (no auto strobe)")
         expect(LightEffect.suggested(for: .movingHeadBeam, highEnergy: true, slot: 0).sizeDegrees
@@ -2986,7 +2984,7 @@ struct LumaStageCoreSmokeTests {
           "fixtures": [
             {
               "name": "Front Wash L",
-              "type": "frontFresnel",
+              "type": "ledFresnel",
               "zone": "frontOfHouse",
               "states": [
                 { "enabled": true, "intensity": 0.55, "colorHex": "#FFD1A3", "beamAngleDegrees": 40, "gobo": "none" },
@@ -3004,7 +3002,7 @@ struct LumaStageCoreSmokeTests {
             },
             {
               "name": "Back Wash",
-              "type": "backgroundBatten",
+              "type": "ledPar",
               "zone": "upstageTruss",
               "states": [
                 { "enabled": true, "intensity": 0.4, "colorHex": "#3A6BFF", "beamAngleDegrees": 60, "gobo": "stars" },
@@ -3105,7 +3103,7 @@ struct LumaStageCoreSmokeTests {
           "fixtures": [
             {
               "name": "Front",
-              "type": "frontFresnel",
+              "type": "ledFresnel",
               "zone": "frontOfHouse",
               "states": [
                 { "enabled": true, "intensity": 1.8, "colorHex": "#FFD1A3", "beamAngleDegrees": 40, "gobo": "none" },
@@ -3114,7 +3112,7 @@ struct LumaStageCoreSmokeTests {
             },
             {
               "name": "Back",
-              "type": "backgroundBatten",
+              "type": "ledPar",
               "zone": "upstageTruss",
               "states": [
                 { "enabled": true, "intensity": 0.5, "colorHex": "#3A6BFF", "beamAngleDegrees": 60, "gobo": "none" },
@@ -3123,7 +3121,7 @@ struct LumaStageCoreSmokeTests {
             },
             {
               "name": "Wash L",
-              "type": "washBar",
+              "type": "ledPar",
               "zone": "sideStageLeft",
               "states": [
                 { "enabled": true, "intensity": 0.5, "colorHex": "#FFFFFF", "beamAngleDegrees": 50, "gobo": "none" },
@@ -3132,7 +3130,7 @@ struct LumaStageCoreSmokeTests {
             },
             {
               "name": "Wash R",
-              "type": "washBar",
+              "type": "ledPar",
               "zone": "sideStageRight",
               "states": [
                 { "enabled": true, "intensity": 0.5, "colorHex": "#FFFFFF", "beamAngleDegrees": 50, "gobo": "none" },
@@ -3256,7 +3254,7 @@ struct LumaStageCoreSmokeTests {
         func cue(id: String, name: String) -> LightingCue {
             LightingCue(id: id, name: name, transition: .mvpDefault, fixtureGroups: [
                 FixtureGroup(id: "f1", name: "1", role: .frontLight, zone: .stageFront, enabled: true,
-                             intensity: 0.6, color: FixtureColor(mode: .rgb, value: "#FFFFFF"), model: .frontFresnel),
+                             intensity: 0.6, color: FixtureColor(mode: .rgb, value: "#FFFFFF"), model: .ledFresnel),
                 FixtureGroup(id: "f2", name: "2", role: .spot, zone: .stageBack, enabled: true,
                              intensity: 0.6, color: FixtureColor(mode: .rgb, value: "#00FF00"), model: .laser),
                 FixtureGroup(id: "f3", name: "3", role: .wash, zone: .fullStage, enabled: true,
@@ -3280,13 +3278,13 @@ struct LumaStageCoreSmokeTests {
 
         // Over-count clamp to 2 (tail dropped in rig order), plus a model whitelist that doesn't include
         // the laser (.movingHeadBeam shares the spot role → laser remaps to it).
-        let constraint = RigConstraint(fixtureCount: 2, allowedModels: [.frontFresnel, .movingHeadBeam])
+        let constraint = RigConstraint(fixtureCount: 2, allowedModels: [.ledFresnel, .movingHeadBeam])
         let enforced = constraint.enforce(on: look)
 
         for c in enforced.cues {
             expect(c.fixtureGroups.count == 2, "Count must clamp to fixtureCount=2, got \(c.fixtureGroups.count)")
             for fixture in c.fixtureGroups {
-                expect([.frontFresnel, .movingHeadBeam].contains(fixture.renderModel),
+                expect([.ledFresnel, .movingHeadBeam].contains(fixture.renderModel),
                        "Every kept fixture must use a whitelisted model, got \(fixture.renderModel)")
             }
         }
@@ -3347,12 +3345,12 @@ struct LumaStageCoreSmokeTests {
         expect(!verseHasAuthored, "A low-energy cue must author no dynamic effect")
 
         // Post-enforce compliance: a count+model lock yields a compliant look.
-        let constrained = RigConstraint(fixtureCount: 4, allowedModels: [.frontFresnel, .movingHeadBeam])
+        let constrained = RigConstraint(fixtureCount: 4, allowedModels: [.ledFresnel, .movingHeadBeam])
         let lockedLook = try MusicShowBuilder.buildLook(plan: plan, rig: constrained, lookName: "鎖定秀")
         for c in lockedLook.cues {
             expect(c.fixtureGroups.count <= 4, "Locked rig must respect fixtureCount")
             for fixture in c.fixtureGroups {
-                expect([.frontFresnel, .movingHeadBeam].contains(fixture.renderModel),
+                expect([.ledFresnel, .movingHeadBeam].contains(fixture.renderModel),
                        "Locked rig must only use whitelisted models")
             }
         }

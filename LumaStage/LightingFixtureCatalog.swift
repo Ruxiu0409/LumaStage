@@ -3,14 +3,10 @@ import Foundation
 /// Identifies a concrete fixture model in the Fixture Guide — and the procedural 3D geometry the
 /// SceneKit thumbnail (`LightingFixtureSceneFactory`) and RealityKit observatory
 /// (`FixtureRealityModel`) build for it. This is the catalog's primary key (each guide entry has a
-/// unique model), decoupled from `FixtureRole` so the guide can show more fixtures than there are
-/// cue roles — the four abstract role teaching models plus real-world product fixtures.
+/// unique model), decoupled from `FixtureRole` so a role can be served by several products. Every
+/// model is a real-world product fixture — the earlier abstract role-teaching models (washBar /
+/// spotBarrel / frontFresnel / backgroundBatten) were removed.
 enum LightingFixtureVisualModel: String, CaseIterable, Hashable {
-    // The four abstract role-teaching fixtures (mapped 1:1 to the AI cue vocabulary).
-    case washBar
-    case spotBarrel
-    case frontFresnel
-    case backgroundBatten
     // Real-world product fixtures.
     case ledStrobeBar
     case movingHeadBeam
@@ -52,44 +48,6 @@ enum LightingFixtureCatalog {
     }
 
     static let allFixtures: [LightingFixtureCatalogItem] = [
-        // MARK: - Abstract role-teaching fixtures
-        LightingFixtureCatalogItem(
-            visualModel: .washBar,
-            role: .wash,
-            displayName: "泛光燈",
-            englishName: "Wash Light",
-            shortDescription: "以大面積的燈光覆蓋舞台或表演區，先建立整體的色彩與氛圍。",
-            beginnerPromptHint: "用冷色或暖色把整個舞台打上泛光。",
-            useCase: "適合建立基礎色彩、營造氛圍，並讓整個區域在視覺上更一致。"
-        ),
-        LightingFixtureCatalogItem(
-            visualModel: .spotBarrel,
-            role: .spot,
-            displayName: "聚光燈",
-            englishName: "Spot Light",
-            shortDescription: "用聚焦的光束指向表演者或特定位置，引導觀眾的注意力。",
-            beginnerPromptHint: "在歌手或主持人身上打一道聚光燈。",
-            useCase: "適合獨唱、主持、頒獎，或任何需要明確焦點的段落。"
-        ),
-        LightingFixtureCatalogItem(
-            visualModel: .frontFresnel,
-            role: .frontLight,
-            displayName: "前光",
-            englishName: "Front Light",
-            shortDescription: "從觀眾方向照亮表演者的臉部與身體，讓人看得清楚。",
-            beginnerPromptHint: "把前光調亮，讓表演者更清楚。",
-            useCase: "適合開場、致詞、合唱段落，或任何需要看清表情的時刻。"
-        ),
-        LightingFixtureCatalogItem(
-            visualModel: .backgroundBatten,
-            role: .backgroundWash,
-            displayName: "背景泛光",
-            englishName: "Background Wash",
-            shortDescription: "照亮舞台後方或背景幕，為表演者身後增添色彩層次。",
-            beginnerPromptHint: "把背景泛光換成深藍色，同時讓前景保持溫暖。",
-            useCase: "適合營造夜晚氛圍、強調重點、冷暖對比，並讓表演者與背景分離。"
-        ),
-
         // MARK: - Real-world product fixtures
         LightingFixtureCatalogItem(
             visualModel: .ledStrobeBar,

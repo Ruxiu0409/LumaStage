@@ -63,8 +63,8 @@ enum MusicShowBuilder {
     /// mirror pair; the even-count clamp below trims whole pairs from the tail.
     private static func symmetricRig(maxFixtures: Int) -> [RigSpec] {
         let full: [RigSpec] = [
-            RigSpec(id: "key_l", name: "主光柔光燈（左）", model: .frontFresnel, zone: .stageFront),
-            RigSpec(id: "key_r", name: "主光柔光燈（右）", model: .frontFresnel, zone: .stageFront),
+            RigSpec(id: "key_l", name: "主光柔光燈（左）", model: .ledFresnel, zone: .stageFront),
+            RigSpec(id: "key_r", name: "主光柔光燈（右）", model: .ledFresnel, zone: .stageFront),
             // Upstage truss, palindromic: laser · moving head · moving head · laser → lasers at the ends.
             RigSpec(id: "laser_l", name: "雷射燈（左）", model: .laser, zone: .stageBack),
             RigSpec(id: "mh_l", name: "搖頭光束燈（左）", model: .movingHeadBeam, zone: .stageBack),
@@ -124,9 +124,9 @@ enum MusicShowBuilder {
             return LightEffect(kind: .strobe, speedHz: 8, sizeDegrees: 0, phase: phase)
         case .audienceBlinder:
             return LightEffect(kind: .strobe, speedHz: 4, sizeDegrees: 0, phase: phase)
-        case .ledPar, .washBar, .backgroundBatten:
+        case .ledPar:
             return LightEffect(kind: .colorChase, speedHz: 0.7, sizeDegrees: 0, phase: phase)
-        case .laser, .frontFresnel, .ledFresnel, .spotBarrel:
+        case .laser, .ledFresnel:
             return .none
         }
     }

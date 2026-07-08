@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-**Platforms / OS versions:** **visionOS 26** (main app, deploy target 26.0) + **iPadOS 26** (the optional "LumaStage Control" iPad companion target). Both require **Xcode 26.4** (visionOS 26 SDK; Apple Foundation Models removed). This is a port down from an earlier visionOS 27 lineage (still on `origin/main`) — the port strips the three visionOS-27-only RealityKit APIs (per-light `SurroundingsLight`, soft-shadow `Shadow.lightSize`/`quality`, gobo `ProjectiveTexture`) and the on-device Foundation Models backend; see "AI backends" and "Shared stage geometry" below for what that changes.
+**Platforms / OS versions:** **visionOS 26** (main app, deploy target 26.0) + **iPadOS 26** (the optional "LumaStage Control" iPad companion target). Both **deploy to 26.0** but build against the **installed toolchain — Xcode 27.0 / visionOS 27 SDK at `/Applications/Xcode-beta.app`** (`SDKROOT = xros` is unpinned; building an older deployment target with a newer SDK is Apple's standard flow, so there is **no** Xcode 26.4 requirement — and because the deploy floor is 26.0, the compiler's availability checking *enforces* the strip below: any visionOS-27-only API call without an `#available(visionOS 27, *)` guard is a hard compile error). Apple Foundation Models were removed at the **source level** (deleted files/imports), not gated by SDK. This is a port down from an earlier visionOS 27 lineage (still on `origin/main`) — the port strips the three visionOS-27-only RealityKit APIs (per-light `SurroundingsLight`, soft-shadow `Shadow.lightSize`/`quality`, gobo `ProjectiveTexture`) and the on-device Foundation Models backend; see "AI backends" and "Shared stage geometry" below for what that changes.
 
 LumaStage is a **visionOS** AI stage-lighting design app. It opens an immersive 1:1 night-outdoor stage digital twin (`ImmersiveView`, RealityKit) with a floating AI conversation box: a voice/typed prompt → AI generation (**OpenAI cloud exclusive**, Apple Foundation Models were removed in this visionOS 26 port) → a cue-based lighting look applied with animated transitions. A **music-show pipeline** turns an imported/library/built-in song into an on-device analysis and a deterministic beat-locked multi-cue show — see "Music shows" below. An optional **iPad control-panel companion target** (real-time remote over Multipeer Connectivity) mirrors the conversation and edits the live look — see "iPad control panel" below; the visionOS app is the single source of truth and works standalone without it.
 
@@ -22,17 +22,23 @@ The product spec and MVP scope live in `docs/` (Traditional Chinese): `system-sp
 
 ### Build / run the app
 
-The app deploys to **visionOS 26** and builds with **Xcode 26.4**. It does not use on-device Apple Foundation Models.
+The app **deploys to visionOS 26** (target 26.0) and builds with the installed **Xcode 27.0 / visionOS 27 SDK** (`/Applications/Xcode-beta.app`) — a newer SDK against a 26.0 deploy target is the standard flow (see the "Platforms / OS versions" note above for why this doesn't relax the "no visionOS-27-only APIs" rule). It does not use on-device Apple Foundation Models. **This machine's `xcode-select` points at CommandLineTools**, so every `xcodebuild` must be prefixed with `DEVELOPER_DIR` (or run `sudo xcode-select -s /Applications/Xcode-beta.app` once) — otherwise `xcodebuild` errors with "requires Xcode".
 
 Two targets/schemes (both shared): `LumaStage` (visionOS, deploy 26.0; links the local SwiftPM package `Packages/RealityKitContent`) and `LumaStageControl` (the iPadOS 26.0 companion panel — see "iPad control panel" below).
 
 ```bash
-# Pick a concrete destination from: xcodebuild -showdestinations -scheme LumaStage
-xcodebuild -scheme "LumaStage" -destination 'platform=visionOS Simulator,name=Apple Vision Pro,OS=26.0' build
+# DEVELOPER_DIR is required here (xcode-select points at CommandLineTools; only Xcode-beta.app = 27.0 /
+# visionOS 27 SDK is installed — it builds the 26.0 deploy target fine).
 
-# Build-only verification (the specs' canonical check — no device pick needed); pass = "** BUILD SUCCEEDED **"
-xcodebuild -scheme LumaStage \
+# Build-only verification (the specs' canonical check — no device/runtime pick needed); pass = "** BUILD SUCCEEDED **"
+DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer xcodebuild -scheme LumaStage \
   -destination 'generic/platform=visionOS Simulator' -derivedDataPath /tmp/lumastage-dd build
+
+# To run in a simulator, target an INSTALLED runtime — here only visionOS 27.0, which runs the 26.0-deployment
+# app fine; an OS=26.0 destination fails because no 26.0 runtime is installed. Confirm names/OS first with:
+#   DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer xcodebuild -showdestinations -scheme LumaStage
+DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer xcodebuild -scheme "LumaStage" \
+  -destination 'platform=visionOS Simulator,name=Apple Vision Pro,OS=27.0' build
 ```
 
 Pre-existing, known-non-error noise in a green build: Multipeer `Sendable` warnings, and MCSession delegate-signature lines that merely contain the word `error:` — don't chase them.
@@ -200,7 +206,7 @@ The "Edit Stage" button (`VisionAIComposerBox.openStageEditor`) opens `TabletopS
 
 ### Fixture observatory (two windows: volumetric model + info card)
 
-The Fixture Guide sheet (`LightingFixtureIntroView`, reachable only from `ProjectSelectionView`) is a compact grid of cards — each keeps its cheap SceneKit thumbnail (`LightingFixtureModelPreview`) so every fixture is visible at once. The catalog (`LightingFixtureCatalog.allFixtures`) is **keyed on `LightingFixtureVisualModel`, not `FixtureRole`** (so it can hold more fixtures than there are cue roles): the four abstract role-teaching fixtures (`washBar`/`spotBarrel`/`frontFresnel`/`backgroundBatten`, each mapped 1:1 to a cue `FixtureRole`) plus real-world product fixtures (`ledStrobeBar`/`movingHeadBeam`/`ledPar`/`audienceBlinder`/`ledFresnel`/`laser`). Each item's `role` is now just a teaching annotation (several products share a role); the item's `id` is its `visualModel`. Tapping a card calls `appModel.startFixtureInspection(model:)`, opens the volumetric model window (`AppModel.fixtureObservatoryWindowID`), and dismisses the sheet; the info card (`fixtureInfoCardWindowID`) is opened by `FixtureObservatoryView.onAppear`, **deliberately staged** — the card's `.defaultWindowPlacement` seats it `.trailing` the model window, and opening both windows together from the Guide raced that placement lookup and overlapped them.
+The Fixture Guide sheet (`LightingFixtureIntroView`, reachable only from `ProjectSelectionView`) is a compact grid of cards — each keeps its cheap SceneKit thumbnail (`LightingFixtureModelPreview`) so every fixture is visible at once. The catalog (`LightingFixtureCatalog.allFixtures`) is **keyed on `LightingFixtureVisualModel`, not `FixtureRole`** (decoupled, so one cue role can be served by several products): its **six real-world product fixtures** — `ledStrobeBar`/`movingHeadBeam`/`ledPar`/`audienceBlinder`/`ledFresnel`/`laser` (pinned by the smoke test's `catalog.count == 6`). The four abstract role-teaching fixtures (`washBar`/`spotBarrel`/`frontFresnel`/`backgroundBatten`) were **removed** — so `LightingFixtureVisualModel.derived(role:zone:)`/`derivedRole` and the legacy/MVP/template/music-show looks now map roles onto those products (`.frontLight` → `.ledFresnel`, `.wash` → `.ledPar`, `.spot`/`.backgroundWash` → `.movingHeadBeam`), and the OpenAI schema's `type` enum + `FixtureTypeDTO` now list only the six. Each item's `role` is now just a teaching annotation (several products share a role); the item's `id` is its `visualModel`. Tapping a card calls `appModel.startFixtureInspection(model:)`, opens the volumetric model window (`AppModel.fixtureObservatoryWindowID`), and dismisses the sheet; the info card (`fixtureInfoCardWindowID`) is opened by `FixtureObservatoryView.onAppear`, **deliberately staged** — the card's `.defaultWindowPlacement` seats it `.trailing` the model window, and opening both windows together from the Guide raced that placement lookup and overlapped them.
 
 The two windows are intentionally **separate, independently movable objects** (not one fused panel): a volumetric `WindowGroup` holding the 3D model (`FixtureObservatoryView`) and a plain `WindowGroup` holding the info card with paging + back controls (`FixtureInfoCardWindow`). Both are declared in `LumaStageApp` and **must inject `.environment(appModel)`** (windows opened via `openWindow` don't inherit the opener's environment). Because the Guide only opens before entering the stage `ImmersiveSpace`, these windows never coexist/conflict with the stage.
 

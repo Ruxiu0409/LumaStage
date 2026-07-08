@@ -63,11 +63,11 @@ struct LightEffect: Codable, Equatable {
         case .ledStrobeBar, .audienceBlinder:
             // Authored-only: an auto-strobe rewrites intensity every frame → flicker on the static rig.
             return .none
-        case .ledPar, .washBar, .backgroundBatten:
+        case .ledPar:
             // Authored-only: an auto-chase rewrites intensity every frame → the cyc/wash pulses (flicker).
             return .none
-        case .frontFresnel, .ledFresnel, .spotBarrel:
-            return .none   // steady key/spot light — movement here would just look unstable
+        case .ledFresnel:
+            return .none   // steady key light — movement here would just look unstable
         }
     }
 }
