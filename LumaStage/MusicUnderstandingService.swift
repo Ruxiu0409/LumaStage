@@ -28,6 +28,15 @@ import MusicUnderstanding
 /// no network. Produces a `SongAnalysis` from any audio URL.
 struct MusicUnderstandingService: SongAnalyzing {
     func analyze(url: URL, title: String) async throws -> SongAnalysis {
+        // `MusicUnderstanding` is a WWDC26 framework: `MusicUnderstandingSession` (and every result type it
+        // vends) exists only on visionOS 27 / iOS 27+. On the visionOS 26 deploy target the module is still
+        // importable (`canImport` is true under the newer SDK), so this code compiles — but the session type
+        // is unavailable at runtime, so the live path is gated here. The built-in demo (`CachedSongAnalyzer`,
+        // bundled JSON) is framework-free, so the zero-fail stage show is unaffected.
+        guard #available(visionOS 27.0, iOS 27.0, *) else {
+            throw SongAnalysisError.unsupported
+        }
+
         let asset = AVURLAsset(
             url: url,
             options: [AVURLAssetPreferPreciseDurationAndTimingKey: true]
@@ -53,6 +62,7 @@ struct MusicUnderstandingService: SongAnalyzing {
     }
 
     /// Localised-ish description of a framework error, mapping the known `MusicUnderstandingError` cases.
+    @available(visionOS 27.0, iOS 27.0, *)
     private static func describe(_ error: Error) -> String {
         if let mu = error as? MusicUnderstandingError {
             switch mu {
@@ -70,6 +80,7 @@ struct MusicUnderstandingService: SongAnalyzing {
 
     /// Pure-ish conversion (the only platform dependency is CMTime → seconds). Tolerant throughout: every
     /// dimension is optional on `SessionResult`, so each is guarded and degrades to a neutral default.
+    @available(visionOS 27.0, iOS 27.0, *)
     static func makeAnalysis(
         from results: MusicUnderstandingSession.SessionResult,
         url: URL,
@@ -121,6 +132,7 @@ struct MusicUnderstandingService: SongAnalyzing {
 
     /// Build one `SongSection` from a section time range, deriving every per-section feel from the real
     /// typed members (`pace`/`loudness`/`key`/`instrumentActivity`). Each dimension is independently optional.
+    @available(visionOS 27.0, iOS 27.0, *)
     private static func makeSection(
         start: Double,
         end: Double,
@@ -166,6 +178,7 @@ struct MusicUnderstandingService: SongAnalyzing {
     /// is `[RangedValue<Double>]` with `.value` already ~0...1 and `.range` a `CMTimeRange`. Weight each value by
     /// its seconds of overlap with the span; if nothing overlaps, fall back to the plain mean. Returns nil if no
     /// pace dimension or no usable ranges.
+    @available(visionOS 27.0, iOS 27.0, *)
     private static func averagePace(
         in span: ClosedRange<Double>,
         results: MusicUnderstandingSession.SessionResult
@@ -199,6 +212,7 @@ struct MusicUnderstandingService: SongAnalyzing {
     /// the single `integrated` LUFS scalar — all real typed members of `LoudnessResult` (`[TimedValue<Float>]` /
     /// `TimedValue<Float>`, `.time.seconds`, `.value` a Float LUFS). Each LUFS value maps through `loudnessToUnit`
     /// (≈ -30…0 LUFS → 0…1, clamped). Returns nil if there's no loudness dimension.
+    @available(visionOS 27.0, iOS 27.0, *)
     private static func averageLoudness(
         in span: ClosedRange<Double>,
         results: MusicUnderstandingSession.SessionResult
@@ -239,6 +253,7 @@ struct MusicUnderstandingService: SongAnalyzing {
     /// `KeyResult` value at the given time → `.major` / `.minor` / `.unknown`. `KeyResult.ranges` is
     /// `[RangedValue<KeySignature>]`; we find the entry whose `.range` contains `time` (else the nearest by
     /// range midpoint), then map `.value.mode` (`.major`/`.minor`) to `MusicKeyMode`. None → `.unknown`.
+    @available(visionOS 27.0, iOS 27.0, *)
     private static func keyMode(
         at time: Double,
         results: MusicUnderstandingSession.SessionResult
@@ -274,6 +289,7 @@ struct MusicUnderstandingService: SongAnalyzing {
     /// (`[Instrument: [TimedValue<Float>]]`). Per section, average each instrument's `.value` over `.time`
     /// within the span, take the highest-scoring few, and emit `instrument.rawValue` strings. Empty when there's
     /// no instrument-activity dimension or no samples land in the span.
+    @available(visionOS 27.0, iOS 27.0, *)
     private static func dominantInstruments(
         in span: ClosedRange<Double>,
         results: MusicUnderstandingSession.SessionResult,
@@ -325,6 +341,7 @@ struct MusicUnderstandingService: SongAnalyzing {
     }
 
     /// Best-effort overall duration: prefer the last beat/bar time, else the last section end, else 0.
+    @available(visionOS 27.0, iOS 27.0, *)
     private static func deriveDuration(
         results: MusicUnderstandingSession.SessionResult,
         beatTimes: [Double],

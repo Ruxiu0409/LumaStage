@@ -95,8 +95,21 @@ protocol SongAnalyzing {
 }
 
 /// Errors the analysis boundary can surface.
-enum SongAnalysisError: Error {
+enum SongAnalysisError: Error, LocalizedError {
     case unsupported
     case empty
     case analysisFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .unsupported:
+            // 裝置端樂曲分析需要 WWDC26 的 MusicUnderstanding 框架（visionOS 27 以上）。移植到
+            // visionOS 26 時 live 分析走這個分支；內建示範曲（CachedSongAnalyzer）不需要框架，不受影響。
+            return "此裝置的系統版本不支援裝置端樂曲分析（需 visionOS 27 以上），請改用內建示範曲。"
+        case .empty:
+            return "找不到可分析的音樂內容。"
+        case .analysisFailed(let message):
+            return message
+        }
+    }
 }
