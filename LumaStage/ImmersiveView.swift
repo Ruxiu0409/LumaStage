@@ -1457,7 +1457,7 @@ struct ImmersiveView: View {
         let sheathRadius = sceneLength(SpotBeamScatterMath.sheathBaseRadius(lengthMeters: beamLengthMeters, beamAngleDegrees: beamAngleDegrees))
         let sheath = ModelEntity(
             mesh: beamConeMesh(length: length, baseRadius: sheathRadius),
-            materials: [UnlitMaterial(color: spotBeamSheathUIColor(hex: colorHex, intensity: 1, beamAngleDegrees: beamAngleDegrees, isFaint: isFaint))]
+            materials: [spotBeamSheathMaterial(hex: colorHex, intensity: 1, beamAngleDegrees: beamAngleDegrees, isFaint: isFaint)]
         )
         sheath.name = "\(name)_sheath"
         sheath.position = apex
@@ -1490,14 +1490,19 @@ struct ImmersiveView: View {
         return (try? MeshResource.generate(from: [descriptor])) ?? .generateCylinder(height: length, radius: baseRadius)
     }
 
-    /// The low-alpha cone sheath colour (saturated cue hue). See `SpotBeamScatterMath.sheathRGBA`. When
-    /// `isFaint` (front-of-house key / side fixtures — `RigPlacement.AerialBeamConeVisibility.faint`), the
-    /// alpha is scaled down by `SpotBeamScatterConfig.faintAlphaScale` so the cone reads as a see-through
-    /// veil (the stage stays visible through it) instead of a full-strength beam.
-    private static func spotBeamSheathUIColor(hex: String, intensity: Double, beamAngleDegrees: Double, isFaint: Bool) -> UIColor {
+    /// The cone sheath material (saturated cue hue). See `SpotBeamScatterMath.sheathRGBA`. When `isFaint`
+    /// (front-of-house key / side fixtures — `RigPlacement.AerialBeamConeVisibility.faint`), the alpha is
+    /// scaled down by `SpotBeamScatterConfig.faintAlphaScale` so the cone reads as a see-through veil.
+    /// **Material footgun:** on visionOS 26, an `UnlitMaterial` tint's alpha channel does NOT alpha-blend
+    /// on its own — the cone rendered as a fully opaque wedge despite a ~0.02 tint alpha. Translucency must
+    /// be requested via `blending = .transparent(opacity:)`, so this helper returns the whole material
+    /// (opaque tint + transparent blending) rather than a UIColor.
+    private static func spotBeamSheathMaterial(hex: String, intensity: Double, beamAngleDegrees: Double, isFaint: Bool) -> UnlitMaterial {
         let c = SpotBeamScatterMath.sheathRGBA(hex: hex, intensity: intensity, beamAngleDegrees: beamAngleDegrees)
         let alpha = isFaint ? c.alpha * SpotBeamScatterConfig.default.faintAlphaScale : c.alpha
-        return UIColor(red: c.red, green: c.green, blue: c.blue, alpha: alpha)
+        var material = UnlitMaterial(color: UIColor(red: c.red, green: c.green, blue: c.blue, alpha: 1))
+        material.blending = .transparent(opacity: .init(floatLiteral: Float(alpha)))
+        return material
     }
 
     /// Per-cue update for a spotlight's volumetric cone: recolor the single outer shell to the resolved cue
@@ -1510,11 +1515,11 @@ struct ImmersiveView: View {
         }
 
         let visible = SpotBeamScatterMath.beamVisible(intensity)
-        let sheathColor = spotBeamSheathUIColor(hex: colorHex, intensity: intensity, beamAngleDegrees: beamAngleDegrees, isFaint: isFaint)
+        let sheathMaterial = spotBeamSheathMaterial(hex: colorHex, intensity: intensity, beamAngleDegrees: beamAngleDegrees, isFaint: isFaint)
         for child in container.children {
             guard let model = child as? ModelEntity else { continue }
             child.isEnabled = visible
-            model.model?.materials = [UnlitMaterial(color: sheathColor)]
+            model.model?.materials = [sheathMaterial]
         }
     }
 

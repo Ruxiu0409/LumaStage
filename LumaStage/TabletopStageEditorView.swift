@@ -1479,11 +1479,14 @@ enum TabletopStageScene {
         beam.components.set(OpacityComponent(opacity: 1))
     }
 
-    /// The translucent cone `UnlitMaterial` — cue colour at `PreviewBeamCone`'s alpha, no blending override
-    /// so the sub-1 alpha drives translucency (the existing `hangZoneMaterial` approach).
+    /// The translucent cone `UnlitMaterial` — cue colour at `PreviewBeamCone`'s alpha. **Material footgun:**
+    /// on visionOS 26 a tint's alpha channel does NOT alpha-blend on its own (the cone renders as an opaque
+    /// wedge); the alpha must go through `blending = .transparent(opacity:)`.
     private static func beamMaterial(hex: String, alpha: Double) -> UnlitMaterial {
         let rgb = RGBComponents(hex: hex) ?? .white
-        return UnlitMaterial(color: UIColor(red: rgb.red, green: rgb.green, blue: rgb.blue, alpha: alpha))
+        var material = UnlitMaterial(color: UIColor(red: rgb.red, green: rgb.green, blue: rgb.blue, alpha: 1))
+        material.blending = .transparent(opacity: .init(floatLiteral: Float(alpha)))
+        return material
     }
 
     /// A stable signature of a preview cone's size (length + base radius, in scene units, rounded) used as a
