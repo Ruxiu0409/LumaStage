@@ -84,6 +84,13 @@ class AppModel {
     /// The immersive space the app wants open; `ContentView` reconciles it. Defaults to `.none` (project
     /// list). Set to `.stage` when a project opens, `.tabletopEditor` while editing the stage on the table.
     var desiredImmersiveScene: ImmersiveScene = .none
+    /// SPEC 20 — the current workflow stage (架設 / 編程 / 播放). Mirrors `desiredImmersiveScene`: 架設 lives in
+    /// the tabletop-editor space, 編程/播放 both live on the 1:1 stage. `setWorkflowPhase` routes the swap
+    /// through the EXISTING `enter/exitTabletopEditing` + `ContentView.reconcileImmersiveScene` mechanism (no
+    /// new open path). Defaults to `.programming` (a freshly opened project lands on the 1:1 stage — see the
+    /// spec's default-landing caveat). The fixture/stage-object mutation guards read this to enforce
+    /// "no rig/layout editing outside 架設".
+    var workflowPhase: WorkflowPhase = .programming
     var stageImmersionMode: StageImmersionMode = .fullStage
     /// One-shot guard letting the windowed AI composer distinguish a *programmatic* dismiss (set true
     /// right before the app dismisses the composer window — e.g. `ImmersiveView.onDisappear`) from a
@@ -345,6 +352,8 @@ class AppModel {
         selectedStageObjectId = nil
         isEditingTabletopStage = true
         desiredImmersiveScene = .tabletopEditor
+        // SPEC 20: entering the tabletop editor is the 架設 phase, whichever entry point opened it.
+        workflowPhase = .rigging
     }
 
     /// Leaves the editing session and returns to the 1:1 stage space. The caller dismisses the editor space;
@@ -352,6 +361,28 @@ class AppModel {
     func exitTabletopEditing() {
         clearTabletopEditingState()
         desiredImmersiveScene = .stage
+        // SPEC 20: leaving 架設 lands back on 編程 (also covers closing the editor via system chrome, which
+        // re-calls this from `TabletopStageEditorView.onDisappear`).
+        if workflowPhase == .rigging { workflowPhase = .programming }
+    }
+
+    /// SPEC 20 — sets the workflow stage, routing the immersive-space swap through the EXISTING mechanism:
+    /// `enterTabletopEditing`/`exitTabletopEditing` flip `desiredImmersiveScene`, which `ContentView`
+    /// reconciles. This method only updates model state + the desired scene; the actual `dismissImmersiveSpace`
+    /// (a view `@Environment` action) is issued by the caller in the view — see `VisionAIComposerBox.switchPhase`
+    /// / `TabletopStageEditorView.switchPhase`.
+    func setWorkflowPhase(_ phase: WorkflowPhase) {
+        guard phase != workflowPhase else { return }
+        // Leaving the playback page stops any running auto-walk so the show doesn't keep advancing off-screen.
+        if workflowPhase == .playback, isPlayingCueList { stopCueList() }
+        switch phase {
+        case .rigging:
+            if isEditingTabletopStage { workflowPhase = .rigging }
+            else { enterTabletopEditing() }        // sets desired = .tabletopEditor + workflowPhase = .rigging
+        case .programming, .playback:
+            if isEditingTabletopStage { exitTabletopEditing() }  // sets desired = .stage + workflowPhase = .programming
+            workflowPhase = phase
+        }
     }
 
     /// Resets the editing flags without touching the desired scene — shared by `exitTabletopEditing` (which
@@ -375,6 +406,7 @@ class AppModel {
     /// Moves a stage object in the ground plane (its y is preserved), grid/connector-snapped, and
     /// persists the result so the immersive stage reflects the new position.
     func moveStageObject(id: String, toX x: Double, z: Double) {
+        guard WorkflowPhasePolicy.allowsStageLayoutEdit(in: workflowPhase) else { return }   // SPEC 20: 架設 only
         var layout = stageLayout
         guard var object = layout.object(id: id) else {
             return
@@ -404,6 +436,7 @@ class AppModel {
     /// Rotates the selected stage object by 90° about the vertical axis (stage rotations must stay
     /// right-angle aligned, which `StageLayout.validate()` enforces).
     func rotateSelectedStageObject() {
+        guard WorkflowPhasePolicy.allowsStageLayoutEdit(in: workflowPhase) else { return }   // SPEC 20: 架設 only
         guard let id = selectedStageObjectId else {
             return
         }
@@ -428,6 +461,7 @@ class AppModel {
     /// the user can immediately drag it into place. Placement is routed through the shared
     /// `StageBuilderDropPlanner` so it matches the former builder; ids are unique per add.
     func addStageObject(assetId: StageAssetId) {
+        guard WorkflowPhasePolicy.allowsStageLayoutEdit(in: workflowPhase) else { return }   // SPEC 20: 架設 only
         var layout = stageLayout
         let id = "\(assetId.rawValue)_\(UUID().uuidString.prefix(6).lowercased())"
         guard let object = StageBuilderDropPlanner.object(
@@ -452,6 +486,7 @@ class AppModel {
     /// Removes the currently selected stage object and clears the selection. A locked object (e.g. the
     /// default stage base if it were locked) throws, which is surfaced as an error.
     func removeSelectedStageObject() {
+        guard WorkflowPhasePolicy.allowsStageLayoutEdit(in: workflowPhase) else { return }   // SPEC 20: 架設 only
         guard let id = selectedStageObjectId else {
             return
         }
@@ -488,6 +523,9 @@ class AppModel {
     /// Sets the manual stage position (model metres) of the fixture `id` in EVERY cue — rig identity, so
     /// the same fixture sits at the same spot across the whole show — then re-validates + persists.
     func moveFixture(id: String, toX x: Double, y: Double, z: Double) {
+        // SPEC 20: fixtures can only be repositioned during 架設. Belt-and-suspenders against non-UI paths
+        // (iPad/voice) — the tabletop editor is itself the 架設 phase, so this passes there.
+        guard WorkflowPhasePolicy.allowsFixtureMove(in: workflowPhase) else { return }
         var look = stageState.lightingLook
         // 規定：雷射不可被拖離桁架 — 把拖曳位置夾回 truss footprint 再存（與 RigPlacement 共用同一套規則，
         // 所以在 1:1 舞台與桌上模型上雷射都會彈回桁架上）。
@@ -583,6 +621,7 @@ class AppModel {
     /// the same `id` (rig identity), re-validates + persists, and selects it. Refuses to grow the rig past
     /// `maxRigFixtureCount`.
     func addFixtureToRig(model: LightingFixtureVisualModel, zone: StageZone) {
+        guard WorkflowPhasePolicy.allowsFixtureMove(in: workflowPhase) else { return }   // SPEC 20: 架設 only
         var look = stageState.lightingLook
         guard let largestCueCount = look.cues.map(\.fixtureGroups.count).max(),
               largestCueCount < Self.maxRigFixtureCount else {
@@ -625,6 +664,7 @@ class AppModel {
     /// 複製目前選取的燈具：新 id、逐 cue 保留該 cue 的色/亮度、位置沿 X 位移一小段（雷射夾回桁架），
     /// 寫回每個 cue、re-validate + persist，並選取新燈。滿 `maxRigFixtureCount` 時拒絕。
     func duplicateSelectedFixture() {
+        guard WorkflowPhasePolicy.allowsFixtureMove(in: workflowPhase) else { return }   // SPEC 20: 架設 only
         guard let sourceId = selectedFixtureId else { return }
         var look = stageState.lightingLook
         guard let largest = look.cues.map(\.fixtureGroups.count).max(),
@@ -660,6 +700,7 @@ class AppModel {
 
     /// 鏡射目前選取的燈具：以舞台中線 (x=0) 鏡像複製出一盞新燈（x 取負、pan 取負），寫回每個 cue。
     func mirrorSelectedFixture() {
+        guard WorkflowPhasePolicy.allowsFixtureMove(in: workflowPhase) else { return }   // SPEC 20: 架設 only
         guard let sourceId = selectedFixtureId else { return }
         var look = stageState.lightingLook
         guard let largest = look.cues.map(\.fixtureGroups.count).max(),
@@ -703,6 +744,7 @@ class AppModel {
     /// Removes the selected fixture from EVERY cue, re-validates + persists, and clears the selection.
     /// Refuses to remove if doing so would leave any cue with no fixtures (a cue must stay lit).
     func removeSelectedFixture() {
+        guard WorkflowPhasePolicy.allowsFixtureMove(in: workflowPhase) else { return }   // SPEC 20: 架設 only
         guard let id = selectedFixtureId else {
             return
         }
@@ -772,6 +814,8 @@ class AppModel {
         selectedProjectId = project.id
         // Ask for the 1:1 stage space; `ContentView` opens it once it's the front-most window.
         desiredImmersiveScene = .stage
+        // SPEC 20: a freshly opened project lands on the 編程 page (the 1:1 stage), not 架設.
+        workflowPhase = .programming
         stageState = StageState(lightingLook: project.lightingLook)
         lightOverrides = [:]
         selectedFixtureId = nil
@@ -811,6 +855,8 @@ class AppModel {
         clearTabletopEditingState()
         clearMusicShow()
         desiredImmersiveScene = .none
+        // SPEC 20: reset the workflow stage so the next opened project starts on 編程.
+        workflowPhase = .programming
         transcript = ""
         typedPrompt = ""
         aiUnderstoodCommand = "等待選擇專案"
@@ -1004,6 +1050,17 @@ class AppModel {
     /// Whether a show is auto-running (music show OR cue list) — the unified state the headset play/stop
     /// control reflects, so one button reads correctly whichever kind of show is loaded.
     var isShowRunning: Bool { isMusicPlaying || isPlayingCueList }
+
+    // MARK: - Playback timeline read accessors (SPEC 20 WI-10)
+
+    /// The music show's playback position in seconds — the playback timeline's cursor for a music show
+    /// (`musicSyncEngine` is private, so the view reads it through here). 0 when no music is playing.
+    var musicElapsedSeconds: Double { musicSyncEngine.currentTime }
+
+    /// The analyzed sections of the loaded music show (empty when no show is loaded). The playback timeline
+    /// lays one block per section using the real `SongSection.start`/`duration`, so the music cursor tracks
+    /// true song time rather than nominal cue holds.
+    var musicShowSections: [SongSection] { lastAnalysis?.sections ?? [] }
 
     /// Starts cue-list auto-playback: each cue holds for its follow time, then follows to the next, running
     /// once to the last cue and stopping there (manual GO still wraps). No-op — with friendly feedback —
@@ -1570,6 +1627,14 @@ class AppModel {
         } catch {
             fail(error.localizedDescription)
         }
+    }
+
+    /// SPEC 20 WI-10: tapping a block on the playback timeline jumps to that cue. When auto-playing, restart
+    /// the follow countdown from the newly-selected cue (like a manual GO) so the tapped cue gets its full
+    /// hold — `selectCue` alone doesn't reschedule, unlike `goToNextCue`.
+    func selectCueFromTimeline(id: String) {
+        selectCue(id: id)
+        rescheduleCuePlaybackIfPlaying()
     }
 
     func setFrontLightDimmer(_ value: Double) {

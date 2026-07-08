@@ -35,6 +35,7 @@ swiftc \
   LumaStage/OpenAILightingService.swift LumaStage/OpenAIKeychain.swift LumaStage/SongAnalysis.swift \
   LumaStage/ShowPlan.swift LumaStage/RigConstraint.swift LumaStage/MusicShowBuilder.swift \
   LumaStage/SongLibrary.swift LumaStage/DemoTrackSynth.swift LumaStage/CuePlayback.swift \
+  LumaStage/WorkflowPhase.swift LumaStage/CueTimeline.swift \
   -o /tmp/LumaStageCoreSmokeTests && /tmp/LumaStageCoreSmokeTests
 
 # 5) 若動到 view / RealityKit → 完整 build（必須 ** BUILD SUCCEEDED **；先確認 xcode-select 指 Xcode 26.4）

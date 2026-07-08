@@ -282,6 +282,13 @@ struct TabletopStageEditorView: View {
 
     private var controlBar: some View {
         HStack(spacing: 14) {
+            // SPEC 20: the same three-stage switcher as the composer. The composer window is dismissed while
+            // the tabletop (架設) space is open, so this is the ONLY way back to 編程/播放 from here. 架設 is
+            // the active segment; picking 編程/播放 swaps back to the 1:1 stage space (mirrors 完成/finishEditing).
+            workflowPicker
+
+            Divider().frame(height: 26)
+
             // Keep a visible readout of the current selection; the 3D highlight alone is easy to miss.
             selectionStatus
 
@@ -708,6 +715,50 @@ struct TabletopStageEditorView: View {
             turntable.transform = target
         } else {
             turntable.move(to: target, relativeTo: turntable.parent, duration: 0.3)
+        }
+    }
+
+    // MARK: - Workflow phase switcher (SPEC 20)
+
+    /// The three-stage switcher shown in the tabletop control bar. 架設 is active here; picking 編程/播放
+    /// swaps back to the 1:1 stage space via `switchPhase(to:)`.
+    private var workflowPicker: some View {
+        HStack(spacing: 8) {
+            ForEach(WorkflowPhase.allCases, id: \.self) { phase in
+                phaseButton(phase)
+            }
+        }
+    }
+
+    private func phaseButton(_ phase: WorkflowPhase) -> some View {
+        let isActive = appModel.workflowPhase == phase
+        return Button {
+            guard !isActive else { return }
+            Task { @MainActor in await switchPhase(to: phase) }
+        } label: {
+            Label(phase.localizedDisplayName, systemImage: phase.systemImageName)
+                .labelStyle(.titleAndIcon)
+        }
+        .buttonStyle(.bordered)
+        .buttonBorderShape(.capsule)
+        .lumaGazeTarget()
+        .tint(isActive ? LumaStageDesign.coolBlue : nil)
+        .accessibilityAddTraits(isActive ? [.isSelected] : [])
+        .help("切換到「\(phase.localizedDisplayName)」工作階段")
+    }
+
+    /// SPEC 20 — leave 架設 for 編程/播放. Mirrors `finishEditing`'s two-step swap: `setWorkflowPhase` flips
+    /// `desiredImmersiveScene` back to `.stage` (via `exitTabletopEditing`), then this dismisses the editor
+    /// space so `ContentView.reconcileImmersiveScene` reopens the 1:1 stage.
+    @MainActor
+    private func switchPhase(to target: WorkflowPhase) async {
+        let needsSpaceSwap = WorkflowPhasePolicy.usesTabletopEditorSpace(in: appModel.workflowPhase)
+                          != WorkflowPhasePolicy.usesTabletopEditorSpace(in: target)
+        appModel.setWorkflowPhase(target)
+        if needsSpaceSwap, appModel.immersiveSpaceState == .open {
+            appModel.immersiveSpaceState = .inTransition
+            await dismissImmersiveSpace()
+            openWindow(id: AppModel.mainWindowID)
         }
     }
 

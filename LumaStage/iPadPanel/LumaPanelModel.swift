@@ -56,6 +56,11 @@ final class LumaPanelModel {
         return look.cues.first(where: { $0.id == look.selectedCueId })
     }
 
+    /// SPEC 20 — the host's current workflow stage; defaults to 編程 until the first snapshot arrives.
+    var workflowPhase: WorkflowPhase {
+        WorkflowPhase(rawValue: host?.workflowPhase ?? "") ?? .programming
+    }
+
     var isConnected: Bool {
         connectionState == .connected
     }
@@ -170,6 +175,11 @@ final class LumaPanelModel {
             state.isPlayingCueList = true    // optimistic; the host echoes the real state back
         case .stopCueList:
             state.isPlayingCueList = false
+        case .setWorkflowPhase(let raw):
+            // Mock honors 編程↔播放 only (same as the host coordinator); ignore 架設 offline.
+            if let phase = WorkflowPhase(rawValue: raw), phase != .rigging {
+                state.workflowPhase = phase.rawValue
+            }
         }
         host = state
     }

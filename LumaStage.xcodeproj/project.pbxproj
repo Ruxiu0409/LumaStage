@@ -38,6 +38,7 @@
 				MultipeerSyncTransport.swift,
 				RigConstraint.swift,
 				StageBuilderModels.swift,
+				WorkflowPhase.swift,
 			);
 			target = F71ABA0B2FE95AFD007848FC /* LumaStageControl */;
 		};

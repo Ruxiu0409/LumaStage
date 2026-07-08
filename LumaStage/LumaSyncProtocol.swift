@@ -58,6 +58,10 @@ struct LumaHostState: Codable, Equatable {
     /// live state. Defaulted purely for construction ergonomics (host/panel are the same build and this is
     /// live wire, never persisted, so the key is always present on the wire — no missing-key back-compat).
     var isPlayingCueList: Bool = false
+    /// SPEC 20 — the host's current workflow stage (`WorkflowPhase.rawValue`: rigging / programming /
+    /// playback), so the panel can show it and offer to switch. Defaulted for construction ergonomics
+    /// (always present on the wire).
+    var workflowPhase: String = WorkflowPhase.programming.rawValue
 }
 
 /// AVP → iPad. Everything the Chat tab renders: the live conversation with Foundation Models.
@@ -136,4 +140,8 @@ enum LumaControlCommand: Codable, Equatable {
     case playCueList
     /// Maps to `AppModel.stopCueList()` — stop auto-playback, holding the current cue.
     case stopCueList
+    /// Maps to `AppModel.setWorkflowPhase(_:)` — switch workflow stage (`WorkflowPhase.rawValue`). The host
+    /// ignores an iPad request to enter 架設 (entering the tabletop space needs a host-side view action the
+    /// coordinator can't trigger); 編程↔播放 are honored (SPEC 20 caveat).
+    case setWorkflowPhase(String)
 }

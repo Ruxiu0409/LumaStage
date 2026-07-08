@@ -110,6 +110,10 @@ struct ContentView: View {
                 guard let delay = ImmersiveSceneReopenPolicy.retryDelayNanoseconds(afterFailedAttempt: attempt) else {
                     appModel.immersiveSpaceState = .closed
                     appModel.desiredImmersiveScene = .none
+                    // SPEC 20 caveat hardening: giving up returns to the composer (desired = .none). Don't
+                    // strand the workflow on `.rigging` (whose tabletop space we just failed to open) — reset
+                    // it so the composer shows the 編程 page consistently.
+                    appModel.workflowPhase = .programming
                     return
                 }
                 attempt += 1

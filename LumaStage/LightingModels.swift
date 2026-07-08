@@ -428,6 +428,14 @@ struct LightingCue: Codable, Equatable, Identifiable {
 
         return fixture
     }
+
+    /// SPEC 20 WI-9 — maps a 1-based on-stage light number (fixtures in `fixtureGroups` order, "Light 1…N")
+    /// to that fixture's `id`, so the programming page can route a tapped light's cue edits to the right
+    /// fixture. Out-of-range → nil.
+    func fixtureId(forLightNumber number: Int) -> String? {
+        guard number >= 1, number <= fixtureGroups.count else { return nil }
+        return fixtureGroups[number - 1].id
+    }
 }
 
 /// A read-only summary of how the current cue's fixtures map onto the immersive renderer — the data

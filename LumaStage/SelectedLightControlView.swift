@@ -46,12 +46,22 @@ struct SelectedLightControlView: View {
     }
 
     private func card(number: Int) -> some View {
-        VStack(alignment: .leading, spacing: 18) {
+        // SPEC 20 WI-9: on the 編程 page the card edits the RECORDED cue (layer 1) — colour/intensity via
+        // `CuePatch` (`setFixtureColor`/`setFixtureIntensity`), angle via rig-identity `rotateFixture`. On the
+        // 播放 page the edit controls are read-only (`editable == false`); tap-to-inspect stays.
+        let editable = WorkflowPhasePolicy.allowsCueEditing(in: appModel.workflowPhase)
+        return VStack(alignment: .leading, spacing: 18) {
             header(number: number)
-            onOffRow(number: number)
-            dimmerRow(number: number)
-            colorRow(number: number)
-            followCueButton(number: number)
+            onOffRow(number: number, editable: editable)
+            dimmerRow(number: number, editable: editable)
+            colorRow(number: number, editable: editable)
+            angleRow(number: number, editable: editable)
+            followCueButton(number: number, editable: editable)
+            if !editable {
+                Text("播放中僅供檢視，切換到「編程」階段即可編輯。")
+                    .font(.caption2)
+                    .foregroundStyle(LumaStageDesign.textSecondary)
+            }
         }
         .padding(24)
         // A fixed width keeps this attachment's content size definite (the rows use `Spacer()` /
@@ -92,8 +102,8 @@ struct SelectedLightControlView: View {
     }
 
     /// The manual blackout / restore for one fixture. Uses a filled-vs-slash SF Symbol so the on/off
-    /// state isn't conveyed by colour alone.
-    private func onOffRow(number: Int) -> some View {
+    /// state isn't conveyed by colour alone. This is a transient overlay (layer 2); disabled while read-only.
+    private func onOffRow(number: Int, editable: Bool) -> some View {
         let isOff = appModel.selectedLightResolved?.isOff ?? false
         return Button {
             appModel.toggleManualOff(light: number)
@@ -109,28 +119,33 @@ struct SelectedLightControlView: View {
         .buttonBorderShape(.capsule)
         .lumaGazeTarget()
         .tint(isOff ? LumaStageDesign.warmAmber : LumaStageDesign.softGreen)
+        .disabled(!editable)
     }
 
     /// The dimmer. A continuous `Slider` is the primary control (fine 0–100% trim); the five fade-bumps
     /// stay below as quick console shortcuts. The preset nearest the light's current resolved intensity is
     /// highlighted (a checkmark + bold, not colour alone) so the user sees where the level currently sits.
-    private func dimmerRow(number: Int) -> some View {
-        let resolved = appModel.selectedLightResolved
-        // When the light is off its effective intensity is 0, so the "關" bump reads as current — that
-        // matches what the user sees on stage.
-        let currentIntensity = resolved?.intensity ?? 0
+    private func dimmerRow(number: Int, editable: Bool) -> some View {
+        // On the 編程 page the card reflects (and writes) the SELECTED cue's recorded intensity, not the
+        // transient override — so switching cues shows each cue's authored value.
+        let recorded = recordedFixture(number: number)
+        let currentIntensity = recorded?.intensity ?? 0
+        let fixtureId = appModel.selectedCue?.fixtureId(forLightNumber: number)
         let percentText = "\(Int((currentIntensity * 100).rounded()))%"
         let nearest = Self.nearestPresetIndex(to: currentIntensity)
 
         return VStack(alignment: .leading, spacing: 8) {
             LumaSectionHeader(title: "亮度", systemImage: "sun.max")
             // Primary continuous dimmer with the live percentage beside it. The binding reads/writes the
-            // same `setManualIntensity` override the preset shortcuts use, so slider + bumps stay coherent.
+            // recorded cue intensity (`setFixtureIntensity` → CuePatch, per-cue, persisted).
             HStack(spacing: 12) {
                 Slider(
                     value: Binding(
-                        get: { appModel.selectedLightResolved?.intensity ?? 0 },
-                        set: { newValue in appModel.setManualIntensity(light: number, newValue) }
+                        get: { recordedFixture(number: number)?.intensity ?? 0 },
+                        set: { newValue in
+                            guard editable, let fixtureId else { return }
+                            appModel.setFixtureIntensity(id: fixtureId, value: newValue)
+                        }
                     ),
                     in: 0...1
                 )
@@ -145,15 +160,17 @@ struct SelectedLightControlView: View {
             // Quick fade-bump shortcuts kept alongside the slider.
             HStack(spacing: 8) {
                 ForEach(Array(Self.intensityPresets.enumerated()), id: \.offset) { index, preset in
-                    dimmerButton(number: number, label: preset.label, value: preset.value, isCurrent: index == nearest)
+                    dimmerButton(number: number, fixtureId: fixtureId, label: preset.label, value: preset.value, isCurrent: index == nearest, editable: editable)
                 }
             }
         }
+        .disabled(!editable)
     }
 
-    private func dimmerButton(number: Int, label: String, value: Double, isCurrent: Bool) -> some View {
+    private func dimmerButton(number: Int, fixtureId: String?, label: String, value: Double, isCurrent: Bool, editable: Bool) -> some View {
         Button {
-            appModel.setManualIntensity(light: number, value)
+            guard editable, let fixtureId else { return }
+            appModel.setFixtureIntensity(id: fixtureId, value: value)
         } label: {
             HStack(spacing: 4) {
                 if isCurrent {
@@ -178,8 +195,12 @@ struct SelectedLightControlView: View {
     /// The colour swatches. The active manual colour is ringed + checkmarked (non-colour marks so the
     /// selection reads under low colour vision); `nil` override = following the cue, so no swatch is
     /// marked unless the override's hex matches a palette entry.
-    private func colorRow(number: Int) -> some View {
-        let activeHex = appModel.selectedLightOverride?.colorHex.map { FixtureColor.normalizedHex($0) ?? $0 }
+    private func colorRow(number: Int, editable: Bool) -> some View {
+        // Reflect the SELECTED cue's recorded colour (layer 1), so the ring/checkmark tracks the authored
+        // value of the cue currently being programmed.
+        let recordedHex = recordedFixture(number: number)?.color.value
+        let activeHex = recordedHex.map { FixtureColor.normalizedHex($0) ?? $0 }
+        let fixtureId = appModel.selectedCue?.fixtureId(forLightNumber: number)
 
         return VStack(alignment: .leading, spacing: 8) {
             LumaSectionHeader(title: "顏色", systemImage: "paintpalette")
@@ -188,24 +209,28 @@ struct SelectedLightControlView: View {
                 ForEach(Array(Self.colorSwatches.chunked(into: 5).enumerated()), id: \.offset) { _, group in
                     HStack(spacing: 8) {
                         ForEach(group, id: \.hex) { swatch in
-                            colorSwatch(number: number, swatch: swatch, activeHex: activeHex)
+                            colorSwatch(number: number, fixtureId: fixtureId, swatch: swatch, activeHex: activeHex, editable: editable)
                         }
                     }
                 }
             }
         }
+        .disabled(!editable)
     }
 
     private func colorSwatch(
         number: Int,
+        fixtureId: String?,
         swatch: (name: String, chinese: String, hex: String),
-        activeHex: String?
+        activeHex: String?,
+        editable: Bool
     ) -> some View {
         let rgb = RGBComponents(hex: swatch.hex) ?? .white
         let isSelected = activeHex == (FixtureColor.normalizedHex(swatch.hex) ?? swatch.hex)
 
         return Button {
-            appModel.setManualColor(light: number, hex: swatch.hex)
+            guard editable, let fixtureId else { return }
+            appModel.setFixtureColor(id: fixtureId, hexColor: swatch.hex)
         } label: {
             Circle()
                 .fill(Color(red: rgb.red, green: rgb.green, blue: rgb.blue))
@@ -232,8 +257,76 @@ struct SelectedLightControlView: View {
         .buttonStyle(.plain)
     }
 
+    /// SPEC 20 WI-9 — the aim (angle) row. Pan/tilt step buttons (±5° fine, ±15° coarse) route through
+    /// `rotateFixture` (rig identity: the offset applies to this fixture in EVERY cue — hence the hint).
+    /// Shows the current `aimOffset`. Read-only outside the 編程 page.
+    private func angleRow(number: Int, editable: Bool) -> some View {
+        let fixtureId = appModel.selectedCue?.fixtureId(forLightNumber: number)
+        let aim = recordedFixture(number: number)?.aimOffset ?? .zero
+
+        return VStack(alignment: .leading, spacing: 8) {
+            LumaSectionHeader(title: "角度", systemImage: "dot.scope")
+            // Pan (horizontal): −left / +right.
+            HStack(spacing: 8) {
+                angleStep(fixtureId: fixtureId, label: "向左", systemImage: "arrow.left", pan: -15, editable: editable)
+                angleStep(fixtureId: fixtureId, label: "微左", systemImage: "arrow.left", pan: -5, editable: editable)
+                angleStep(fixtureId: fixtureId, label: "微右", systemImage: "arrow.right", pan: 5, editable: editable)
+                angleStep(fixtureId: fixtureId, label: "向右", systemImage: "arrow.right", pan: 15, editable: editable)
+            }
+            // Tilt (vertical): +up / −down.
+            HStack(spacing: 8) {
+                angleStep(fixtureId: fixtureId, label: "上仰", systemImage: "arrow.up", tilt: 15, editable: editable)
+                angleStep(fixtureId: fixtureId, label: "微上", systemImage: "arrow.up", tilt: 5, editable: editable)
+                angleStep(fixtureId: fixtureId, label: "微下", systemImage: "arrow.down", tilt: -5, editable: editable)
+                angleStep(fixtureId: fixtureId, label: "下俯", systemImage: "arrow.down", tilt: -15, editable: editable)
+            }
+            Text("目前朝向：水平 \(Self.signed(aim.panDegrees))°、俯仰 \(Self.signed(aim.tiltDegrees))°")
+                .font(.caption)
+                .foregroundStyle(LumaStageDesign.textSecondary)
+                .monospacedDigit()
+            Text("角度會套用到所有場景（不分場景）。")
+                .font(.caption2)
+                .foregroundStyle(LumaStageDesign.textSecondary)
+        }
+        .disabled(!editable)
+    }
+
+    private func angleStep(fixtureId: String?, label: String, systemImage: String, pan: Double = 0, tilt: Double = 0, editable: Bool) -> some View {
+        Button {
+            guard editable, let fixtureId else { return }
+            appModel.rotateFixture(id: fixtureId, panDelta: pan, tiltDelta: tilt)
+        } label: {
+            VStack(spacing: 2) {
+                Image(systemName: systemImage).font(.caption)
+                Text(label)
+                    .font(.caption2)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+        .buttonBorderShape(.capsule)
+        // Height-only gaze constraint (mirrors dimmerButton) so four buttons still fit the 360pt card.
+        .frame(minHeight: LumaStageDesign.minGazeTarget)
+        .accessibilityLabel("\(label) \(Int(abs(pan != 0 ? pan : tilt)))度")
+    }
+
+    /// The selected cue's recorded fixture for this 1-based light number (nil one frame after the rig shrinks).
+    private func recordedFixture(number: Int) -> FixtureGroup? {
+        appModel.selectedCue?.fixtureGroups[safe: number - 1]
+    }
+
+    /// A signed integer string ("+15" / "0" / "−10") for the aim readout, using a real minus sign.
+    private static func signed(_ value: Double) -> String {
+        let rounded = Int(value.rounded())
+        if rounded > 0 { return "+\(rounded)" }
+        if rounded < 0 { return "−\(abs(rounded))" }
+        return "0"
+    }
+
     /// Drops the manual override so the light follows the AI cue again.
-    private func followCueButton(number: Int) -> some View {
+    private func followCueButton(number: Int, editable: Bool) -> some View {
         Button("跟隨場景", systemImage: "arrow.uturn.backward") {
             appModel.clearManualOverride(light: number)
         }
@@ -243,7 +336,7 @@ struct SelectedLightControlView: View {
         .buttonBorderShape(.capsule)
         .lumaGazeTarget()
         // Dimmed when there's nothing to clear, so the affordance reflects whether an override exists.
-        .disabled(appModel.selectedLightOverride == nil)
+        .disabled(!editable || appModel.selectedLightOverride == nil)
     }
 
     /// The index of the preset whose value is closest to `intensity` — drives the highlighted fade-bump.

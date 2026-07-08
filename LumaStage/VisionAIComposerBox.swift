@@ -29,16 +29,18 @@ struct VisionAIComposerBox: View {
             : $appModel.typedPrompt
 
         VStack(alignment: .leading, spacing: 18) {
+            workflowPicker
             topBar
             inputField(text: promptText, isRecording: isRecording)
             feedbackPanel
-            cueStrip
+            cueSection
             statusRow
             controlRow
             debugPanel
         }
         .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: appModel.isDebugPanelVisible)
         .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: appModel.selectedCueId)
+        .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: appModel.workflowPhase)
         .sheet(isPresented: $isShowingMusicSheet) {
             MusicShowSheet()
                 .environment(appModel)
@@ -68,15 +70,49 @@ struct VisionAIComposerBox: View {
         }
     }
 
-    /// A top row above the prompt field. Hosts the entry point to the volumetric tabletop stage
-    /// editor (a small editable stage model on the desk).
+    /// SPEC 20 — the three-stage workflow switcher (架設 / 編程 / 播放) at the very top of the composer.
+    /// Replaces the old standalone 編輯舞台 button: 架設 now opens the tabletop editor, and 編程/播放 are the
+    /// two pages that live on the 1:1 stage. Each segment routes through `switchPhase(to:)`, which drives the
+    /// EXISTING immersive-space swap (`enter/exitTabletopEditing` + `ContentView.reconcileImmersiveScene`).
+    private var workflowPicker: some View {
+        HStack(spacing: 8) {
+            ForEach(WorkflowPhase.allCases, id: \.self) { phase in
+                phaseButton(phase)
+            }
+        }
+    }
+
+    private func phaseButton(_ phase: WorkflowPhase) -> some View {
+        let isActive = appModel.workflowPhase == phase
+        return Button {
+            guard !isActive else { return }
+            Task { @MainActor in await switchPhase(to: phase) }
+        } label: {
+            Label(phase.localizedDisplayName, systemImage: phase.systemImageName)
+                .font(.callout.weight(isActive ? .bold : .semibold))
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+        .buttonBorderShape(.capsule)
+        .lumaGazeTarget()
+        .tint(isActive ? LumaStageDesign.coolBlue : nil)
+        .accessibilityAddTraits(isActive ? [.isSelected] : [])
+        .help("切換到「\(phase.localizedDisplayName)」工作階段")
+    }
+
+    /// The cue area: the playback timeline on the 播放 page, otherwise the editable cue strip.
+    @ViewBuilder
+    private var cueSection: some View {
+        if WorkflowPhasePolicy.showsPlaybackTimeline(in: appModel.workflowPhase) {
+            PlaybackTimelineView()
+        } else {
+            cueStrip
+        }
+    }
+
+    /// A top row above the prompt field. Hosts the music surface + the relight debug toggle.
     private var topBar: some View {
         HStack(spacing: 12) {
-            Button("編輯舞台", systemImage: "square.stack.3d.up", action: openStageEditor)
-                .buttonStyle(.bordered)
-                .buttonBorderShape(.capsule)
-                .help("在桌面模型上編輯舞台佈局")
-
             Button("音樂", systemImage: "music.note") {
                 isShowingMusicSheet = true
             }
@@ -655,22 +691,24 @@ struct VisionAIComposerBox: View {
         }
     }
 
-    private func openStageEditor() {
-        // The tabletop editor is a dedicated passthrough immersive space that ARKit rests on the user's
-        // real table. Only one immersive space can be open, so entering editing closes the 1:1 stage
-        // space; `ContentView`'s reconciler then opens the editor space once the main window is back.
-        guard !appModel.isEditingTabletopStage else { return }
-        Task { @MainActor in
-            appModel.enterTabletopEditing() // desiredImmersiveScene = .tabletopEditor
-            if appModel.immersiveSpaceState == .open {
-                appModel.immersiveSpaceState = .inTransition
-                await dismissImmersiveSpace()
-                // Second line of defence, mirroring `finishEditing`: the stage's `onDisappear` reopens
-                // the main window, but a window request issued during a space transition is
-                // intermittently dropped by the system — and without that window there is no
-                // reconciler to open the editor space. Re-issuing the open here is idempotent.
-                openWindow(id: AppModel.mainWindowID)
-            }
+    /// SPEC 20 — switch workflow phase. Updates model state + `desiredImmersiveScene` via
+    /// `AppModel.setWorkflowPhase`, then — only when the phase actually crosses the tabletop/stage space
+    /// boundary — issues the dismiss that hands control to `ContentView.reconcileImmersiveScene`. This is the
+    /// SAME two-step swap the old `openStageEditor` used (dismiss the current space here; the recreated main
+    /// window opens the next). 編程↔播放 stay on the 1:1 stage → no swap, just a model update.
+    @MainActor
+    private func switchPhase(to target: WorkflowPhase) async {
+        let needsSpaceSwap = WorkflowPhasePolicy.usesTabletopEditorSpace(in: appModel.workflowPhase)
+                          != WorkflowPhasePolicy.usesTabletopEditorSpace(in: target)
+        appModel.setWorkflowPhase(target)   // updates model + desiredImmersiveScene
+        if needsSpaceSwap, appModel.immersiveSpaceState == .open {
+            appModel.immersiveSpaceState = .inTransition
+            await dismissImmersiveSpace()
+            // Second line of defence (mirrors the old openStageEditor / finishEditing): the leaving space's
+            // onDisappear reopens the main window, but a window request during a space transition is
+            // intermittently dropped by the system — re-issuing this idempotent open guarantees the
+            // reconciler that opens the next space has a window to run in.
+            openWindow(id: AppModel.mainWindowID)
         }
     }
 

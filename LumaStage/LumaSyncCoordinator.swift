@@ -122,6 +122,12 @@ final class LumaSyncCoordinator {
             appModel.playCueList()
         case .stopCueList:
             appModel.stopCueList()
+        case .setWorkflowPhase(let raw):
+            // v1: honor 編程↔播放 only. Entering 架設 needs a host-side view action (dismiss the stage space,
+            // open the tabletop space) the coordinator can't trigger — so ignore an iPad→架設 request.
+            if let phase = WorkflowPhase(rawValue: raw), phase != .rigging {
+                appModel.setWorkflowPhase(phase)
+            }
         }
     }
 
@@ -142,6 +148,7 @@ final class LumaSyncCoordinator {
             _ = appModel.selectedCueId
             _ = appModel.groupMasters
             _ = appModel.isPlayingCueList
+            _ = appModel.workflowPhase
         } onChange: { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
@@ -160,7 +167,8 @@ final class LumaSyncCoordinator {
             conversation: currentConversation(),
             lighting: appModel.lightingLook,
             immersionMode: appModel.stageImmersionMode.rawValue,
-            isPlayingCueList: appModel.isPlayingCueList
+            isPlayingCueList: appModel.isPlayingCueList,
+            workflowPhase: appModel.workflowPhase.rawValue
         )
     }
 

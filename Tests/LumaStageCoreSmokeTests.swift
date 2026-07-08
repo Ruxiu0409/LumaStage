@@ -73,6 +73,11 @@ struct LumaStageCoreSmokeTests {
         try validateAcceptsMultipleCuesAndRejectsEmpty()
         cuePlaybackResolvesHold()
         cuePlaybackAdvancesWithoutWrap()
+        workflowPhasePolicyGatesByPhase()
+        lightingCueMapsLightNumberToFixtureId()
+        cueTimelineComputesBlockBoundaries()
+        cueTimelineMapsFractionAndElapsedToIndex()
+        cueTimelineBuildsFromMusicSections()
         try cueHoldDurationDecodesFromOldJSON()
         try multiCueDraftBuildsValidatedSequence()
         try stageStateSupportsCueStackAndGo()
@@ -857,9 +862,17 @@ struct LumaStageCoreSmokeTests {
         try roundTrip(.control(.bumpGroup(groupId: "group_movers", on: true)))
         try roundTrip(.control(.playCueList))
         try roundTrip(.control(.stopCueList))
+        // SPEC 20: the workflow-phase switch command round-trips.
+        try roundTrip(.control(.setWorkflowPhase(WorkflowPhase.playback.rawValue)))
+        try roundTrip(.control(.setWorkflowPhase(WorkflowPhase.programming.rawValue)))
 
         // SPEC 16: the cue-list playback flag survives on the host-state snapshot (true and default-false).
         try roundTrip(.hostState(LumaHostState(conversation: conversation, lighting: look, immersionMode: "roomSpill", isPlayingCueList: true)))
+
+        // SPEC 20: the workflow phase survives on the host-state snapshot, and defaults to programming.
+        try roundTrip(.hostState(LumaHostState(conversation: conversation, lighting: look, immersionMode: "fullStage", isPlayingCueList: false, workflowPhase: WorkflowPhase.playback.rawValue)))
+        expect(LumaHostState(conversation: conversation, lighting: look, immersionMode: "fullStage").workflowPhase == WorkflowPhase.programming.rawValue,
+               "LumaHostState.workflowPhase should default to programming")
 
         for role in LumaPeerRole.allCases {
             try roundTrip(.hello(role: role))
@@ -2325,6 +2338,137 @@ struct LumaStageCoreSmokeTests {
         expect(CuePlayback.canAutoPlay(cueCount: 0) == false, "no cues can't auto-play")
         expect(CuePlayback.canAutoPlay(cueCount: 1) == false, "a single cue can't auto-play")
         expect(CuePlayback.canAutoPlay(cueCount: 2) == true, "two cues can auto-play")
+    }
+
+    // MARK: - SPEC 20: workflow phases + programming light map + playback timeline
+
+    /// `WorkflowPhasePolicy` gates each operation by phase: 架設 rig/layout/tabletop only, 編程 cue editing,
+    /// 播放 the timeline; cue-jump in both 編程/播放; the tabletop-editor space is used only by 架設.
+    private static func workflowPhasePolicyGatesByPhase() {
+        // 架設 (rigging)
+        expect(WorkflowPhasePolicy.allowsFixtureMove(in: .rigging), "架設 allows fixture move")
+        expect(WorkflowPhasePolicy.allowsStageLayoutEdit(in: .rigging), "架設 allows stage-layout edit")
+        expect(WorkflowPhasePolicy.allowsTabletopPlacement(in: .rigging), "架設 allows tabletop placement")
+        expect(!WorkflowPhasePolicy.allowsCueEditing(in: .rigging), "架設 forbids cue editing")
+        expect(!WorkflowPhasePolicy.showsPlaybackTimeline(in: .rigging), "架設 hides the playback timeline")
+        expect(WorkflowPhasePolicy.usesTabletopEditorSpace(in: .rigging), "架設 uses the tabletop editor space")
+
+        // 編程 (programming)
+        expect(WorkflowPhasePolicy.allowsCueEditing(in: .programming), "編程 allows cue editing")
+        expect(WorkflowPhasePolicy.allowsCueJump(in: .programming), "編程 allows cue jump")
+        expect(!WorkflowPhasePolicy.allowsFixtureMove(in: .programming), "編程 forbids fixture move")
+        expect(!WorkflowPhasePolicy.allowsStageLayoutEdit(in: .programming), "編程 forbids stage-layout edit")
+        expect(!WorkflowPhasePolicy.showsPlaybackTimeline(in: .programming), "編程 hides the timeline")
+        expect(!WorkflowPhasePolicy.usesTabletopEditorSpace(in: .programming), "編程 stays on the 1:1 stage")
+
+        // 播放 (playback)
+        expect(WorkflowPhasePolicy.showsPlaybackTimeline(in: .playback), "播放 shows the timeline")
+        expect(WorkflowPhasePolicy.allowsCueJump(in: .playback), "播放 allows cue jump (scrub)")
+        expect(!WorkflowPhasePolicy.allowsFixtureMove(in: .playback), "播放 forbids fixture move")
+        expect(!WorkflowPhasePolicy.allowsCueEditing(in: .playback), "播放 forbids cue editing (read-only)")
+        expect(!WorkflowPhasePolicy.usesTabletopEditorSpace(in: .playback), "播放 stays on the 1:1 stage")
+
+        // Only 架設 lives in the tabletop editor space.
+        expect(WorkflowPhase.allCases.filter { WorkflowPhasePolicy.usesTabletopEditorSpace(in: $0) } == [.rigging],
+               "only 架設 maps to the tabletop editor space")
+    }
+
+    /// SPEC 20 WI-9 — the 1-based light number → fixture id map (fixtureGroups order); out of range → nil.
+    private static func lightingCueMapsLightNumberToFixtureId() {
+        func fixture(_ id: String) -> FixtureGroup {
+            FixtureGroup(id: id, name: id, role: .wash, zone: .stageFront, enabled: true,
+                         intensity: 0.5, color: FixtureColor(mode: .rgb, value: "#FFFFFF"))
+        }
+        let cue = LightingCue(id: "c", name: "C", transition: .mvpDefault,
+                              fixtureGroups: [fixture("a"), fixture("b"), fixture("c")])
+        expect(cue.fixtureId(forLightNumber: 0) == nil, "light 0 is out of range → nil")
+        expect(cue.fixtureId(forLightNumber: 1) == "a", "light 1 → first fixture id")
+        expect(cue.fixtureId(forLightNumber: 3) == "c", "light N → Nth fixture id")
+        expect(cue.fixtureId(forLightNumber: 4) == nil, "light beyond the count → nil")
+        let empty = LightingCue(id: "e", name: "E", transition: .mvpDefault, fixtureGroups: [])
+        expect(empty.fixtureId(forLightNumber: 1) == nil, "an empty rig → nil for any number")
+    }
+
+    /// SPEC 20 WI-10 — general-look blocks: width = clamped hold + transition, `start` accumulated, `end`
+    /// consistent, `totalDuration` = last block end.
+    private static func cueTimelineComputesBlockBoundaries() {
+        func approx(_ a: Double, _ b: Double) -> Bool { abs(a - b) < 1e-9 }
+        func cue(_ id: String, hold: Double, transition: Double) -> LightingCue {
+            LightingCue(id: id, name: id, transition: CueTransition(duration: transition, easing: "linear"),
+                        fixtureGroups: [], holdDuration: hold)
+        }
+        let cues = [
+            cue("cue_0", hold: 4, transition: 2),    // duration 6
+            cue("cue_1", hold: 10, transition: 1),   // duration 11
+            cue("cue_2", hold: 3, transition: 0.5)   // duration 3.5
+        ]
+        let blocks = CueTimeline.blocks(for: cues)
+        expect(blocks.count == 3, "one block per cue")
+        expect(approx(blocks[0].duration, 6) && approx(blocks[1].duration, 11) && approx(blocks[2].duration, 3.5),
+               "block duration = clamped hold + transition duration")
+        expect(approx(blocks[0].start, 0) && approx(blocks[1].start, 6) && approx(blocks[2].start, 17),
+               "block starts accumulate left→right")
+        for block in blocks {
+            expect(approx(block.end, block.start + block.duration), "end == start + duration")
+        }
+        expect(approx(CueTimeline.totalDuration(of: blocks), 20.5), "total = last block end")
+        expect(CueTimeline.totalDuration(of: []) == 0, "an empty timeline has zero length")
+        expect(blocks.map(\.cueId) == ["cue_0", "cue_1", "cue_2"], "cueIds preserved in order")
+        expect(blocks.map(\.index) == [0, 1, 2], "indices are 0-based in order")
+    }
+
+    /// SPEC 20 WI-10 — `index(atFraction:)` and `currentIndex(atElapsed:)` map positions to cue indices:
+    /// `[start,end)` hit, fraction 0→first / 1→last, before→first, past→last, empty→nil.
+    private static func cueTimelineMapsFractionAndElapsedToIndex() {
+        func cue(_ id: String, hold: Double) -> LightingCue {
+            LightingCue(id: id, name: id, transition: CueTransition(duration: 0, easing: "linear"),
+                        fixtureGroups: [], holdDuration: hold)
+        }
+        // durations [2,3,5] (transition 0), total 10 → starts 0,2,5 → ends 2,5,10.
+        let blocks = CueTimeline.blocks(for: [cue("a", hold: 2), cue("b", hold: 3), cue("c", hold: 5)])
+
+        expect(CueTimeline.index(atFraction: 0, blocks: blocks) == 0, "fraction 0 → first cue")
+        expect(CueTimeline.index(atFraction: 1, blocks: blocks) == 2, "fraction 1 → last cue")
+        expect(CueTimeline.index(atFraction: 0.35, blocks: blocks) == 1, "0.35×10=3.5 lands in block b [2,5)")
+        expect(CueTimeline.index(atFraction: 0.1, blocks: blocks) == 0, "0.1×10=1 lands in block a [0,2)")
+        expect(CueTimeline.index(atFraction: 0.6, blocks: blocks) == 2, "0.6×10=6 lands in block c [5,10)")
+
+        expect(CueTimeline.currentIndex(atElapsed: 0, blocks: blocks) == 0, "elapsed 0 → block a")
+        expect(CueTimeline.currentIndex(atElapsed: 2, blocks: blocks) == 1, "elapsed at boundary 2 → block b (start inclusive)")
+        expect(CueTimeline.currentIndex(atElapsed: 4.9, blocks: blocks) == 1, "elapsed 4.9 → block b")
+        expect(CueTimeline.currentIndex(atElapsed: 5, blocks: blocks) == 2, "elapsed 5 → block c")
+        expect(CueTimeline.currentIndex(atElapsed: 100, blocks: blocks) == 2, "past the last block → last index")
+        expect(CueTimeline.currentIndex(atElapsed: -3, blocks: blocks) == 0, "before the first block → first index")
+
+        expect(CueTimeline.index(atFraction: 0.5, blocks: []) == nil, "empty timeline → nil")
+        expect(CueTimeline.currentIndex(atElapsed: 1, blocks: []) == nil, "empty timeline → nil")
+    }
+
+    /// SPEC 20 WI-10 — music blocks take `SongSection.start`/`duration` directly, aligning cueIds/displayNames
+    /// by index and falling back to a synthesized id when the caller passes short arrays.
+    private static func cueTimelineBuildsFromMusicSections() {
+        func approx(_ a: Double, _ b: Double) -> Bool { abs(a - b) < 1e-9 }
+        func section(_ start: Double, _ end: Double) -> SongSection {
+            SongSection(start: start, end: end, kind: .verse, pace: 0.5, loudness: 0.5,
+                        keyMode: .major, dominantInstruments: [])
+        }
+        let sections = [section(0, 8), section(8, 20), section(20, 32)]
+        let cueIds = ["cue_music_0", "cue_music_1", "cue_music_2"]
+        let names = ["開場", "副歌", "尾聲"]
+        let blocks = CueTimeline.musicBlocks(sections: sections, cueIds: cueIds, displayNames: names)
+
+        expect(blocks.count == 3, "one block per section")
+        expect(approx(blocks[0].start, 0) && approx(blocks[0].duration, 8), "block 0 aligns to section 0")
+        expect(approx(blocks[1].start, 8) && approx(blocks[1].duration, 12), "block 1 aligns to section 1")
+        expect(approx(blocks[2].start, 20) && approx(blocks[2].duration, 12), "block 2 aligns to section 2")
+        expect(blocks.map(\.cueId) == cueIds, "cueIds align by index")
+        expect(blocks.map(\.displayName) == names, "displayNames align by index")
+        expect(approx(CueTimeline.totalDuration(of: blocks), 32), "total = last section end")
+
+        // Short arrays: fall back to a synthesized id and the id as the label.
+        let sparse = CueTimeline.musicBlocks(sections: [section(0, 5)], cueIds: [], displayNames: [])
+        expect(sparse.first?.cueId == "cue_music_0", "missing cueId falls back to cue_music_<i>")
+        expect(sparse.first?.displayName == "cue_music_0", "missing displayName falls back to the id")
     }
 
     // SPEC 16: `LightingCue.holdDuration` is additive & optional — it round-trips through Codable, decodes to

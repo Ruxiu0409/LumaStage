@@ -51,6 +51,10 @@ private struct LightingOverview: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
+                // SPEC 20: mirror + drive the host's workflow stage. iPad can switch 編程↔播放; 架設 is shown
+                // but disabled (entering the tabletop space needs a host-side view action — see spec caveat).
+                workflowControl
+
                 // Primary live-control surface: group submasters + GO, the heart of the hand-the-judge
                 // demo beat. The fixture grid below stays as the design-time per-light drill-in.
                 PanelFaderBankView(model: model)
@@ -84,6 +88,42 @@ private struct LightingOverview: View {
             }
             .padding()
         }
+    }
+
+    /// SPEC 20 — the three-stage workflow switcher. 編程/播放 send `.setWorkflowPhase`; 架設 is disabled on
+    /// iPad (v1) because entering the tabletop space needs a host-side view action.
+    private var workflowControl: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("工作階段")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                ForEach(WorkflowPhase.allCases, id: \.self) { phase in
+                    phaseSegment(phase)
+                }
+            }
+            if model.workflowPhase == .rigging {
+                Text("Vision Pro 目前在「架設」階段（桌面編輯），iPad 僅能切換編程／播放。")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func phaseSegment(_ phase: WorkflowPhase) -> some View {
+        let isActive = model.workflowPhase == phase
+        return Button {
+            guard phase != .rigging, !isActive else { return }
+            model.send(.setWorkflowPhase(phase.rawValue))
+        } label: {
+            Label(phase.localizedDisplayName, systemImage: phase.systemImageName)
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+        // Non-colour-only active cue: a bold label + accent tint mark the current phase.
+        .fontWeight(isActive ? .bold : .regular)
+        .tint(isActive ? Color.accentColor : nil)
+        .disabled(phase == .rigging || !model.isConnected)
     }
 
     /// The cue stack: scrollable chips (tap to select, long-press to delete), a "+" to append, and a GO
