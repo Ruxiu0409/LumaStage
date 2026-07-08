@@ -995,13 +995,15 @@ enum TabletopStageScene {
             // (zone-derived, aim-offset-included) aim target. Recoloured/resized every pass, so a cue switch
             // repaints it — gated hidden when the fixture is off or dark, matching the 1:1 stage.
             let throwMeters = distanceMeters(placement.position, placement.aim)
+            let beamVisibility = RigPlacement.aerialBeamConeVisibility(model: fixture.renderModel, zone: fixture.zone)
             updateFixtureBeam(in: container,
                               beamAngleDegrees: fixture.effectiveFineControl.beamAngleDegrees,
                               throwMeters: throwMeters,
                               colorHex: fixture.color.value,
                               intensity: fixture.intensity,
                               enabled: fixture.enabled,
-                              rendersBeam: RigPlacement.aerialBeamConeVisibility(model: fixture.renderModel, zone: fixture.zone) == .full,
+                              rendersBeam: beamVisibility != .hidden,
+                              isFaint: beamVisibility == .faint,
                               animated: !reduceMotion)
 
             // #13: a floating "N · 型號" caption. The number is this fixture's 1-based index in cue order —
@@ -1433,13 +1435,15 @@ enum TabletopStageScene {
                                   intensity: Double,
                                   enabled: Bool,
                                   rendersBeam: Bool,
+                                  isFaint: Bool,
                                   animated: Bool) {
         guard let beam = container.findEntity(named: beamEntityName) as? ModelEntity else { return }
 
-        // Derived from the 1:1 stage policy (`RigPlacement.aerialBeamConeVisibility`): the diorama previews
-        // a cone only for `.full` fixtures (upstage/back wash + moving-head beams). `.faint` front/side
-        // fixtures stay hidden here — `PreviewBeamCone.maxAlpha` (0.35) is far higher than the 1:1 stage's,
-        // so even a scaled-down cone would re-occlude the tiny model.
+        // Mirrors the 1:1 stage policy (`RigPlacement.aerialBeamConeVisibility`): `.hidden` (lasers) draws
+        // no preview cone, `.full` uses the normal `PreviewBeamCone` alpha, and `.faint` (front-of-house
+        // key / side fixtures) scales it by the same `SpotBeamScatterConfig.faintAlphaScale` — so the
+        // diorama previews the front-light throw without occluding the tiny model. (Safe now that the beam
+        // material actually alpha-blends — see `beamMaterial`'s footgun note.)
         guard rendersBeam else {
             beam.isEnabled = false
             return
@@ -1460,8 +1464,10 @@ enum TabletopStageScene {
             beam.addChild(marker)
         }
 
-        // Recolour to the current cue colour every pass (like `fixture_lens`) at the WI-1 alpha.
-        beam.model?.materials = [beamMaterial(hex: colorHex, alpha: dim.alpha)]
+        // Recolour to the current cue colour every pass (like `fixture_lens`) at the WI-1 alpha; `.faint`
+        // fixtures (front key / side) preview at the same reduced alpha ratio the 1:1 stage uses.
+        let alpha = isFaint ? dim.alpha * SpotBeamScatterConfig.default.faintAlphaScale : dim.alpha
+        beam.model?.materials = [beamMaterial(hex: colorHex, alpha: alpha)]
 
         let wantVisible = enabled && intensity > 0
         let wasVisible = beam.isEnabled
