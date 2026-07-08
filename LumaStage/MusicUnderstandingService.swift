@@ -419,12 +419,13 @@ struct CachedSongAnalyzer: SongAnalyzing {
         return analysis
     }
 
-    /// An inline-constructed equivalent of the bundled demo (≈150s, 128 BPM, intro→verse→chorus→bridge→
-    /// chorus→outro). Beats/bars are generated to match 128 BPM so `makeBeatClock()` and the beat grid stay
-    /// consistent with the JSON.
+    /// An inline-constructed equivalent of the bundled demo (≈115s, 128 BPM, verse→chorus→bridge→chorus→
+    /// outro — intro dropped and the verse trimmed to ~1/3 so the demo reaches the first chorus fast).
+    /// Beats/bars are generated to match 128 BPM so `makeBeatClock()` and the beat grid stay consistent with
+    /// the JSON (`demo-song-analysis.json`); keep the two in sync when either changes.
     static func inlineDemo() -> SongAnalysis {
         let bpm = 128.0
-        let duration = 150.0
+        let duration = 115.0
         let beatPeriod = 60.0 / bpm  // 0.46875
 
         var beatTimes: [Double] = []
@@ -437,12 +438,11 @@ struct CachedSongAnalyzer: SongAnalyzing {
         let barTimes = stride(from: 0, to: beatTimes.count, by: 4).map { beatTimes[$0] }
 
         let sections: [SongSection] = [
-            SongSection(start: 0,   end: 15,  kind: .intro,  pace: 0.30, loudness: 0.35, keyMode: .minor, dominantInstruments: ["pad", "piano"]),
-            SongSection(start: 15,  end: 45,  kind: .verse,  pace: 0.50, loudness: 0.55, keyMode: .minor, dominantInstruments: ["drums", "bass", "vocals"]),
-            SongSection(start: 45,  end: 75,  kind: .chorus, pace: 0.85, loudness: 0.85, keyMode: .major, dominantInstruments: ["drums", "bass", "synth", "vocals"]),
-            SongSection(start: 75,  end: 95,  kind: .bridge, pace: 0.55, loudness: 0.60, keyMode: .minor, dominantInstruments: ["guitar", "drums", "vocals"]),
-            SongSection(start: 95,  end: 130, kind: .chorus, pace: 0.90, loudness: 0.90, keyMode: .major, dominantInstruments: ["drums", "bass", "synth", "vocals"]),
-            SongSection(start: 130, end: 150, kind: .outro,  pace: 0.35, loudness: 0.40, keyMode: .major, dominantInstruments: ["pad", "piano"]),
+            SongSection(start: 0,   end: 10,  kind: .verse,  pace: 0.50, loudness: 0.55, keyMode: .minor, dominantInstruments: ["drums", "bass", "vocals"]),
+            SongSection(start: 10,  end: 40,  kind: .chorus, pace: 0.85, loudness: 0.85, keyMode: .major, dominantInstruments: ["drums", "bass", "synth", "vocals"]),
+            SongSection(start: 40,  end: 60,  kind: .bridge, pace: 0.55, loudness: 0.60, keyMode: .minor, dominantInstruments: ["guitar", "drums", "vocals"]),
+            SongSection(start: 60,  end: 95,  kind: .chorus, pace: 0.90, loudness: 0.90, keyMode: .major, dominantInstruments: ["drums", "bass", "synth", "vocals"]),
+            SongSection(start: 95,  end: 115, kind: .outro,  pace: 0.35, loudness: 0.40, keyMode: .major, dominantInstruments: ["pad", "piano"]),
         ]
 
         return SongAnalysis(
