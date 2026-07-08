@@ -288,23 +288,13 @@ struct TabletopStageEditorView: View {
 
     private var controlBar: some View {
         HStack(spacing: 14) {
-            // SPEC 20: the same three-stage switcher as the composer. The composer window is dismissed while
-            // the tabletop (架設) space is open, so this is the ONLY way back to 編程/播放 from here. 架設 is
-            // the active segment; picking 編程/播放 swaps back to the 1:1 stage space (mirrors 完成/finishEditing).
-            workflowPicker
-
-            Divider().frame(height: 26)
-
-            // Keep a visible readout of the current selection; the 3D highlight alone is easy to miss.
-            selectionStatus
-
-            // SPEC 21: preview the whole cue stack in place. ‹ / › step through cues via the existing
-            // wrapping `goToPreviousCue`/`goToNextCue` (both persist + narrate through `AppModel.selectCue`),
-            // and the diorama's preview beams recolour to the newly-selected cue. Disabled with <2 cues.
+            // SPEC 21: preview the whole cue stack in place — ‹ 場景名 › steps through cues (the app calls a
+            // cue a 場景). Disabled with fewer than 2 cues.
             cueSwitcher
 
             Divider().frame(height: 26)
 
+            // Stage platform size (小/中/大).
             Picker("舞台尺寸", selection: stageSizeBinding) {
                 Text("小").tag(StagePlatformPreset.small4x2)
                 Text("中").tag(StagePlatformPreset.medium6x3)
@@ -313,119 +303,13 @@ struct TabletopStageEditorView: View {
             .pickerStyle(.segmented)
             .frame(width: 210)
 
-            Picker("桁架", selection: portalBinding) {
-                Text("4×3").tag(StagePortalPreset.portal4x3)
-                Text("6×5").tag(StagePortalPreset.portal6x5)
-                Text("8×4").tag(StagePortalPreset.portal8x4)
-            }
-            .pickerStyle(.segmented)
-            .frame(width: 170)
-
             Divider().frame(height: 26)
 
-            Menu {
-                Button("1 公尺桁架", systemImage: "plus") { appModel.addStageObject(assetId: .truss1m) }
-                Button("2 公尺桁架", systemImage: "plus") { appModel.addStageObject(assetId: .truss2m) }
-            } label: {
-                Label("新增桁架", systemImage: "plus")
-            }
-            .buttonStyle(.bordered)
-            .lumaGazeTarget()
-            .help("加入一段桁架，拖到既有節點附近會自動對齊接上")
-
-            // SPEC 23 (b): composite structures — each is a bundle of `.trussSegment`s, so they render,
-            // node-snap and get support-classified for free (no new object type).
-            Menu {
-                ForEach(StageStructurePreset.allCases, id: \.self) { preset in
-                    Button(preset.displayName, systemImage: "plus") {
-                        appModel.addStageStructure(preset)
-                    }
-                }
-            } label: {
-                Label("新增結構", systemImage: "square.stack.3d.up")
-            }
-            .buttonStyle(.bordered)
-            .lumaGazeTarget()
-            .help("加入側塔／地面 boom／中場桁架；拖近既有節點會自動對齊接上，之後把燈拖到結構下方即會吊掛")
-
-            Menu {
-                ForEach(Self.addableFixtureModels, id: \.self) { model in
-                    if model == .laser {
-                        Button {
-                            appModel.addFixtureToRig(model: model, zone: .stageBack)
-                        } label: {
-                            Label("\(Self.fixtureModelName(model)) (固定於上舞台桁架)", systemImage: "lightbulb")
-                        }
-                    } else {
-                        Menu {
-                            ForEach(StageZone.allCases, id: \.self) { zone in
-                                Button {
-                                    appModel.addFixtureToRig(model: model, zone: zone)
-                                } label: {
-                                    Text(Self.zoneName(zone))
-                                }
-                            }
-                        } label: {
-                            Label(Self.fixtureModelName(model), systemImage: "lightbulb")
-                        }
-                    }
-                }
-            } label: {
-                Label("新增燈具", systemImage: "lightbulb.fill")
-            }
-            .buttonStyle(.bordered)
-            .lumaGazeTarget()
-            .disabled(rigIsFull)
-            .help(rigIsFull ? "燈具數量已達上限" : "加入一盞燈具到舞台前緣，可拖移到任意位置")
-
-            Button("刪除所選燈具", systemImage: "lightbulb.slash") {
-                appModel.removeSelectedFixture()
-            }
-            .labelStyle(.iconOnly)
-            .buttonStyle(.bordered)
-            .buttonBorderShape(.circle)
-            .lumaGazeTarget()
-            .disabled(appModel.selectedFixtureId == nil)
-            .help("刪除選取的燈具")
-
-            Button("複製所選燈具", systemImage: "plus.square.on.square") {
-                appModel.duplicateSelectedFixture()
-            }
-            .labelStyle(.iconOnly)
-            .buttonStyle(.bordered)
-            .buttonBorderShape(.circle)
-            .lumaGazeTarget()
-            .disabled(appModel.selectedFixtureId == nil || rigIsFull)
-            .help(rigIsFull ? "燈具數量已達上限" : "複製選取的燈具")
-
-            Button("鏡射所選燈具", systemImage: "flip.horizontal") {
-                appModel.mirrorSelectedFixture()
-            }
-            .labelStyle(.iconOnly)
-            .buttonStyle(.bordered)
-            .buttonBorderShape(.circle)
-            .lumaGazeTarget()
-            .disabled(appModel.selectedFixtureId == nil || rigIsFull)
-            .help(rigIsFull ? "燈具數量已達上限" : "以舞台中線為軸，鏡像複製選取的燈具")
-
-            // #23: one-tap re-aim the selected light back at the stage centre. After a manual move the aim
-            // stays zone-derived (often pointing the wrong way), so this solves the `aimOffset` that re-aims
-            // the beam + head at centre stage and writes it (rig identity, all cues).
-            Button("瞄準舞台中心", systemImage: "scope") {
-                aimSelectedFixtureAtStageCenter()
-            }
-            .labelStyle(.iconOnly)
-            .buttonStyle(.bordered)
-            .buttonBorderShape(.circle)
-            .lumaGazeTarget()
-            .disabled(appModel.selectedFixtureId == nil)
-            .help("將選取燈具的光束方向對回舞台中心")
-
-            // #17: precise direction-nudge keys for the selected light — each press shifts it a fixed
-            // 0.25 m along ±X/±Z via the shared `moveFixture`, so exact placement doesn't rely on dragging
-            // the tiny diorama. Only shown when a fixture is selected.
+            // Selection readout + coordinate nudge for the selected light (#17): the pill shows the resolved
+            // model-metre X/Z, and each nudge key shifts the light a fixed 0.25 m along ±X/±Z via the shared
+            // `moveFixture`. The nudge row only appears when a fixture is selected.
+            selectionStatus
             if appModel.selectedFixtureId != nil {
-                Divider().frame(height: 26)
                 HStack(spacing: 6) {
                     nudgeButton("−X", axis: .x, sign: -1, help: "所選燈具往 −X 方向移動 0.25 公尺")
                     nudgeButton("+X", axis: .x, sign: 1, help: "所選燈具往 +X 方向移動 0.25 公尺")
@@ -434,57 +318,7 @@ struct TabletopStageEditorView: View {
                 }
             }
 
-            // Turntable: spin the WHOLE model so the user can look at any side (distinct from "旋轉所選",
-            // which rotates only the selected piece). 45° steps → 8 covers a full turn.
-            Button("舞台左轉", systemImage: "arrow.counterclockwise.circle") {
-                rotateStage(by: -45)
-            }
-            .labelStyle(.iconOnly)
-            .buttonStyle(.bordered)
-            .buttonBorderShape(.circle)
-            .lumaGazeTarget()
-            .help("將整個舞台模型向左轉 45°，方便檢視其他角度")
-
-            Button("舞台右轉", systemImage: "arrow.clockwise.circle") {
-                rotateStage(by: 45)
-            }
-            .labelStyle(.iconOnly)
-            .buttonStyle(.bordered)
-            .buttonBorderShape(.circle)
-            .lumaGazeTarget()
-            .help("將整個舞台模型向右轉 45°，方便檢視其他角度")
-
             Divider().frame(height: 26)
-
-            Button("旋轉所選", systemImage: "rotate.right.fill") {
-                appModel.rotateSelectedStageObject()
-            }
-            .labelStyle(.iconOnly)
-            .buttonStyle(.bordered)
-            .buttonBorderShape(.circle)
-            .lumaGazeTarget()
-            .disabled(appModel.selectedStageObjectId == nil)
-            .help("將選取的物件旋轉 90°")
-
-            Button("刪除所選", systemImage: "trash") {
-                appModel.removeSelectedStageObject()
-            }
-            .labelStyle(.iconOnly)
-            .buttonStyle(.bordered)
-            .buttonBorderShape(.circle)
-            .lumaGazeTarget()
-            .disabled(appModel.selectedStageObjectId == nil)
-            .help("刪除選取的物件")
-
-            Button("撤銷上一個編輯", systemImage: "arrow.uturn.backward") {
-                appModel.undoStageEdit()
-            }
-            .labelStyle(.iconOnly)
-            .buttonStyle(.bordered)
-            .buttonBorderShape(.circle)
-            .lumaGazeTarget()
-            .disabled(!appModel.canUndoStageEdit)
-            .help("撤銷上一個舞台或燈具編輯")
 
             Button("重置舞台", systemImage: "arrow.counterclockwise") {
                 appModel.resetStageLayoutToDefault()
