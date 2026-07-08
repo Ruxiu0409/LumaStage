@@ -1285,6 +1285,12 @@ struct LumaStageProject: Codable, Equatable, Identifiable {
             ?? false
     }
 
+    /// Stable id of the seeded 舞團演出 Showcase demo. Kept as a constant because the demo's "opens as a
+    /// music show" behavior keys off it as well as the `autoLoadDemoMusicShow` flag — a project persisted
+    /// before the flag existed decodes the flag `false`, so the id is the self-healing net that keeps the
+    /// behavior working for existing on-disk saves without needing a reinstall.
+    static let showcaseProjectId = "project_dance_showcase"
+
     static func defaultProjects() -> [LumaStageProject] {
         // Open the app on a complete, ready-to-play design instead of an empty home: the 9-fixture
         // `showcaseDemo` rig (moving heads, PARs, strobe, blinder, laser) carrying an Opening→Highlight
@@ -1295,7 +1301,7 @@ struct LumaStageProject: Codable, Equatable, Identifiable {
         showcaseLook.selectedCueId = "cue_opening"
         return [
             LumaStageProject(
-                id: "project_dance_showcase",
+                id: showcaseProjectId,
                 name: "舞團演出 Showcase",
                 venueDescription: "戶外桁架舞台",
                 eventType: "舞團成發",

@@ -855,14 +855,19 @@ class AppModel {
 
         let project = projects[projectIndex]
         selectedProjectId = project.id
+        // Whether this project opens as a music-driven show. Honor the persisted flag OR the built-in demo's
+        // stable id: a showcase persisted before `autoLoadDemoMusicShow` existed decodes the flag `false`, so
+        // keying off the id too is the self-healing net that keeps the behavior working for existing on-disk
+        // saves (the flag alone would be silently shadowed by such a save).
+        let wantsDemoMusicShow = project.autoLoadDemoMusicShow || project.id == LumaStageProject.showcaseProjectId
         // Ask for the 1:1 stage space; `ContentView` opens it once it's the front-most window.
         desiredImmersiveScene = .stage
         // SPEC 20: a freshly opened project lands on the 調控 page (the 1:1 stage), not 架設 — EXCEPT a
-        // music-demo project (`autoLoadDemoMusicShow`) opens straight on the 播放 page so its auto-loaded
-        // show is ready to run with the playback timeline visible. Both phases live on the same stage
-        // space (only 架設 uses the tabletop), so this needs no scene-swap — a direct assignment matches
-        // how `setWorkflowPhase(.playback)` behaves when not editing the tabletop.
-        workflowPhase = project.autoLoadDemoMusicShow ? .playback : .programming
+        // music-demo project opens straight on the 播放 page so its auto-loaded show is ready to run with
+        // the playback timeline visible. Both phases live on the same stage space (only 架設 uses the
+        // tabletop), so this needs no scene-swap — a direct assignment matches how `setWorkflowPhase(.playback)`
+        // behaves when not editing the tabletop.
+        workflowPhase = wantsDemoMusicShow ? .playback : .programming
         stageState = StageState(lightingLook: project.lightingLook)
         lightOverrides = [:]
         selectedFixtureId = nil
@@ -890,7 +895,7 @@ class AppModel {
         // the show to the wrong project. `useBuiltInDemoSong` rebuilds the show each open, so the audio (a
         // session-only resource that isn't persisted) is always reloaded — deliberately at the cost of not
         // preserving manual edits to this demo project across reopens.
-        if project.autoLoadDemoMusicShow {
+        if wantsDemoMusicShow {
             let targetProjectId = project.id
             Task { [weak self] in
                 guard let self, self.selectedProjectId == targetProjectId else { return }
