@@ -1,6 +1,6 @@
 # LumaStage 決賽 Demo Runbook(現場操作手冊)
 
-> 本檔是**現場照著做、零失敗**的操作手冊。「為什麼會贏 / 評委說服 / 評分映射 / 答辯 Q&A」在 [`maic-strategy.md`](maic-strategy.md) §5;這裡只談**當天怎麼演**。
+> 本檔是**現場照著做、零失敗**的操作手冊,只談**當天怎麼演**。
 >
 > 系統現況(2026-07,已非舊版兩-cue MVP):visionOS 主程式 + 可選 iPad「LumaStage Control」伴侶。語音/文字 → OpenAI 雲端生成**一整套 4–12 盞燈、2–6 個有序 cue 的秀**(一次呼叫產出整套) → 1:1 沉浸舞台即時打光;cue stack 以 **GO** 走場;**高能量 cue 會自動啟動動態效果**(掃動/strobe/chase);可切**房間溢光**、可用語音輸入走 cue / 改單燈。TTS narration 與 VoiceOver 相關體驗已於 2026-07-08 下架;DMX 配接表匯出也已於 2026-07 移除,demo 不再有這些橋段。
 
@@ -46,7 +46,7 @@
 
 ## 2. 主線 Demo(3–5 分鐘,計時;情緒弧:好奇→驚訝→信服→打動)
 
-> 完整逐字台詞見 `maic-strategy.md` §5.3。以下是**動作 + 驗收點**。
+> 以下是**動作 + 驗收點**。
 
 | # | 動作 | 該看到什麼(驗收) |
 |---|---|---|
@@ -72,7 +72,7 @@
 
 | 狀況 | 當場怎麼救 |
 |---|---|
-| OpenAI 生成失敗 / 網路問題 | **不要硬等**。說「我們做了嚴謹的可用性處理(availability gate)」,開**預先生成的備援專案**,從第 3 步(GO 走場)接續。把 bug 講成工程嚴謹度。 |
+| OpenAI 生成失敗 / 網路問題 | **不要硬等**。說「我們做了嚴謹的可用性處理(availability gate)」,開**預先生成的備援專案**,從第 3 步(GO 走場)接續。 |
 | 現場看不到動態效果 | 用 GO 走到最亮的 cue;或補一句「更亮、更有能量」讓 AI 跨過 60% 門檻;或直接開備援高潮 cue。 |
 | 房間溢光在投影上看不清 | 先把現場燈調暗;挑深色飽和光束(藍/洋紅);對著最近的淺色牆。 |
 | iPad 連線掉 | 不靠它當主力 —— 主線仍可只用頭顯完成;iPad 是加分橋段。 |
@@ -100,4 +100,4 @@
 
 ---
 
-*相關文件:策略與評分 → `maic-strategy.md`;OpenAI 金鑰設定 → `foundation-models-setup.md`;iPad 伴侶建置 → `ipad-control-panel-setup.md`;動態 rig 計畫 → `dynamic-rig-plan.md`。*
+*相關文件:OpenAI 金鑰設定 → `foundation-models-setup.md`;iPad 伴侶建置 → `ipad-control-panel-setup.md`;動態 rig 計畫 → `dynamic-rig-plan.md`。*

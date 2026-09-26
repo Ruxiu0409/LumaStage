@@ -11,6 +11,17 @@
 
 ---
 
+## 作者與分工
+
+兩人合作開發：
+
+- **蔡承曄（[@Ruxiu0409](https://github.com/Ruxiu0409)）**：整體架構與 `AppModel` 狀態流、AI 燈光生成（Foundation Models → OpenAI 雲端）、1:1 沉浸舞台渲染、語音指令、音樂秀 pipeline、iPad 控制面板伴侶、燈具觀星窗、smoke 測試骨架。
+- **[@Yacolate0519-cmd](https://github.com/Yacolate0519-cmd)**：桌面舞台編輯器（架設／編程／播放三階段工作流程）、迷你燈光 previz、表演者人偶、舞台結構詞彙、體積光束。
+
+開發過程大量使用 AI coding agent（Claude Code、Codex）協作：由我們撰寫規格（[`docs/specs/`](docs/specs/)）與架構約束（[`CLAUDE.md`](CLAUDE.md)、[`AGENTS.md`](AGENTS.md)），agent 依規格實作，再由我們驗收與 smoke 測試把關。
+
+---
+
 ## 核心功能全貌
 
 ### (a) 沉浸式 1:1 舞台數位孿生 + 雙沉浸模式
@@ -127,6 +138,6 @@ swiftc \
 | [`docs/issue-sweep-followup.md`](docs/issue-sweep-followup.md) | 最近一輪 issue 大掃除後的**後續 backlog**（實機驗收待辦、殘口、文件衛生）。GitHub 目前 **0 個 open issue**。 |
 | [`docs/ipad-control-panel-setup.md`](docs/ipad-control-panel-setup.md) | iPad 伴侶 target 的設定說明。 |
 | [`docs/foundation-models-setup.md`](docs/foundation-models-setup.md) | 檔名為歷史遺留；內容實為 **OpenAI 金鑰設定**指南。 |
-| [`docs/maic-strategy.md`](docs/maic-strategy.md) · [`docs/social-value.md`](docs/social-value.md) | 競賽策略與社會價值論述。 |
+| [`docs/social-value.md`](docs/social-value.md) | 社會價值與目標使用者論述。 |
 
 > 提示：`docs/dynamic-rig-plan.md`、`docs/brainstorming.md` 是**歷史**規劃/發想文件，狀態可能過時——以 `CLAUDE.md` 與 `docs/specs/README.md` 的基線為準。

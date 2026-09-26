@@ -9,3 +9,6 @@ xcuserdata/
 
 # Local timestamped backups (created before editing non-git-tracked files)
 *.bak.*
+
+# macOS Finder metadata
+.DS_Store

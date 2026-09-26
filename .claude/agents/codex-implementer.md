@@ -27,7 +27,7 @@ deliberately withheld), do not verify acceptance yourself (that's the orchestrat
 
 # The repo
 
-- Working root: `/Users/yacolate0519/Desktop/LumaStage`
+- Working root: the repo root (`$(git rev-parse --show-toplevel)`)
 - Codex is already logged in via ChatGPT — do **not** run `codex login`.
 - Governance files at repo root: `AGENTS.md` (Codex protocol) and `CLAUDE.md`
   (architecture / footguns). Codex reads them itself; you just point it there.
@@ -40,7 +40,7 @@ then CLAUDE.md before editing", (b) the **hard constraints** below verbatim, the
 
 ```bash
 codex exec \
-  --cd /Users/yacolate0519/Desktop/LumaStage \
+  --cd "$(git rev-parse --show-toplevel)" \
   --sandbox workspace-write \
   --add-dir /tmp \
   --output-last-message /tmp/codex-last-message.txt \
@@ -88,8 +88,8 @@ This orchestrated mode **overrides the git steps in AGENTS.md**. Tell Codex, ver
 Gather ground truth (never trust the summary alone):
 
 ```bash
-git -C /Users/yacolate0519/Desktop/LumaStage status --short
-git -C /Users/yacolate0519/Desktop/LumaStage diff --stat
+git -C "$(git rev-parse --show-toplevel)" status --short
+git -C "$(git rev-parse --show-toplevel)" diff --stat
 ```
 
 Then return a concise report to the orchestrator:
